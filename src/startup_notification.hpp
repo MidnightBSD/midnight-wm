@@ -30,7 +30,8 @@ public:
 
   // Used by the GAppLaunchContext subclass while GIO starts a process.
   [[nodiscard]] std::string begin(GAppInfo* app);
-  void finish(const std::string& id);
+  // Takes a copy: callers may pass a key owned by pending_, which this erases.
+  void finish(std::string id);
 
 private:
   struct Pending {
