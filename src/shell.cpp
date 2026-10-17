@@ -771,11 +771,19 @@ struct Shell::Impl {
 
   void seed_objects() {
     const auto home = std::filesystem::path(g_get_home_dir());
-    auto ensure = [&](std::string id, ObjectKind kind, std::string title, std::string target, int x, int y) {
+    auto ensure = [&](std::string id, ObjectKind kind, std::string title, std::string target,
+                      int x, int y, std::string icon = {}) {
       if (store.get(id)) return;
-      (void)store.put({std::move(id), kind, std::move(title), std::move(target), "", "", x, y});
+      (void)store.put({std::move(id), kind, std::move(title), std::move(target),
+                       std::move(icon), "", x, y});
     };
     ensure("home", ObjectKind::folder, "Home", home.string(), 12, 15);
+    const char* configured_downloads = g_get_user_special_dir(G_USER_DIRECTORY_DOWNLOAD);
+    const auto downloads = configured_downloads ? std::filesystem::path(configured_downloads) :
+                           home / "Downloads";
+    if (downloads != home)
+      ensure("downloads", ObjectKind::folder, "Downloads", downloads.string(),
+             102, 15, "folder-download");
     ensure("trash", ObjectKind::trash, "Trash", "trash:///", 12, 112);
     ensure("templates", ObjectKind::folder, "Templates", (home / "Templates").string(), 12, 209);
   }

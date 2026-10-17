@@ -65,8 +65,11 @@ In a folder window, **File** opens the selected item, creates a folder, shows
 properties, moves an item to Trash, or closes the window. **Edit** offers copy,
 cut, and paste. **View** refreshes the folder and sorts by name or type.
 
-The `Home`, `Trash`, and `Templates` objects are created on the desktop at first
-run. Physical files appear from the user's XDG Desktop directory. Shell object
+The `Home`, `Downloads`, `Trash`, and `Templates` objects are created on the
+desktop at first run. Downloads uses the configured XDG user directory, falling
+back to `~/Downloads` when no download directory is configured. Setting the XDG
+download directory to the home directory disables this shortcut. Physical files
+appear from the user's XDG Desktop directory. Shell object
 metadata is stored in `$XDG_DATA_HOME/midnight-wm/workspace.db` (normally under
 `~/.local/share`). Files and folders remain in the filesystem. Deleting a file
 uses the freedesktop Trash mechanism.

@@ -61,7 +61,8 @@ std::vector<ShellItem> ShellModel::items(const std::filesystem::path& path, bool
   } else {
     const auto parent = desktop ? std::string{} : path.string();
     for (auto& object : store_.children(parent)) {
-      const bool physical = object.id != "home" && object.id != "templates" &&
+      const bool physical = object.id != "home" && object.id != "downloads" &&
+        object.id != "templates" &&
         (object.kind == ObjectKind::file || object.kind == ObjectKind::folder);
       out.push_back({object, resolve_path(object.target), physical, false, "", {}});
     }
