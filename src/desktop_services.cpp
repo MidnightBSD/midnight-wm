@@ -174,7 +174,8 @@ struct DesktopServices::Impl {
     watch = g_dbus_connection_signal_subscribe(bus, "org.freedesktop.DBus", "org.freedesktop.DBus", "NameOwnerChanged",
         "/org/freedesktop/DBus", nullptr, G_DBUS_SIGNAL_FLAGS_NONE,
         [](GDBusConnection*, const gchar*, const gchar*, const gchar*, const gchar*, GVariant* parameters, gpointer data) {
-          const char *name, *old_owner, *new_owner;
+          if (!g_variant_is_of_type(parameters, G_VARIANT_TYPE("(sss)"))) return;
+          const char *name{}, *old_owner{}, *new_owner{};
           g_variant_get(parameters, "(&s&s&s)", &name, &old_owner, &new_owner);
           if (*new_owner || *name != ':') return;
           auto& self = *static_cast<Impl*>(data);

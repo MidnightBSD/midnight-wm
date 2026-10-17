@@ -69,8 +69,9 @@ void MediaPlayers::initialize() {
   self.subscription = g_dbus_connection_signal_subscribe(self.bus, "org.freedesktop.DBus", "org.freedesktop.DBus",
     "NameOwnerChanged", "/org/freedesktop/DBus", nullptr, G_DBUS_SIGNAL_FLAGS_NONE,
     [](GDBusConnection*, const gchar*, const gchar*, const gchar*, const gchar*, GVariant* parameters, gpointer data) {
+      if (!g_variant_is_of_type(parameters, G_VARIANT_TYPE("(sss)"))) return;
       auto& self = *static_cast<Impl*>(data);
-      const char *name, *old_owner, *new_owner;
+      const char *name{}, *old_owner{}, *new_owner{};
       g_variant_get(parameters, "(&s&s&s)", &name, &old_owner, &new_owner);
       if (!std::string_view(name).starts_with(prefix)) return;
       self.proxies.erase(name);
