@@ -1,6 +1,7 @@
 #include "shell.hpp"
 
 #include "audio.hpp"
+#include "browser_launcher.hpp"
 #include "config.hpp"
 #include "desktop_launcher.hpp"
 #include "model.hpp"
@@ -44,7 +45,9 @@ constexpr int volume_group_width = 102;
 constexpr int volume_clock_gap = 4;
 constexpr int lock_button_x = 124;
 constexpr int lock_button_width = 24;
-constexpr int task_start_x = 156;
+constexpr int browser_button_x = 152;
+constexpr int browser_button_width = 24;
+constexpr int task_start_x = 184;
 constexpr int task_button_width = 110;
 constexpr int task_step = 114;
 constexpr int task_overflow_width = 24;
@@ -366,6 +369,24 @@ void lock_icon(cairo_t* cr, int x, int y) {
   cairo_set_source_rgb(cr, .85, .85, .85);
   cairo_arc(cr, x + 8, y + 11, 1.2, 0, 2 * std::numbers::pi);
   cairo_fill(cr);
+  cairo_restore(cr);
+}
+
+void browser_icon(cairo_t* cr, int x, int y) {
+  cairo_save(cr);
+  cairo_set_source_rgb(cr, .13, .20, .40);
+  cairo_set_line_width(cr, 1.4);
+  cairo_arc(cr, x + 8, y + 8, 7, 0, 2 * std::numbers::pi);
+  cairo_move_to(cr, x + 1, y + 8);
+  cairo_line_to(cr, x + 15, y + 8);
+  cairo_move_to(cr, x + 8, y + 1);
+  cairo_line_to(cr, x + 8, y + 15);
+  cairo_stroke(cr);
+  cairo_move_to(cr, x + 8, y + 1);
+  cairo_curve_to(cr, x + 3, y + 5, x + 3, y + 11, x + 8, y + 15);
+  cairo_move_to(cr, x + 8, y + 1);
+  cairo_curve_to(cr, x + 13, y + 5, x + 13, y + 11, x + 8, y + 15);
+  cairo_stroke(cr);
   cairo_restore(cr);
 }
 
@@ -1064,6 +1085,8 @@ struct Shell::Impl {
            logo_surface ? 84 : 102, 11, false, true);
       bevel(cr, lock_button_x, 5, lock_button_width, 24);
       lock_icon(cr, lock_button_x + 4, 8);
+      bevel(cr, browser_button_x, 5, browser_button_width, 24);
+      browser_icon(cr, browser_button_x + 4, 9);
       const int clock_x = this->clock_x();
       const int volume_x = this->volume_x();
       const bool show_volume = this->show_volume();
@@ -2217,6 +2240,11 @@ struct Shell::Impl {
       if (event->detail == 1 && event->event_x < 122) { if (menu) close_menu(); else show_launcher(); }
       else if (event->detail == 1 && event->event_x >= lock_button_x &&
                event->event_x < lock_button_x + lock_button_width) lock_screen();
+      else if (event->detail == 1 && event->event_x >= browser_button_x &&
+               event->event_x < browser_button_x + browser_button_width) {
+        auto result = launch_web_browser(startup);
+        if (!result) show_notice("Browser: " + result.error());
+      }
       else if (event->detail == 1 && event->event_x >= task_start_x) {
         const auto all_tasks = panel_tasks();
         const auto layout = task_layout(all_tasks.size());

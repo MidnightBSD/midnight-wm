@@ -22,7 +22,8 @@ control an X screen at a time. `midnight-wm --version` prints the version.
 ## Desktop behavior
 
 The top bar contains an application launcher, a lock button immediately to its
-right, task buttons, a volume control, a system tray, and a clock. The tray
+right, a web browser button, task buttons, a volume control, a system tray, and
+a clock. The tray
 accepts legacy XEmbed icons and D-Bus StatusNotifierItem icons from applications.
 StatusNotifier items use icon theme names or embedded pixmaps and support left,
 middle, and right clicks plus mouse wheel actions. A session D-Bus is needed for
@@ -35,7 +36,10 @@ can be dismissed with a click. An existing notification daemon keeps control.
 The lock button asks a
 running `xscreensaver` daemon to lock the screen with `xscreensaver-command -lock`;
 if the daemon is unavailable, the desktop shows a notice. Start `xscreensaver`
-in your X session to use the button. When windows exceed the available taskbar
+in your X session to use the button. The browser button opens the configured
+XDG default web browser. If no browser default is configured, it opens
+MidnightBSD's Raphael browser (`www/raphael`). If Raphael is unavailable, the
+desktop shows a notice. When windows exceed the available taskbar
 space, use the small down-arrow button after the visible tasks to open the
 remaining window list.
 The list has pages when needed, and selecting a window raises it. Open
