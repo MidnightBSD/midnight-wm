@@ -271,6 +271,7 @@ bool X11WindowManager::initialize() {
   set_root_properties();
   install_key_grabs();
   scan_existing();
+  update_client_list();
   xcb_flush(connection_);
   return true;
 }
