@@ -158,6 +158,38 @@ void text(cairo_t* cr, const std::string& value, int x, int y, int width,
   g_object_unref(layout);
 }
 
+enum class SoundIcon { quieter, louder, mute };
+
+void sound_icon(cairo_t* cr, int x, int y, SoundIcon kind) {
+  cairo_save(cr);
+  cairo_set_source_rgb(cr, .12, .12, .12);
+  cairo_rectangle(cr, x + 1, y + 6, 4, 5);
+  cairo_fill(cr);
+  cairo_move_to(cr, x + 5, y + 6);
+  cairo_line_to(cr, x + 9, y + 2);
+  cairo_line_to(cr, x + 9, y + 15);
+  cairo_line_to(cr, x + 5, y + 11);
+  cairo_close_path(cr);
+  cairo_fill(cr);
+  cairo_set_line_width(cr, 1.5);
+  if (kind == SoundIcon::mute) {
+    cairo_set_source_rgb(cr, .65, .09, .09);
+    cairo_move_to(cr, x + 11, y + 5);
+    cairo_line_to(cr, x + 16, y + 12);
+    cairo_move_to(cr, x + 16, y + 5);
+    cairo_line_to(cr, x + 11, y + 12);
+  } else {
+    cairo_move_to(cr, x + 11, y + 8);
+    cairo_line_to(cr, x + 16, y + 8);
+    if (kind == SoundIcon::louder) {
+      cairo_move_to(cr, x + 13.5, y + 5.5);
+      cairo_line_to(cr, x + 13.5, y + 10.5);
+    }
+  }
+  cairo_stroke(cr);
+  cairo_restore(cr);
+}
+
 cairo_surface_t* image_surface(const std::filesystem::path& path, int size) {
   GError* error = nullptr;
   auto* pixbuf = gdk_pixbuf_new_from_file_at_scale(path.c_str(), size, size, TRUE, &error);
@@ -555,14 +587,15 @@ struct Shell::Impl {
       }
       if (show_volume) {
         bevel(cr, volume_x, 5, 18, 24);
-        text(cr, "−", volume_x + 4, 8, 12, 11, false, true);
+        sound_icon(cr, volume_x + 1, 9, SoundIcon::quieter);
         bevel(cr, volume_x + 20, 5, 42, 24, true);
         text(cr, volume_state ? std::to_string(volume_state->percent) + "%" : "N/A",
              volume_x + 23, 8, 36, 11, false, true);
         bevel(cr, volume_x + 64, 5, 18, 24);
-        text(cr, "+", volume_x + 4 + 64, 8, 12, 11, false, true);
+        sound_icon(cr, volume_x + 65, 9, SoundIcon::louder);
         bevel(cr, volume_x + 84, 5, 42, 24, volume_state && volume_state->muted);
-        text(cr, "Mute", volume_x + 87, 8, 36, 11, volume_state && volume_state->muted, true);
+        sound_icon(cr, volume_x + 85, 9, SoundIcon::mute);
+        text(cr, "Mute", volume_x + 102, 10, 24, 8, false, true);
       }
       bevel(cr, clock_x, 5, 99, 24, true);
       text(cr, clock_text(config.clock_format), clock_x + 7, 8, 86, 11, false, true);

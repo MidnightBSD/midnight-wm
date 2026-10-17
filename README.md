@@ -25,8 +25,9 @@ The top bar contains an application launcher, task buttons, a volume control,
 and a clock. Open **Programs** in the launcher to browse installed X11
 applications with their desktop entry icons. The launcher stays open while you
 browse Programs pages and closes when you select an item or click outside.
-Use `−` and `+` or the mouse wheel
-over the volume control to change output volume in 5% steps. **Mute** sets both
+Use the speaker buttons marked `−` and `+`, or the mouse wheel over the volume
+control, to change output volume in 5% steps. The crossed speaker **Mute**
+button sets both
 master mixer channels to
 zero and restores their previous levels when pressed again during the same
 session. The control uses
