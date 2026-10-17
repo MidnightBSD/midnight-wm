@@ -46,6 +46,17 @@ ThemeConfig load_config() {
   if (auto value = parse_color(read("desktop_color"))) config.desktop_color = *value;
   if (auto value = parse_color(read("panel_color"))) config.panel_color = *value;
   if (auto value = parse_color(read("accent_color"))) config.accent_color = *value;
+  auto read_desktop_bool = [keyfile](const char* key, bool& value) {
+    GError* error = nullptr;
+    const bool configured = g_key_file_get_boolean(keyfile, "Desktop", key, &error);
+    if (error) g_error_free(error);
+    else value = configured;
+  };
+  read_desktop_bool("show_documents", config.show_documents);
+  read_desktop_bool("show_pictures", config.show_pictures);
+  read_desktop_bool("show_music", config.show_music);
+  read_desktop_bool("show_videos", config.show_videos);
+  read_desktop_bool("show_public_share", config.show_public_share);
   g_key_file_unref(keyfile);
   return config;
 }

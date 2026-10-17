@@ -65,11 +65,13 @@ In a folder window, **File** opens the selected item, creates a folder, shows
 properties, moves an item to Trash, or closes the window. **Edit** offers copy,
 cut, and paste. **View** refreshes the folder and sorts by name or type.
 
-The `Home`, `Downloads`, `Trash`, and `Templates` objects are created on the
-desktop at first run. Downloads uses the configured XDG user directory, falling
-back to `~/Downloads` when no download directory is configured. Setting the XDG
-download directory to the home directory disables this shortcut. Physical files
-appear from the user's XDG Desktop directory. Shell object
+The `Home`, `Downloads`, `Documents`, `Pictures`, `Trash`, and `Templates`
+shortcuts appear on the desktop by default. Downloads, Documents, Pictures, and
+Templates use their configured XDG user directories, falling back to the
+matching folder under the home directory when unset. Music, Videos, and Public
+Share are available as optional shortcuts. An XDG directory set to the home
+directory is hidden, as that setting disables the special directory. Physical
+files appear from the user's XDG Desktop directory. Shell object
 metadata is stored in `$XDG_DATA_HOME/midnight-wm/workspace.db` (normally under
 `~/.local/share`). Files and folders remain in the filesystem. Deleting a file
 uses the freedesktop Trash mechanism.
@@ -88,7 +90,12 @@ Trash restore actions. Copying or moving files runs in the background.
 Copy `share/midnight-wm/config.ini` to
 `$XDG_CONFIG_HOME/midnight-wm/config.ini` (normally
 `~/.config/midnight-wm/config.ini`) to change the panel label, clock format,
-and workspace colors. Restart the session after editing it.
+workspace colors, or desktop shortcuts. In its `[Desktop]` section,
+`show_documents` and `show_pictures` default to `true`; `show_music`,
+`show_videos`, and `show_public_share` default to `false`. Set any of these to
+`true` or `false` to show or hide that shortcut. Restart the session after
+editing the file. Existing shortcut names, icons, and positions remain in the
+workspace database when a shortcut is hidden.
 
 At startup, Midnight Workspace launches eligible `.desktop` files from the
 user and system XDG autostart directories. A user entry takes precedence over

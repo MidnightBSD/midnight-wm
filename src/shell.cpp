@@ -432,6 +432,7 @@ struct Shell::Impl {
   std::optional<IconChooser> icon_chooser;
   std::uint16_t width{}, height{};
   std::unordered_map<xcb_window_t, Folder> folders;
+  std::unordered_set<std::string> hidden_shortcuts;
   xcb_window_t focused_folder{};
   std::unordered_map<xcb_window_t, GFileMonitor*> monitors;
   std::vector<Item> desktop_items;
@@ -778,18 +779,43 @@ struct Shell::Impl {
                        std::move(icon), "", x, y});
     };
     ensure("home", ObjectKind::folder, "Home", home.string(), 12, 15);
-    const char* configured_downloads = g_get_user_special_dir(G_USER_DIRECTORY_DOWNLOAD);
-    const auto downloads = configured_downloads ? std::filesystem::path(configured_downloads) :
-                           home / "Downloads";
-    if (downloads != home)
-      ensure("downloads", ObjectKind::folder, "Downloads", downloads.string(),
-             102, 15, "folder-download");
+    auto add_user_directory = [&](const char* id, const char* title, GUserDirectory directory,
+                                  const char* fallback, const char* icon, int x, int y,
+                                  bool enabled = true) {
+      const char* configured = g_get_user_special_dir(directory);
+      const auto path = configured ? std::filesystem::path(configured) : home / fallback;
+      if (!enabled || path == home) { hidden_shortcuts.insert(id); return; }
+      if (std::string_view(id) == "templates") {
+        if (auto existing = store.get(id); existing &&
+            existing->target == (home / "Templates").string() && existing->target != path.string()) {
+          existing->target = path.string();
+          (void)store.put(*existing);
+        }
+      }
+      ensure(id, ObjectKind::folder, title, path.string(), x, y, icon);
+    };
+    add_user_directory("downloads", "Downloads", G_USER_DIRECTORY_DOWNLOAD,
+                       "Downloads", "folder-download", 102, 15);
+    add_user_directory("documents", "Documents", G_USER_DIRECTORY_DOCUMENTS,
+                       "Documents", "folder-documents", 192, 15, config.show_documents);
+    add_user_directory("pictures", "Pictures", G_USER_DIRECTORY_PICTURES,
+                       "Pictures", "folder-pictures", 282, 15, config.show_pictures);
+    add_user_directory("music", "Music", G_USER_DIRECTORY_MUSIC,
+                       "Music", "folder-music", 372, 15, config.show_music);
+    add_user_directory("videos", "Videos", G_USER_DIRECTORY_VIDEOS,
+                       "Videos", "folder-videos", 462, 15, config.show_videos);
+    add_user_directory("public_share", "Public Share", G_USER_DIRECTORY_PUBLIC_SHARE,
+                       "Public", "folder-publicshare", 552, 15, config.show_public_share);
     ensure("trash", ObjectKind::trash, "Trash", "trash:///", 12, 112);
-    ensure("templates", ObjectKind::folder, "Templates", (home / "Templates").string(), 12, 209);
+    add_user_directory("templates", "Templates", G_USER_DIRECTORY_TEMPLATES,
+                       "Templates", "folder-templates", 12, 209);
   }
 
   std::vector<Item> list_items(const std::filesystem::path& path, bool is_desktop) {
-    return model.items(path, is_desktop);
+    auto items = model.items(path, is_desktop);
+    if (is_desktop)
+      std::erase_if(items, [&](const Item& item) { return hidden_shortcuts.contains(item.object.id); });
+    return items;
   }
 
   void sort_folder(Folder& folder) {

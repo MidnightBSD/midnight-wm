@@ -11,6 +11,11 @@ struct ThemeConfig {
   std::array<double, 3> desktop_color{.47, .40, .66};
   std::array<double, 3> panel_color{.77, .77, .77};
   std::array<double, 3> accent_color{59.0 / 255.0, 32.0 / 255.0, 95.0 / 255.0};
+  bool show_documents{true};
+  bool show_pictures{true};
+  bool show_music{};
+  bool show_videos{};
+  bool show_public_share{};
 };
 
 [[nodiscard]] ThemeConfig load_config();

@@ -16,6 +16,9 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
 - `src/shell.*` draws the panel, desktop, menus, folder windows, scrollbars,
   and properties. Programs uses desktop entry Categories and three cascading
   menu windows; preserve the earlier menu levels while browsing a category.
+  Built-in desktop folders use XDG user directory paths; Documents and Pictures
+  are visible by default, while Music, Videos, and Public Share have config
+  switches. Hidden shortcut metadata remains in the workspace database.
   The Midnight menu opens `trash:///` directly. Properties includes a visual
   icon chooser; it stores icon theme names or existing image
   paths in the object model. Double-clicking an editable Properties text field

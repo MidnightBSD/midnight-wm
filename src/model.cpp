@@ -3,11 +3,20 @@
 #include <gio/gio.h>
 
 #include <algorithm>
+#include <array>
 #include <ranges>
+#include <string_view>
 #include <system_error>
 
 namespace midnight {
 namespace {
+bool built_in_folder(std::string_view id) {
+  constexpr std::array<std::string_view, 8> ids{"home", "downloads", "documents",
+                                                "pictures", "music", "videos",
+                                                "public_share", "templates"};
+  return std::ranges::find(ids, id) != ids.end();
+}
+
 std::string basename(const std::filesystem::path& path) {
   auto name = path.filename().string();
   return name.empty() ? path.string() : name;
@@ -61,8 +70,7 @@ std::vector<ShellItem> ShellModel::items(const std::filesystem::path& path, bool
   } else {
     const auto parent = desktop ? std::string{} : path.string();
     for (auto& object : store_.children(parent)) {
-      const bool physical = object.id != "home" && object.id != "downloads" &&
-        object.id != "templates" &&
+      const bool physical = !built_in_folder(object.id) &&
         (object.kind == ObjectKind::file || object.kind == ObjectKind::folder);
       out.push_back({object, resolve_path(object.target), physical, false, "", {}});
     }
