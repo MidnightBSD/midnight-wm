@@ -57,7 +57,7 @@ private:
     bool mapped{};
   };
 
-  enum class DragMode { none, move, resize };
+  enum class DragMode { none, move, resize, keyboard_move, keyboard_resize };
   xcb_atom_t atom(const std::string& name);
   void set_root_properties();
   void update_geometry_properties();
@@ -84,6 +84,12 @@ private:
   void minimize(xcb_window_t client);
   void restore(xcb_window_t client);
   void resize_frame(Frame& frame);
+  void configure_frame(Frame& frame, std::uint16_t mask, std::int32_t x, std::int32_t y,
+                       std::uint32_t width, std::uint32_t height, std::uint8_t gravity = 0);
+  void send_configure_notify(const Frame& frame);
+  void begin_drag(Frame& frame, DragMode mode, int root_x, int root_y,
+                  std::uint8_t direction, std::uint8_t button);
+  void end_drag(bool cancel);
   void draw_frame(Frame& frame);
   void update_title(Frame& frame);
   void install_key_grabs();
@@ -115,5 +121,7 @@ private:
   int drag_y_{};
   std::uint16_t drag_width_{};
   std::uint16_t drag_height_{};
+  std::uint8_t drag_direction_{};
+  std::uint8_t drag_button_{};
 };
 } // namespace midnight

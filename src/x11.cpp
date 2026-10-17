@@ -298,6 +298,7 @@ void X11WindowManager::set_root_properties() {
                           "_NET_WM_STATE_MAXIMIZED_VERT", "_NET_WM_STATE_MAXIMIZED_HORZ",
                           "_NET_WM_STATE_HIDDEN", "_NET_WM_STATE_SKIP_TASKBAR", "_NET_WM_STATE_MODAL",
                           "_NET_FRAME_EXTENTS", "_NET_REQUEST_FRAME_EXTENTS",
+                          "_NET_MOVERESIZE_WINDOW", "_NET_WM_MOVERESIZE",
                           "_NET_NUMBER_OF_DESKTOPS", "_NET_CURRENT_DESKTOP", "_NET_WORKAREA",
                           "_NET_DESKTOP_GEOMETRY", "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_DOCK",
                           "_NET_WM_WINDOW_TYPE_DIALOG", "_NET_WM_WINDOW_TYPE_UTILITY",
@@ -493,6 +494,7 @@ void X11WindowManager::manage(xcb_window_t window) {
 void X11WindowManager::unmanage(xcb_window_t client, bool destroyed) {
   auto it = frames_.find(client);
   if (it == frames_.end()) return;
+  if (drag_client_ == client) end_drag(false);
   auto frame = it->second;
   if (!destroyed) {
     xcb_reparent_window(connection_, client, screen_->root,
@@ -687,6 +689,107 @@ void X11WindowManager::resize_frame(Frame& frame) {
   xcb_configure_window(connection_, frame.client, XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y |
                        XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, dimensions);
   draw_frame(frame);
+}
+
+void X11WindowManager::send_configure_notify(const Frame& frame) {
+  xcb_configure_notify_event_t notify{};
+  notify.response_type = XCB_CONFIGURE_NOTIFY;
+  notify.event = frame.client;
+  notify.window = frame.client;
+  notify.x = frame.x + (decorated(frame) ? border : 0);
+  notify.y = frame.y + (decorated(frame) ? title_height : 0);
+  notify.width = frame.width;
+  notify.height = frame.height;
+  xcb_send_event(connection_, 0, frame.client, XCB_EVENT_MASK_STRUCTURE_NOTIFY,
+                 reinterpret_cast<const char*>(&notify));
+}
+
+void X11WindowManager::configure_frame(Frame& frame, std::uint16_t mask, std::int32_t x, std::int32_t y,
+                                       std::uint32_t width, std::uint32_t height, std::uint8_t gravity) {
+  if (!gravity && (frame.size_hints.flags & XCB_ICCCM_SIZE_HINT_P_WIN_GRAVITY))
+    gravity = frame.size_hints.win_gravity;
+  if (gravity < XCB_GRAVITY_NORTH_WEST || gravity > XCB_GRAVITY_STATIC)
+    gravity = XCB_GRAVITY_NORTH_WEST;
+  if (!frame.fullscreen) {
+    const int left = decorated(frame) ? border : 0;
+    const int top = decorated(frame) ? title_height : 0;
+    const int bottom = decorated(frame) ? border : 0;
+    const int old_width = frame.width;
+    const int old_height = frame.height;
+    if (!frame.maximized_horz && (mask & XCB_CONFIG_WINDOW_WIDTH))
+      frame.width = std::clamp<std::uint32_t>(width, 1, std::numeric_limits<std::uint16_t>::max());
+    if (!frame.maximized_vert && (mask & XCB_CONFIG_WINDOW_HEIGHT))
+      frame.height = std::clamp<std::uint32_t>(height, 1, std::numeric_limits<std::uint16_t>::max());
+    constrain_size(frame, frame.width, frame.height);
+    const bool center_x = gravity == XCB_GRAVITY_NORTH || gravity == XCB_GRAVITY_CENTER ||
+                          gravity == XCB_GRAVITY_SOUTH;
+    const bool right = gravity == XCB_GRAVITY_NORTH_EAST || gravity == XCB_GRAVITY_EAST ||
+                       gravity == XCB_GRAVITY_SOUTH_EAST;
+    const bool center_y = gravity == XCB_GRAVITY_WEST || gravity == XCB_GRAVITY_CENTER ||
+                          gravity == XCB_GRAVITY_EAST;
+    const bool bottom_edge = gravity == XCB_GRAVITY_SOUTH_WEST || gravity == XCB_GRAVITY_SOUTH ||
+                             gravity == XCB_GRAVITY_SOUTH_EAST;
+    if (!frame.maximized_horz) {
+      if (mask & XCB_CONFIG_WINDOW_X)
+        frame.x = x - (gravity == XCB_GRAVITY_STATIC ? left : right ? 2 * left : center_x ? left : 0);
+      else if (frame.width != old_width)
+        frame.x -= right ? int(frame.width) - old_width :
+                   center_x ? (int(frame.width) - old_width) / 2 : 0;
+    }
+    if (!frame.maximized_vert) {
+      if (mask & XCB_CONFIG_WINDOW_Y)
+        frame.y = y - (gravity == XCB_GRAVITY_STATIC ? top : bottom_edge ? top + bottom :
+                       center_y ? (top + bottom) / 2 : 0);
+      else if (frame.height != old_height)
+        frame.y -= bottom_edge ? int(frame.height) - old_height :
+                   center_y ? (int(frame.height) - old_height) / 2 : 0;
+    }
+    if (frame.maximized_horz || frame.maximized_vert) update_maximized_geometry(frame);
+    else resize_frame(frame);
+  }
+  send_configure_notify(frame);
+}
+
+void X11WindowManager::begin_drag(Frame& frame, DragMode mode, int root_x, int root_y,
+                                  std::uint8_t direction, std::uint8_t button) {
+  if (frame.fullscreen || frame.maximized_horz || frame.maximized_vert) return;
+  if (drag_mode_ != DragMode::none) end_drag(false);
+  auto cookie = xcb_grab_pointer(connection_, 0, frame.frame,
+                                XCB_EVENT_MASK_BUTTON_RELEASE | XCB_EVENT_MASK_POINTER_MOTION,
+                                XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC, XCB_WINDOW_NONE,
+                                XCB_CURSOR_NONE, XCB_CURRENT_TIME);
+  Reply<xcb_grab_pointer_reply_t> pointer(xcb_grab_pointer_reply(connection_, cookie, nullptr), std::free);
+  if (!pointer || pointer->status != XCB_GRAB_STATUS_SUCCESS) return;
+  auto key_cookie = xcb_grab_keyboard(connection_, 0, frame.frame, XCB_CURRENT_TIME,
+                                      XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC);
+  Reply<xcb_grab_keyboard_reply_t> keyboard(xcb_grab_keyboard_reply(connection_, key_cookie, nullptr), std::free);
+  if (!keyboard || keyboard->status != XCB_GRAB_STATUS_SUCCESS) {
+    xcb_ungrab_pointer(connection_, XCB_CURRENT_TIME);
+    return;
+  }
+  drag_mode_ = mode;
+  drag_client_ = frame.client;
+  drag_root_x_ = root_x; drag_root_y_ = root_y;
+  drag_x_ = frame.x; drag_y_ = frame.y;
+  drag_width_ = frame.width; drag_height_ = frame.height;
+  drag_direction_ = direction;
+  drag_button_ = button;
+}
+
+void X11WindowManager::end_drag(bool cancel) {
+  if (drag_mode_ == DragMode::none) return;
+  if (cancel) {
+    if (auto frame = frames_.find(drag_client_); frame != frames_.end()) {
+      frame->second.x = drag_x_; frame->second.y = drag_y_;
+      frame->second.width = drag_width_; frame->second.height = drag_height_;
+      resize_frame(frame->second);
+      send_configure_notify(frame->second);
+    }
+  }
+  drag_mode_ = DragMode::none;
+  drag_client_ = XCB_WINDOW_NONE;
+  xcb_ungrab_pointer(connection_, XCB_CURRENT_TIME);
+  xcb_ungrab_keyboard(connection_, XCB_CURRENT_TIME);
 }
 
 void X11WindowManager::close(xcb_window_t client) {
@@ -905,24 +1008,7 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
       xcb_configure_window(connection_, e->window, e->value_mask, values.data());
       break;
     }
-    auto& f = it->second;
-    if (!f.fullscreen) {
-      if (!f.maximized_horz && (e->value_mask & XCB_CONFIG_WINDOW_X)) f.x = e->x;
-      if (!f.maximized_vert && (e->value_mask & XCB_CONFIG_WINDOW_Y)) f.y = e->y;
-      if (!f.maximized_horz && (e->value_mask & XCB_CONFIG_WINDOW_WIDTH)) f.width = e->width;
-      if (!f.maximized_vert && (e->value_mask & XCB_CONFIG_WINDOW_HEIGHT)) f.height = e->height;
-      constrain_size(f, f.width, f.height);
-      if (f.maximized_horz || f.maximized_vert) update_maximized_geometry(f);
-      else resize_frame(f);
-    }
-    xcb_configure_notify_event_t notify{};
-    notify.response_type = XCB_CONFIGURE_NOTIFY;
-    notify.event = f.client; notify.window = f.client;
-    notify.x = f.x + (decorated(f) ? border : 0);
-    notify.y = f.y + (decorated(f) ? title_height : 0);
-    notify.width = f.width; notify.height = f.height;
-    xcb_send_event(connection_, 0, f.client, XCB_EVENT_MASK_STRUCTURE_NOTIFY,
-                   reinterpret_cast<const char*>(&notify));
+    configure_frame(it->second, e->value_mask, e->x, e->y, e->width, e->height);
     break;
   }
   case XCB_UNMAP_NOTIFY: {
@@ -943,6 +1029,7 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
   }
   case XCB_DESTROY_NOTIFY: {
     auto* e = reinterpret_cast<xcb_destroy_notify_event_t*>(event);
+    if (drag_client_ == e->window) end_drag(false);
     if (docks_.erase(e->window)) {
       update_geometry_properties();
       for (auto& [client, frame] : frames_) {
@@ -1006,43 +1093,75 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
       break;
     }
     if (f.fullscreen || f.maximized_horz || f.maximized_vert) break;
-    drag_mode_ = y < title_height ? DragMode::move : DragMode::resize;
-    drag_client_ = client;
-    drag_root_x_ = e->root_x; drag_root_y_ = e->root_y;
-    drag_x_ = f.x; drag_y_ = f.y; drag_width_ = f.width; drag_height_ = f.height;
-    xcb_grab_pointer(connection_, 0, f.frame, XCB_EVENT_MASK_BUTTON_RELEASE | XCB_EVENT_MASK_POINTER_MOTION,
-                     XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC, XCB_WINDOW_NONE, XCB_CURSOR_NONE, XCB_CURRENT_TIME);
+    begin_drag(f, y < title_height ? DragMode::move : DragMode::resize,
+               e->root_x, e->root_y, y < title_height ? 8 : 4, e->detail);
     break;
   }
   case XCB_MOTION_NOTIFY: {
     auto* e = reinterpret_cast<xcb_motion_notify_event_t*>(event);
-    if (drag_mode_ == DragMode::none || !frames_.contains(drag_client_)) break;
+    if (drag_mode_ != DragMode::move && drag_mode_ != DragMode::resize) break;
+    if (!frames_.contains(drag_client_)) { end_drag(false); break; }
     auto& f = frames_.at(drag_client_);
     if (drag_mode_ == DragMode::move) {
       f.x = drag_x_ + e->root_x - drag_root_x_;
       f.y = drag_y_ + e->root_y - drag_root_y_;
     } else {
-      f.width = std::clamp<int>(int(drag_width_) + e->root_x - drag_root_x_, 1,
+      const int dx = e->root_x - drag_root_x_, dy = e->root_y - drag_root_y_;
+      const bool left = drag_direction_ == 0 || drag_direction_ == 6 || drag_direction_ == 7;
+      const bool right = drag_direction_ == 2 || drag_direction_ == 3 || drag_direction_ == 4;
+      const bool top = drag_direction_ == 0 || drag_direction_ == 1 || drag_direction_ == 2;
+      const bool bottom = drag_direction_ == 4 || drag_direction_ == 5 || drag_direction_ == 6;
+      f.width = std::clamp<int>(int(drag_width_) + (left ? -dx : right ? dx : 0), 1,
                                 std::numeric_limits<std::uint16_t>::max());
-      f.height = std::clamp<int>(int(drag_height_) + e->root_y - drag_root_y_, 1,
+      f.height = std::clamp<int>(int(drag_height_) + (top ? -dy : bottom ? dy : 0), 1,
                                  std::numeric_limits<std::uint16_t>::max());
       constrain_size(f, f.width, f.height);
+      if (left) f.x = drag_x_ + int(drag_width_) - f.width;
+      if (top) f.y = drag_y_ + int(drag_height_) - f.height;
     }
     resize_frame(f);
+    send_configure_notify(f);
     break;
   }
   case XCB_BUTTON_RELEASE:
-    drag_mode_ = DragMode::none; drag_client_ = 0;
-    xcb_ungrab_pointer(connection_, XCB_CURRENT_TIME);
+    if (drag_mode_ != DragMode::none &&
+        (drag_button_ == 0 || reinterpret_cast<xcb_button_release_event_t*>(event)->detail == drag_button_))
+      end_drag(false);
     break;
   case XCB_KEY_PRESS: {
     auto* e = reinterpret_cast<xcb_key_press_event_t*>(event);
     last_event_time_ = e->time;
-    if (!(e->state & XCB_MOD_MASK_1)) break;
     auto* symbols = xcb_key_symbols_alloc(connection_);
     if (!symbols) break;
     auto key = xcb_key_symbols_get_keysym(symbols, e->detail, 0);
     xcb_key_symbols_free(symbols);
+    if (drag_mode_ != DragMode::none) {
+      if (key == XK_Escape) { end_drag(true); break; }
+      if (key == XK_Return || key == XK_KP_Enter) { end_drag(false); break; }
+      if (drag_mode_ != DragMode::keyboard_move && drag_mode_ != DragMode::keyboard_resize) break;
+      auto frame = frames_.find(drag_client_);
+      if (frame == frames_.end()) { end_drag(false); break; }
+      const int step = (e->state & XCB_MOD_MASK_CONTROL) ? 1 : 10;
+      auto& f = frame->second;
+      if (drag_mode_ == DragMode::keyboard_move) {
+        if (key == XK_Left) f.x -= step;
+        else if (key == XK_Right) f.x += step;
+        else if (key == XK_Up) f.y -= step;
+        else if (key == XK_Down) f.y += step;
+        else break;
+      } else {
+        if (key == XK_Left) f.width = std::max(1, int(f.width) - step);
+        else if (key == XK_Right) f.width = std::min<int>(std::numeric_limits<std::uint16_t>::max(), f.width + step);
+        else if (key == XK_Up) f.height = std::max(1, int(f.height) - step);
+        else if (key == XK_Down) f.height = std::min<int>(std::numeric_limits<std::uint16_t>::max(), f.height + step);
+        else break;
+        constrain_size(f, f.width, f.height);
+      }
+      resize_frame(f);
+      send_configure_notify(f);
+      break;
+    }
+    if (!(e->state & XCB_MOD_MASK_1)) break;
     if (key == XK_Tab) cycle_focus();
     else if (key == XK_F4 && active_) close(active_);
     break;
@@ -1057,6 +1176,30 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
       if (e->data.data32[1]) last_event_time_ = e->data.data32[1];
       if (frames_.contains(e->window)) { restore(e->window); focus(e->window); }
     } else if (e->type == atom("_NET_CLOSE_WINDOW")) close(e->window);
+    else if (e->type == atom("_NET_MOVERESIZE_WINDOW") && e->format == 32) {
+      if (auto frame = frames_.find(e->window); frame != frames_.end()) {
+        const auto flags = e->data.data32[0];
+        const auto mask = std::uint16_t((flags >> 8) & 0xf);
+        const auto gravity = std::uint8_t(flags & 0xff);
+        configure_frame(frame->second, mask,
+                        std::int32_t(e->data.data32[1]), std::int32_t(e->data.data32[2]),
+                        e->data.data32[3], e->data.data32[4], gravity);
+      }
+    }
+    else if (e->type == atom("_NET_WM_MOVERESIZE") && e->format == 32) {
+      const auto direction = e->data.data32[2];
+      if (direction == 11) {
+        if (drag_client_ == e->window) end_drag(true);
+      } else if (auto frame = frames_.find(e->window); frame != frames_.end() && frame->second.mapped &&
+                 direction <= 10) {
+        focus(e->window);
+        const auto mode = direction == 8 ? DragMode::move : direction == 10 ? DragMode::keyboard_move :
+                          direction == 9 ? DragMode::keyboard_resize : DragMode::resize;
+        begin_drag(frame->second, mode, std::int32_t(e->data.data32[0]),
+                   std::int32_t(e->data.data32[1]), direction,
+                   std::uint8_t(e->data.data32[3]));
+      }
+    }
     else if (e->type == atom("_NET_WM_STATE")) {
       auto it = frames_.find(e->window);
       if (it == frames_.end() || e->format != 32 || e->data.data32[0] > 2) break;

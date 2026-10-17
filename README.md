@@ -85,7 +85,8 @@ session…**, which asks for confirmation before closing the window manager. Whe
 started as the Xsession or from `.xinitrc`, that also ends the X11 session.
 X11 clients can supply ICCCM size, focus, and transient-window hints. The
 window manager also handles EWMH fullscreen, maximize, hidden, skip-taskbar,
-and frame-extents requests.
+frame-extents, and application move/resize requests. Interactive move/resize
+supports pointer drags or arrow keys, with Escape to cancel.
 The desktop sets an explicit pointer cursor as soon as the window manager starts.
 The default silver panel follows the OS/2 Warp 4 references, with a lavender
 desktop. Existing user configuration overrides those defaults.
