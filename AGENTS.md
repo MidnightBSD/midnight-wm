@@ -87,9 +87,8 @@ that as a platform limitation and verify the source file remains intact.
 
 - Keep the BSD 2-Clause copyright attribution to **Lucas Holt**.
 - When changing installed files, update `CMakeLists.txt` and `pkg-plist` together.
-- The source tree is developing 0.1.1; the experimental mport still packages
-  the published `v0.1.0` release. Keep its version and `distinfo` pinned until a
-  matching 0.1.1 release asset exists.
+- Keep the experimental mport version aligned with the published release and
+  set `distinfo` from that release's exact source asset.
 - For a release, generate the source archive with
   `cpack --config build/CPackSourceConfig.cmake -G TGZ`. Set `distinfo` from the
   exact archive uploaded to GitHub: rerunning CPack can produce different

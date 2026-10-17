@@ -1,5 +1,5 @@
 PORTNAME=	midnight-wm
-PORTVERSION=	0.1.0
+PORTVERSION=	0.1.1
 CATEGORIES=	x11-wm
 MASTER_SITES=	https://github.com/MidnightBSD/midnight-wm/releases/download/v${PORTVERSION}/
 
@@ -12,6 +12,7 @@ LICENSE_FILE=	${WRKSRC}/LICENSE
 
 LIB_DEPENDS=	libxcb-icccm.so:x11/xcb-util-wm \
 		libxcb-keysyms.so:x11/xcb-util-keysyms \
+		libgarcon-1.so:sysutils/garcon \
 		libsqlite3.so:databases/sqlite3
 RUN_DEPENDS=	${LOCALBASE}/libexec/gvfsd-trash:filesystems/gvfs
 
