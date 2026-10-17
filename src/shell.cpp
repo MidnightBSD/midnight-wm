@@ -2843,7 +2843,7 @@ struct Shell::Impl {
       return;
     }
     if (folder && event->event_y < 31) {
-      if (event->event_x > folder->width - 34) {
+      if (event->detail == 1 && event->event_x > folder->width - 34) {
         const auto window = folder->window;
         unwatch(window);
         if (dnd_unregister) dnd_unregister(window);
@@ -3398,6 +3398,15 @@ void Shell::apply_config(ThemeConfig config) {
       p.config.show_pictures != config.show_pictures || p.config.show_music != config.show_music ||
       p.config.show_videos != config.show_videos || p.config.show_public_share != config.show_public_share;
   p.config = std::move(config);
+  // A live reload may follow an icon theme change. Drop every surface that
+  // can contain a themed icon and its dependent lookup metadata.
+  for (auto& entry : p.icon_surfaces)
+    if (entry.second) cairo_surface_destroy(entry.second);
+  p.icon_surfaces.clear();
+  p.icon_files.clear();
+  p.icon_themes.clear();
+  p.file_icon_cache.clear();
+  p.icon_theme = selected_icon_theme();
   // Clear even when the new selection is empty, and reload a changed image at
   // the same monitor dimensions on the next desktop paint.
   (void)p.wallpaper.load({}, 0, 0);

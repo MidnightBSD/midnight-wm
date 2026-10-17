@@ -49,6 +49,12 @@ int main() {
              "action metadata or missing-key filtering failed")) return 1;
   if (!check(!midnight::launch_desktop_entry_action(entry, desktop, "new"),
              "untrusted action ran")) return 1;
+  chmod(entry.c_str(), 0777);
+  if (!check(!midnight::launch_desktop_entry(entry, desktop),
+             "world-writable launcher ran")) return 1;
+  chmod(entry.c_str(), 0770);
+  if (!check(!midnight::launch_desktop_entry_action(entry, desktop, "new"),
+             "group-writable launcher action ran")) return 1;
   chmod(entry.c_str(), 0700);
   info = midnight::desktop_launcher_info(entry, desktop);
   if (!check(info && info->trusted, "executable launcher not trusted")) return 1;

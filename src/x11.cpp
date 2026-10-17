@@ -211,8 +211,12 @@ void X11WindowManager::constrain_size(const Frame& frame, std::uint16_t& width,
           (std::int64_t(w) * hints.max_aspect_den + hints.max_aspect_num - 1) / hints.max_aspect_num));
     }
   }
-  const int base_w = (hints.flags & XCB_ICCCM_SIZE_HINT_BASE_SIZE) ? hints.base_width : 0;
-  const int base_h = (hints.flags & XCB_ICCCM_SIZE_HINT_BASE_SIZE) ? hints.base_height : 0;
+  // ICCCM hints are signed client input. Negative bases can overflow the
+  // resize increment subtraction even when the actual window is small.
+  const int base_w = (hints.flags & XCB_ICCCM_SIZE_HINT_BASE_SIZE)
+      ? std::clamp<int>(hints.base_width, 0, std::numeric_limits<std::uint16_t>::max()) : 0;
+  const int base_h = (hints.flags & XCB_ICCCM_SIZE_HINT_BASE_SIZE)
+      ? std::clamp<int>(hints.base_height, 0, std::numeric_limits<std::uint16_t>::max()) : 0;
   if (hints.flags & XCB_ICCCM_SIZE_HINT_P_RESIZE_INC) {
     if (hints.width_inc > 0 && w >= base_w)
       w = base_w + (w - base_w) / hints.width_inc * hints.width_inc;
@@ -765,9 +769,29 @@ void X11WindowManager::unmanage(xcb_window_t client, bool destroyed) {
   }
   update_client_list();
   update_tasks();
-  if (was_active && frames_.contains(frame.transient_for) &&
-      frames_.at(frame.transient_for).mapped)
-    focus(frame.transient_for);
+  if (was_active) {
+    if (frames_.contains(frame.transient_for) && frames_.at(frame.transient_for).visible) {
+      focus(frame.transient_for);
+    } else {
+      // Query actual stacking: creation order does not track raised windows.
+      Reply<xcb_query_tree_reply_t> tree(xcb_query_tree_reply(connection_,
+          xcb_query_tree(connection_, screen_->root), nullptr), std::free);
+      if (tree) {
+        const auto* children = xcb_query_tree_children(tree.get());
+        for (int i = xcb_query_tree_children_length(tree.get()); i-- > 0;) {
+          const auto found = frame_to_client_.find(children[i]);
+          if (found == frame_to_client_.end()) continue;
+          const auto& candidate = frames_.at(found->second);
+          if (!candidate.visible || candidate.role == WindowRole::splash ||
+              (!candidate.accepts_input && !candidate.takes_focus)) continue;
+          focus(found->second);
+          break;
+        }
+      }
+    }
+    if (active_ == XCB_WINDOW_NONE)
+      xcb_set_input_focus(connection_, XCB_INPUT_FOCUS_POINTER_ROOT, screen_->root, XCB_CURRENT_TIME);
+  }
 }
 
 void X11WindowManager::map(xcb_window_t client) {
@@ -1225,6 +1249,7 @@ xcb_window_t X11WindowManager::client_for(xcb_window_t window) const {
 void X11WindowManager::install_key_grabs() {
   auto* symbols = xcb_key_symbols_alloc(connection_);
   if (!symbols) return;
+  xcb_ungrab_key(connection_, XCB_GRAB_ANY, screen_->root, XCB_MOD_MASK_ANY);
   auto grab = [&](xcb_keysym_t key, std::uint16_t modifiers) {
     auto* codes = xcb_key_symbols_get_keycode(symbols, key);
     if (!codes) return;
@@ -1339,6 +1364,12 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
     return;
   }
   switch (type) {
+  case XCB_MAPPING_NOTIFY: {
+    const auto* mapping = reinterpret_cast<xcb_mapping_notify_event_t*>(event);
+    if (mapping->request == XCB_MAPPING_KEYBOARD || mapping->request == XCB_MAPPING_MODIFIER)
+      install_key_grabs(); // allocates a fresh keysym mapping before regrabbing
+    break;
+  }
   case XCB_MAP_REQUEST: {
     auto* e = reinterpret_cast<xcb_map_request_event_t*>(event);
     if (shell_.owns(e->window)) break;
@@ -1467,7 +1498,13 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
     if (!decorated(f)) break;
     const int x = e->event_x, y = e->event_y;
     const int button_start = int(f.width + 2 * border_pixels()) - scaled_pixel(shell_.ui_scale(), 74);
-    if (y < title_height_pixels() && x > button_start) {
+    const int border = border_pixels();
+    const bool left = x < border;
+    const bool right = x >= int(f.width) + border;
+    const bool top = y < border;
+    const bool bottom = y >= int(f.height) + title_height_pixels();
+    const bool edge = left || right || top || bottom;
+    if (!edge && y < title_height_pixels() && x > button_start) {
       const int button = (x - button_start) / scaled_pixel(shell_.ui_scale(), 23);
       if (button == 0) minimize(client);
       else if (button == 1) toggle_maximize(client);
@@ -1475,9 +1512,13 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
       break;
     }
     if (f.fullscreen || f.maximized_horz || f.maximized_vert) break;
-    begin_drag(f, y < title_height_pixels() ? DragMode::move : DragMode::resize,
-               e->root_x, e->root_y,
-               y < title_height_pixels() ? 8 : 4, e->detail);
+    if (edge) {
+      const std::uint8_t direction = top ? (left ? 0 : right ? 2 : 1) :
+          bottom ? (left ? 6 : right ? 4 : 5) : left ? 7 : 3;
+      begin_drag(f, DragMode::resize, e->root_x, e->root_y, direction, e->detail);
+    } else if (y < title_height_pixels()) {
+      begin_drag(f, DragMode::move, e->root_x, e->root_y, 8, e->detail);
+    }
     break;
   }
   case XCB_MOTION_NOTIFY: {

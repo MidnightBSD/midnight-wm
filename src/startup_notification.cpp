@@ -211,7 +211,8 @@ void StartupNotification::window_mapped(xcb_window_t window) {
   const auto wm_class = property_string(connection_, window, XCB_ATOM_WM_CLASS, XCB_ATOM_STRING);
   if (wm_class.empty()) return;
   const auto separator = wm_class.find('\0');
-  const std::string_view name(wm_class.data(), separator);
+  const std::string_view name(wm_class.data(),
+                              separator == std::string::npos ? wm_class.size() : separator);
   const std::string_view klass(separator == std::string::npos ? "" : wm_class.data() + separator + 1,
                                separator == std::string::npos ? 0 : wm_class.size() - separator - 1);
   for (const auto& [pending_id, pending] : pending_) {

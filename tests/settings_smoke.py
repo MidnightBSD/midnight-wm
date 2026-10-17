@@ -102,9 +102,32 @@ def atomic_write(path, text):
     temporary.replace(path)
 
 
+def write_icon_theme(data_home, name, color):
+    icon_dir = data_home / "icons" / name / "18x18" / "places"
+    icon_dir.mkdir(parents=True, exist_ok=True)
+    (icon_dir.parent.parent / "index.theme").write_text(
+        f"[Icon Theme]\nName={name}\nDirectories=18x18/places\n"
+        "\n[18x18/places]\nSize=18\nType=Fixed\n")
+    run("convert", "-size", "18x18", f"xc:{color}", str(icon_dir / "user-trash.png"))
+
+
+def check_trash_icon_theme(output, color, label):
+    run("xdotool", "mousemove", "--sync", "12", "12", "click", "1")
+    time.sleep(0.3)
+    image_path = output / f"icon-theme-{label}.png"
+    run("import", "-window", "root", str(image_path))
+    histogram = run("convert", str(image_path), "-format", "%c", "histogram:info:-")
+    match = re.search(r"(?m)^\s*([0-9]+):[^\n]*" + re.escape(color.upper()) + r"(?:[0-9A-F]{2})?\b",
+                      histogram.upper())
+    assert match and int(match.group(1)) >= 250, \
+        f"launcher trash icon did not use {label} theme color {color}"
+    run("xdotool", "key", "Escape")
+
+
 def session(args):
     output = args.output
     config = Path(os.environ["XDG_CONFIG_HOME"]) / "midnight-wm/config.ini"
+    gtk_settings = Path(os.environ["XDG_CONFIG_HOME"]) / "gtk-3.0/settings.ini"
     folder = Path(os.environ["HOME"]) / "Test folder"
     folder.mkdir()
     (folder / "kept.txt").write_text("The folder must stay open during reload.\n")
@@ -112,10 +135,25 @@ def session(args):
         wm = subprocess.Popen([str(args.binary)], stdout=log, stderr=subprocess.STDOUT)
         try:
             panel = until(lambda: window_for_size(1280, 30), "initial panel did not appear")
+            check_trash_icon_theme(output, "#e02020", "red")
             run("gdbus", "call", "--session", "--timeout", "5", "--dest",
                 "org.freedesktop.FileManager1", "--object-path", "/org/freedesktop/FileManager1",
                 "--method", "org.freedesktop.FileManager1.ShowFolders", repr([folder.as_uri()]), "")
             folder_window = until(lambda: window_for_size(620, 430), "folder did not open")
+            folder_x, folder_y = window_position(folder_window)
+            close_x = folder_x + 600
+            close_y = folder_y + 15
+            for button in ("3", "2"):
+                run("xdotool", "mousemove", str(close_x), str(close_y), "click", button)
+                time.sleep(0.2)
+                assert window_for_size(620, 430) == folder_window, \
+                    f"folder close control responded to mouse button {button}"
+            run("xdotool", "mousemove", str(close_x), str(close_y), "click", "1")
+            until(lambda: window_for_size(620, 430) is None, "left click did not close folder")
+            run("gdbus", "call", "--session", "--timeout", "5", "--dest",
+                "org.freedesktop.FileManager1", "--object-path", "/org/freedesktop/FileManager1",
+                "--method", "org.freedesktop.FileManager1.ShowFolders", repr([folder.as_uri()]), "")
+            folder_window = until(lambda: window_for_size(620, 430), "folder did not reopen")
             # The seventh Midnight menu row is Settings. PATH points to the build directory.
             run("xdotool", "mousemove", "--sync", "12", "12", "click", "1")
             time.sleep(0.2)
@@ -145,6 +183,7 @@ def session(args):
             assert geometry(folder_window) == (620, 430), "Settings Apply lost the existing folder"
 
             # External atomic saves must follow the same reload path as the Settings app.
+            atomic_write(gtk_settings, "[Settings]\ngtk-icon-theme-name=SmokeBlue\n")
             changed = ("[Workspace]\npanel_label=Smoke test\nui_scale=1.25\n"
                        "panel_color=#123456\naccent_color=#654321\ndesktop_color=#345678\n"
                        "[Unrelated]\nretained=keep this value\n")
@@ -153,6 +192,7 @@ def session(args):
             until(lambda: geometry(folder_window) == (775, 538), "live scale did not resize the existing folder")
             until(lambda: frame_extents(settings) == (6, 6, 35, 6),
                   "live scale did not update the existing Settings client's frame extents")
+            check_trash_icon_theme(output, "#2040e0", "blue")
             assert settings_window() == settings, "reload replaced the Settings client"
             run("import", "-window", "root", str(output / "settings-reloaded.png"))
             run("xdotool", "windowactivate", "--sync", settings)
@@ -218,6 +258,12 @@ def main():
         root = Path(temporary)
         for directory in ("home", "config/midnight-wm", "config-system", "data", "runtime"):
             (root / directory).mkdir(parents=True)
+        write_icon_theme(root / "data", "SmokeRed", "#e02020")
+        write_icon_theme(root / "data", "SmokeBlue", "#2040e0")
+        gtk_config = root / "config/gtk-3.0"
+        gtk_config.mkdir(parents=True)
+        (gtk_config / "settings.ini").write_text(
+            "[Settings]\ngtk-icon-theme-name=SmokeRed\n")
         (root / "runtime").chmod(0o700)
         (root / "config/midnight-wm/config.ini").write_text(
             "# preserve this comment\n[Workspace]\nui_scale=1.0\npanel_label=Midnight\n"

@@ -34,7 +34,8 @@ bool trusted_entry(const std::filesystem::path& path,
   // lstat deliberately rejects symlinks, including links to executable files.
   struct stat status {};
   return lstat(path.c_str(), &status) == 0 && S_ISREG(status.st_mode) &&
-         status.st_uid == geteuid() && (status.st_mode & S_IXUSR) != 0;
+         status.st_uid == geteuid() && (status.st_mode & S_IXUSR) != 0 &&
+         (status.st_mode & (S_IWGRP | S_IWOTH)) == 0;
 }
 
 DesktopInfo read_entry(const std::filesystem::path& path) {

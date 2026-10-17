@@ -123,11 +123,20 @@ bool FileManager1::initialize() {
       self.bus, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
       "RequestName", g_variant_new("(su)", service_name, 4u), G_VARIANT_TYPE("(u)"),
       G_DBUS_CALL_FLAGS_NONE, 1000, nullptr, &error);
-  if (!reply) { if (error) g_error_free(error); return false; }
+  if (!reply) {
+    if (error) g_error_free(error);
+    g_dbus_connection_unregister_object(self.bus, self.registration);
+    self.registration = 0;
+    return false;
+  }
   guint result = 0;
   g_variant_get(reply, "(u)", &result);
   g_variant_unref(reply);
   self.owns_name = result == 1 || result == 4;
+  if (!self.owns_name && self.registration) {
+    g_dbus_connection_unregister_object(self.bus, self.registration);
+    self.registration = 0;
+  }
   return self.owns_name;
 }
 

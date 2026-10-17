@@ -23,6 +23,9 @@ def session(args):
         wm = subprocess.Popen([str(args.binary)], stdout=log, stderr=subprocess.STDOUT)
         try:
             time.sleep(1)
+            os.kill(wm.pid, signal.SIGPIPE)
+            time.sleep(.1)
+            assert wm.poll() is None, "SIGPIPE terminated the desktop"
             second = subprocess.run([str(args.binary)], capture_output=True, text=True, timeout=10)
             assert second.returncode != 0, "second WM took over display"
             subprocess.run([str(fixture)], check=True, timeout=35)
@@ -69,7 +72,7 @@ def main():
     if args.session:
         session(args)
         return
-    for command in ("Xvfb", "dbus-run-session", "xdotool", "clang++19", "pkg-config", "gdbus", "xwininfo"):
+    for command in ("Xvfb", "dbus-run-session", "xdotool", "clang++19", "pkg-config", "gdbus", "xwininfo", "xmodmap"):
         if not shutil.which(command):
             parser.error(f"required command not found: {command}")
     if not args.binary.is_file():

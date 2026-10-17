@@ -30,8 +30,8 @@ std::expected<void, std::string> file_op(const std::filesystem::path& from,
     ok = g_file_trash(source, nullptr, &error);
   } else {
     auto* destination = g_file_new_for_path(to->c_str());
-    if (move) ok = g_file_move(source, destination, G_FILE_COPY_NONE, nullptr, nullptr, nullptr, &error);
-    else ok = g_file_copy(source, destination, G_FILE_COPY_NONE, nullptr, nullptr, nullptr, &error);
+    if (move) ok = g_file_move(source, destination, G_FILE_COPY_NOFOLLOW_SYMLINKS, nullptr, nullptr, nullptr, &error);
+    else ok = g_file_copy(source, destination, G_FILE_COPY_NOFOLLOW_SYMLINKS, nullptr, nullptr, nullptr, &error);
     g_object_unref(destination);
   }
   g_object_unref(source);
@@ -125,7 +125,12 @@ std::expected<Object, std::string> Store::get(const std::string& id) const {
   return row_object(raw);
 }
 
-std::string Store::new_id() { return g_uuid_string_random(); }
+std::string Store::new_id() {
+  gchar* raw = g_uuid_string_random();
+  std::string id = raw ? raw : "";
+  g_free(raw);
+  return id;
+}
 
 std::filesystem::path Store::data_path() {
   return std::filesystem::path(g_get_user_data_dir()) / "midnight-wm";

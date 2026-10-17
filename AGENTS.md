@@ -81,6 +81,8 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   Test with isolated HOME/XDG directories; never alter the real user config
   during automated checks.
 - `src/clipboard.*` implements the X11 `CLIPBOARD` selection and persistence.
+  Call clipboard.tick() from the main loop to reclaim stalled outgoing INCR
+  transfers; preserve the aggregate memory and pending-transfer limits.
 - `src/dnd.*` implements XDND file drag and drop. A drop reports completion
   through its callback after the file operation finishes.
 - `src/tray.*` owns the X11 system tray selection and embeds legacy XEmbed
@@ -104,7 +106,8 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   behavior. Keep XCB types and event handling out of these files so a future
   Wayland backend can reuse them.
 - `src/desktop_launcher.*` reads application desktop entries and only launches
-  user-owned executable files directly on the configured Desktop. Recheck trust
+  user-owned executable files without group/other write permission directly on
+  the configured Desktop. Recheck trust
   at launch time, including named desktop-entry actions. Installed Programs
   actions use GDesktopAppInfo; never expand Exec with a shell. `src/thumbnail.*` reads and writes the shared freedesktop
   thumbnail cache for images; keep thumbnail URI and freshness metadata valid.
@@ -172,6 +175,13 @@ to check live appearance settings and actual GTK Open/Save/Cancel requests
 through the portal frontend, including dialog bounds at 720p.
 Before pushing, use `.agents/skills/pre-push-review/SKILL.md` to run cppcheck
 and review the outgoing diff for basic security issues.
+
+Security review findings and remaining hardening work are recorded in
+`docs/security-audit-2026-10-17.md`. With Python 3 and Xvfb available, CTest
+includes hostile WM_CLASS and bounded clipboard transfer checks. The EWMH
+smoke test also checks all frame resize edges, focus recovery, SIGPIPE, and
+keymap changes; the settings smoke checks folder mouse buttons and live icon
+theme invalidation.
 
 For file operations, test copy, move, name collisions, and an unsuccessful
 operation. GIO Trash can be unsupported on `/tmp` mounts on MidnightBSD; treat

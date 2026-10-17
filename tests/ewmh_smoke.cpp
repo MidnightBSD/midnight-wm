@@ -58,7 +58,10 @@ int main() {
   const auto dialog_type = atom("_NET_WM_WINDOW_TYPE_DIALOG");
   xcb_change_property(connection, XCB_PROP_MODE_REPLACE, dialog, atom("_NET_WM_WINDOW_TYPE"), XCB_ATOM_ATOM, 32, 1, &dialog_type);
   xcb_size_hints_t dialog_hints{};
-  dialog_hints.flags = XCB_ICCCM_SIZE_HINT_P_MIN_SIZE;
+  dialog_hints.flags = XCB_ICCCM_SIZE_HINT_P_MIN_SIZE |
+      XCB_ICCCM_SIZE_HINT_BASE_SIZE | XCB_ICCCM_SIZE_HINT_P_RESIZE_INC;
+  dialog_hints.base_width = dialog_hints.base_height = (-2147483647 - 1);
+  dialog_hints.width_inc = dialog_hints.height_inc = 1;
   dialog_hints.min_width = 1600; dialog_hints.min_height = 900;
   xcb_change_property(connection, XCB_PROP_MODE_REPLACE, dialog, XCB_ATOM_WM_NORMAL_HINTS,
                       XCB_ATOM_WM_SIZE_HINTS, 32, sizeof(dialog_hints) / 4, &dialog_hints);
@@ -231,6 +234,67 @@ int main() {
   await([&]{ return width() >= first_width + 20; }, "sync timeout did not recover resize");
   if (std::system("xdotool key Return") != 0) throw std::runtime_error("Return failed");
   xcb_destroy_window(connection, client); xcb_sync_destroy_counter(connection, counter); xcb_flush(connection);
+  // Frame input must resize the edge actually pressed (all eight directions).
+  auto border_client = xcb_generate_id(connection);
+  xcb_create_window(connection, XCB_COPY_FROM_PARENT, border_client, root, 200, 200, 300, 180,
+      0, XCB_WINDOW_CLASS_INPUT_OUTPUT, XCB_COPY_FROM_PARENT, 0, nullptr);
+  xcb_map_window(connection, border_client); xcb_flush(connection);
+  await([&]{ return viewable(border_client); }, "border test mapping");
+  auto* border_tree = xcb_query_tree_reply(connection, xcb_query_tree(connection, border_client), nullptr);
+  if (!border_tree) throw std::runtime_error("border frame missing");
+  const auto border_frame = border_tree->parent; std::free(border_tree);
+  for (int direction = 0; direction < 8; ++direction) {
+    auto* before = xcb_get_geometry_reply(connection, xcb_get_geometry(connection, border_frame), nullptr);
+    if (!before) throw std::runtime_error("border frame geometry missing");
+    const bool left = direction == 0 || direction == 6 || direction == 7;
+    const bool right = direction == 2 || direction == 3 || direction == 4;
+    const bool top = direction <= 2;
+    const bool bottom = direction >= 4 && direction <= 6;
+    const int x = left ? 0 : right ? before->width - 1 : before->width / 2;
+    const int y = top ? 0 : bottom ? before->height - 1 : before->height / 2;
+    xcb_button_press_event_t press{};
+    press.response_type = XCB_BUTTON_PRESS; press.detail = 1;
+    press.event = border_frame; press.root = root;
+    press.event_x = x; press.event_y = y;
+    press.root_x = before->x + x; press.root_y = before->y + y;
+    xcb_send_event(connection, 0, border_frame, XCB_EVENT_MASK_BUTTON_PRESS,
+        reinterpret_cast<const char*>(&press)); xcb_flush(connection);
+    std::this_thread::sleep_for(40ms);
+    xcb_motion_notify_event_t motion{};
+    motion.response_type = XCB_MOTION_NOTIFY; motion.event = border_frame; motion.root = root;
+    motion.root_x = press.root_x + 10; motion.root_y = press.root_y + 10;
+    xcb_send_event(connection, 0, border_frame, XCB_EVENT_MASK_POINTER_MOTION,
+        reinterpret_cast<const char*>(&motion));
+    auto release = press; release.response_type = XCB_BUTTON_RELEASE;
+    xcb_send_event(connection, 0, border_frame, XCB_EVENT_MASK_BUTTON_RELEASE,
+        reinterpret_cast<const char*>(&release)); xcb_flush(connection);
+    const int wanted_w = before->width + (left ? -10 : right ? 10 : 0);
+    const int wanted_h = before->height + (top ? -10 : bottom ? 10 : 0);
+    const int wanted_x = before->x + (left ? 10 : 0), wanted_y = before->y + (top ? 10 : 0);
+    std::free(before);
+    await([&]{
+      auto* after = xcb_get_geometry_reply(connection, xcb_get_geometry(connection, border_frame), nullptr);
+      const bool matches = after && after->width == wanted_w && after->height == wanted_h &&
+          after->x == wanted_x && after->y == wanted_y;
+      std::free(after); return matches;
+    }, "frame resized from incorrect edge");
+  }
+  auto closing = xcb_generate_id(connection);
+  xcb_create_window(connection, XCB_COPY_FROM_PARENT, closing, root, 400, 300, 200, 120,
+      0, XCB_WINDOW_CLASS_INPUT_OUTPUT, XCB_COPY_FROM_PARENT, 0, nullptr);
+  xcb_map_window(connection, closing); xcb_flush(connection);
+  await([&]{ return property(root, "_NET_ACTIVE_WINDOW") == std::vector<std::uint32_t>{closing}; }, "new client focus");
+  xcb_destroy_window(connection, closing); xcb_flush(connection);
+  await([&]{ return property(root, "_NET_ACTIVE_WINDOW") == std::vector<std::uint32_t>{border_client}; }, "focus fallback after closing client");
+  // Change the physical keycode for a global shortcut on this private server.
+  if (std::system("xmodmap -e 'keysym d = F12' -e 'keycode 200 = d'") != 0)
+    throw std::runtime_error("keymap change failed");
+  std::this_thread::sleep_for(200ms);
+  if (std::system("xdotool key super+d") != 0) throw std::runtime_error("remapped shortcut failed");
+  await([&]{ return property(root, "_NET_SHOWING_DESKTOP") == std::vector<std::uint32_t>{1}; }, "shortcut grab not refreshed");
+  if (std::system("xdotool key super+d") != 0) throw std::runtime_error("remapped shortcut restore failed");
+  await([&]{ return property(root, "_NET_SHOWING_DESKTOP") == std::vector<std::uint32_t>{0}; }, "remapped shortcut restoration");
+  xcb_destroy_window(connection, border_client); xcb_flush(connection);
   xcb_disconnect(connection);
   std::cout << "Dialog sizing/hints, workspaces, sticky windows, show desktop, invalid requests, ping timeout/recovery, synchronized resize and timeout passed.\n";
   return 0;

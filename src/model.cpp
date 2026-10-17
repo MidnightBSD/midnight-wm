@@ -106,8 +106,16 @@ std::expected<void, std::string> ShellModel::copy_path(const std::filesystem::pa
                                                         const std::filesystem::path& to) {
   std::error_code ec;
   if (!std::filesystem::is_symlink(from, ec) && std::filesystem::is_directory(from, ec)) {
-    std::filesystem::create_directory(to, ec);
+    const auto source = std::filesystem::weakly_canonical(from, ec);
     if (ec) return std::unexpected(ec.message());
+    const auto destination = std::filesystem::weakly_canonical(to, ec);
+    if (ec) return std::unexpected(ec.message());
+    const auto relative = destination.lexically_relative(source);
+    if (relative.empty() || relative == "." || *relative.begin() != "..")
+      return std::unexpected("Cannot place a folder inside itself");
+    const bool created = std::filesystem::create_directory(to, ec);
+    if (ec) return std::unexpected(ec.message());
+    if (!created) return std::unexpected("Destination already exists");
     for (const auto& entry : std::filesystem::directory_iterator(from, ec)) {
       if (ec) return std::unexpected(ec.message());
       auto result = copy_path(entry.path(), to / entry.path().filename());
@@ -145,7 +153,7 @@ std::expected<void, std::string> ShellModel::transfer(const std::vector<std::fil
       const auto canonical_dest = std::filesystem::weakly_canonical(destination, ec);
       if (!ec) {
         auto relative = canonical_dest.lexically_relative(canonical_source);
-        if (relative.empty() || (*relative.begin() != ".." && relative != "."))
+        if (relative.empty() || relative == "." || *relative.begin() != "..")
           return std::unexpected("Cannot place a folder inside itself");
       }
     }

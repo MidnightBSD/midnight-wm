@@ -49,6 +49,16 @@ install(FILES data/midnightworkspace-portals.conf DESTINATION ${CMAKE_INSTALL_DA
 install(FILES README.md LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/midnight-wm)
 
 enable_testing()
+find_program(XVFB Xvfb)
+find_package(Python3 COMPONENTS Interpreter)
+if(XVFB AND Python3_Interpreter_FOUND)
+  add_executable(security_x11_test tests/security_x11_test.cpp src/clipboard.cpp)
+  target_link_libraries(security_x11_test PRIVATE midnight_core)
+  add_test(NAME security_x11_test COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/security_x11_test.py $<TARGET_FILE:security_x11_test>)
+  set_tests_properties(security_x11_test PROPERTIES TIMEOUT 25)
+endif()
+
 add_executable(wallpaper_test tests/wallpaper_test.cpp)
 target_link_libraries(wallpaper_test PRIVATE midnight_core)
 add_test(NAME wallpaper_test COMMAND wallpaper_test)

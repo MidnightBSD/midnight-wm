@@ -174,6 +174,7 @@ void ensure_session_bus(char* program) {
 }
 
 int main(int argc, char** argv) {
+  std::signal(SIGPIPE, SIG_IGN);
   if (argc > 1) {
     if (argc == 2 && std::string_view(argv[1]) == "--version") {
       std::cout << "midnight-wm " MIDNIGHT_WM_VERSION "\n";
@@ -312,6 +313,7 @@ int main(int argc, char** argv) {
           tray.tick();
           status_panel.tick();
           dnd.tick();
+          clipboard.tick();
           notifications.tick();
           startup.tick();
           xsettings.tick();

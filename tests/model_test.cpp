@@ -72,6 +72,31 @@ int main() {
   if (!check(model.transfer({renamed}, home, true).has_value() && fs::exists(renamed),
              "same-directory move damaged source")) return 1;
 
+  // A same-folder paste must fail before creating a recursively copied tree.
+  if (!check(!model.transfer({destination}, destination, false),
+             "copy into the source folder was accepted")) return 1;
+  if (!check(!fs::exists(destination / "destination"),
+             "self copy left a recursive destination")) return 1;
+  const auto alias = temp.path / "destination-alias";
+  fs::create_directory_symlink(destination, alias);
+  if (!check(!model.transfer({destination}, alias, false),
+             "self copy through a directory symlink was accepted")) return 1;
+
+  if (!check(!model.copy_path(destination, destination / "template-copy"),
+             "template copy into its source was accepted")) return 1;
+  const auto redirect = temp.path / "redirect";
+  fs::create_directory_symlink(destination, redirect);
+  if (!check(!model.copy_path(home, redirect) && !fs::exists(destination / "renamed 3.txt"),
+             "recursive copy merged into a preexisting symlink")) return 1;
+
+  // Copy links themselves rather than their targets.
+  const auto linked = home / "linked.txt";
+  fs::create_symlink(renamed, linked);
+  if (!check(model.transfer({linked}, destination, false).has_value() &&
+             fs::is_symlink(destination / "linked.txt") &&
+             fs::read_symlink(destination / "linked.txt") == renamed,
+             "file copy dereferenced a symlink")) return 1;
+
   const auto trash_candidate = home / "trash-me.txt";
   { std::ofstream stream(trash_candidate); stream << "restore me\n"; }
   midnight::ShellItem physical{{"", midnight::ObjectKind::file, "trash-me.txt", trash_candidate.string(), "", home.string(), 0, 0},

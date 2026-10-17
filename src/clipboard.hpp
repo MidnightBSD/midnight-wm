@@ -2,6 +2,7 @@
 
 #include <xcb/xcb.h>
 
+#include <chrono>
 #include <filesystem>
 #include <functional>
 #include <optional>
@@ -27,6 +28,7 @@ public:
   [[nodiscard]] bool initialize();
   // Returns true for selection or property events consumed by the clipboard.
   [[nodiscard]] bool handle(xcb_generic_event_t* event);
+  void tick(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
   void set_files(std::vector<std::filesystem::path> files, bool cut);
   void request_files(FilesCallback callback);
   [[nodiscard]] bool has_files() const;
@@ -44,6 +46,7 @@ private:
     xcb_atom_t type{};
     std::string data;
     std::size_t offset{};
+    std::chrono::steady_clock::time_point deadline{};
   };
 
   xcb_connection_t* connection_{};

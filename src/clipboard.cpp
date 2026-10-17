@@ -301,6 +301,20 @@ void X11Clipboard::send_notify(const xcb_selection_request_event_t& request,
 void X11Clipboard::send_payload(const xcb_selection_request_event_t& request,
                                 xcb_atom_t property, xcb_atom_t type,
                                 const std::string& payload) {
+  // A requestor can leave INCR transfers unfinished. Bound the retained copies
+  // across all peers, and reject ambiguous duplicate requestor/property pairs.
+  std::size_t retained = 0;
+  for (const auto& transfer : outgoing_) retained += transfer.data.size();
+  const bool duplicate = std::any_of(outgoing_.begin(), outgoing_.end(),
+      [&](const Outgoing& transfer) {
+        return transfer.requestor == request.requestor && transfer.property == property;
+      });
+  if (payload.size() > max_transfer || duplicate ||
+      (payload.size() > chunk_size &&
+       (outgoing_.size() >= 16 || payload.size() > max_transfer - retained))) {
+    send_notify(request, XCB_ATOM_NONE);
+    return;
+  }
   if (payload.size() <= chunk_size) {
     xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, request.requestor,
                         property, type, 8, payload.size(), payload.data());
@@ -310,7 +324,8 @@ void X11Clipboard::send_payload(const xcb_selection_request_event_t& request,
     xcb_change_window_attributes(connection_, request.requestor, XCB_CW_EVENT_MASK, &mask);
     xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, request.requestor,
                         property, atoms_.incr, 32, 1, &bytes);
-    outgoing_.push_back({request.requestor, property, type, payload, 0});
+    outgoing_.push_back({request.requestor, property, type, payload, 0,
+                         std::chrono::steady_clock::now() + std::chrono::seconds(30)});
   }
   send_notify(request, property);
 }
@@ -410,8 +425,15 @@ void X11Clipboard::property_notify(const xcb_property_notify_event_t& notify) {
   xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, it->requestor, it->property,
                       it->type, 8, length, it->data.data() + it->offset);
   it->offset += length;
+  it->deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
   if (length == 0) outgoing_.erase(it);
   xcb_flush(connection_);
+}
+
+void X11Clipboard::tick(std::chrono::steady_clock::time_point now) {
+  std::erase_if(outgoing_, [now](const Outgoing& transfer) {
+    return now >= transfer.deadline;
+  });
 }
 
 bool X11Clipboard::handle(xcb_generic_event_t* event) {
