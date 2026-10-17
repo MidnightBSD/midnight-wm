@@ -177,7 +177,7 @@ std::string StartupNotification::begin(GAppInfo* app) {
   return id;
 }
 
-void StartupNotification::finish(const std::string& id) {
+void StartupNotification::finish(std::string id) {
   if (!pending_.erase(id)) return;
   broadcast("remove: ID=" + quote(id));
   changed();
