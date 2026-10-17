@@ -289,9 +289,16 @@ std::string clock_text(const std::string& format) {
   const auto time = std::chrono::system_clock::to_time_t(now);
   std::tm local{};
   localtime_r(&time, &local);
-  char text[32]{};
-  std::strftime(text, sizeof(text), format.c_str(), &local);
-  return text;
+  // When the result does not fit, strftime returns 0 and may leave the buffer
+  // unterminated, so use only the reported length and retry with more room.
+  for (const std::size_t size : {64u, 256u, 1024u}) {
+    std::string text(size, '\0');
+    if (const auto length = std::strftime(text.data(), text.size(), format.c_str(), &local)) {
+      text.resize(length);
+      return text;
+    }
+  }
+  return {};
 }
 
 std::filesystem::path unique_path(const std::filesystem::path& desired) {
