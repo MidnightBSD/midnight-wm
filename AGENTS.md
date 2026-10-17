@@ -201,3 +201,6 @@ that as a platform limitation and verify the source file remains intact.
   `bmake package`, not only a CMake build or fake install.
 - Keep unrelated checkout changes intact. Commit, push, publish releases, or
   change the GitHub repository only when the user requests it.
+- Deliver fixes and improvements through a pull request: commit on a new
+  topic branch, push that branch, and open a PR against `master`. Do not
+  commit, merge, or push directly to `master`.
