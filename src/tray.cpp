@@ -221,6 +221,8 @@ void X11SystemTray::paint() {
   cairo_surface_destroy(surface);
 }
 
+void X11SystemTray::refresh() { layout(); }
+
 void X11SystemTray::tick() {
   if (layout_x_ != shell_.tray_x() || layout_width_ != shell_.tray_width() ||
       layout_height_ != shell_.panel_height() ||

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=MidnightBSD Settings
+Comment=Customize the Midnight Workspace desktop
+Exec=midnightbsd-settings
+Icon=preferences-desktop
+Terminal=false
+Categories=Settings;DesktopSettings;
+StartupNotify=false

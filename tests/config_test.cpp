@@ -22,6 +22,8 @@ int main() {
   const auto check = [&](bool condition, const char* message) {
     if (!condition) { std::cerr << message << '\n'; passed = false; }
   };
+  check(!midnight::parse_config("[Workspace\ndark_mode=true"), "malformed snapshot must be rejected");
+  check(midnight::parse_config("[Workspace]\ndark_mode=true\n")->dark_mode, "complete snapshot must parse");
   const auto defaults = midnight::load_config();
   check(!defaults.dark_mode && defaults.ui_font == "Sans" && defaults.title_font == "Sans Bold",
         "missing config must preserve default fonts and light mode");

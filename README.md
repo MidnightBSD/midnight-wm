@@ -7,6 +7,7 @@ MidnightBSD. The current target is MidnightBSD 4.2 with Clang 19 and C++23.
 
 The build needs CMake, pkg-config, XCB (including icccm, keysyms, XFixes, and
 RandR), Cairo, Pango, GLib/GIO, GdkPixbuf, Garcon, and SQLite 3.
+The companion `midnightbsd-settings` application also needs GTK 3.
 Install the librsvg GdkPixbuf loader for SVG wallpapers; the mport includes
 this runtime dependency. PNG, JPEG, and GIF loaders must also be available.
 
@@ -134,7 +135,13 @@ The workspace keeps a text or file clipboard snapshot when its original owner
 exits. The context menu provides object properties, shadows, templates, and
 Trash restore actions. Copying or moving files runs in the background.
 
-Copy `share/midnight-wm/config.ini` to
+Open **Settings…** from the Midnight menu, or run `midnightbsd-settings`, to
+change wallpaper, colors, fonts, scaling, panel text, clock format, and desktop
+shortcuts. **Apply** saves your preferences and the running window manager
+updates automatically within about two seconds. Closing without applying discards pending edits.
+The settings app preserves unrelated INI keys and reports save errors.
+
+To edit preferences by hand, copy `share/midnight-wm/config.ini` to
 `$XDG_CONFIG_HOME/midnight-wm/config.ini` (normally
 `~/.config/midnight-wm/config.ini`) to change the panel label, clock format,
 workspace appearance, or desktop shortcuts. In its `[Workspace]` section,
@@ -159,12 +166,12 @@ frame. The wallpaper repeats independently on each monitor. `desktop_image_mode`
 can be `fill` (the default, centered crop) or `fit` (the whole image centered
 with `desktop_color` showing around it). `desktop_color` also appears if the
 wallpaper is unset or unreadable and behind transparent parts of an image.
-Leave `desktop_image` empty to keep the current appearance. Restart the session
-after editing the file.
+Leave `desktop_image` empty to keep the current appearance. Saved changes are
+reloaded automatically; malformed INI files leave the current settings active.
 In the `[Desktop]` section,
 `show_documents` and `show_pictures` default to `true`; `show_music`,
 `show_videos`, and `show_public_share` default to `false`. Set any of these to
-`true` or `false` to show or hide that shortcut. Restart the session after
+`true` or `false` to show or hide that shortcut. Changes apply automatically after
 editing the file. Existing shortcut names, icons, and positions remain in the
 workspace database when a shortcut is hidden.
 

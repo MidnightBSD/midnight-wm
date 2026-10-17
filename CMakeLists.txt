@@ -24,13 +24,23 @@ add_executable(midnight-wm src/main.cpp src/x11.cpp src/shell.cpp src/clipboard.
 target_link_libraries(midnight-wm PRIVATE midnight_core)
 target_compile_options(midnight-wm PRIVATE -Wall -Wextra -Wpedantic)
 
+pkg_check_modules(GTK3 REQUIRED IMPORTED_TARGET gtk+-3.0)
+add_executable(midnightbsd-settings src/settings.cpp)
+target_link_libraries(midnightbsd-settings PRIVATE midnight_core PkgConfig::GTK3)
+target_compile_options(midnightbsd-settings PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_definitions(midnightbsd-settings PRIVATE MIDNIGHT_WM_VERSION="${PROJECT_VERSION}")
+
 include(GNUInstallDirs)
+target_compile_definitions(midnightbsd-settings PRIVATE
+  MIDNIGHT_WM_BACKGROUND_DIR="${CMAKE_INSTALL_FULL_DATADIR}/backgrounds/midnightbsd")
 target_compile_definitions(midnight_core PRIVATE
   MIDNIGHT_WM_BACKGROUND_DIR="${CMAKE_INSTALL_FULL_DATADIR}/backgrounds/midnightbsd")
 target_compile_definitions(midnight-wm PRIVATE
+  MIDNIGHT_WM_SETTINGS_PROGRAM="${CMAKE_INSTALL_FULL_BINDIR}/midnightbsd-settings"
   MIDNIGHT_WM_DATA_DIR="${CMAKE_INSTALL_FULL_DATADIR}/midnight-wm"
   MIDNIGHT_WM_VERSION="${PROJECT_VERSION}")
-install(TARGETS midnight-wm RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(TARGETS midnight-wm midnightbsd-settings RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES data/midnightbsd-settings.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 install(FILES data/midnight-wm.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/xsessions)
 install(FILES data/config.ini data/MidnightBSDLogo.svg data/MidnightBSDLogo22x22.png
         DESTINATION ${CMAKE_INSTALL_DATADIR}/midnight-wm)

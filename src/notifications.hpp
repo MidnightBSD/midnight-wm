@@ -19,6 +19,7 @@ class Notifications {
   bool initialize();
   bool handle(xcb_generic_event_t* event);
   void tick();
+  void refresh();
 
  private:
   struct Impl;

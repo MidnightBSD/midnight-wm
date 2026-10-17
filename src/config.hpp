@@ -2,6 +2,8 @@
 
 #include <array>
 #include <string>
+#include <string_view>
+#include <optional>
 
 namespace midnight {
 
@@ -32,5 +34,7 @@ struct ThemeConfig {
 };
 
 [[nodiscard]] ThemeConfig load_config();
+// Parse a complete snapshot; malformed INI data must not replace live settings.
+[[nodiscard]] std::optional<ThemeConfig> parse_config(std::string_view contents);
 
 } // namespace midnight

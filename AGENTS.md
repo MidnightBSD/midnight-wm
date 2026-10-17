@@ -58,9 +58,16 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   areas. Optional `panel_color` and `accent_color` override their defaults.
   These settings are read from
   `$XDG_CONFIG_HOME/midnight-wm/config.ini` (normally
-  `~/.config/midnight-wm/config.ini`) and require a session restart. An empty
+  `~/.config/midnight-wm/config.ini`) and apply live after saving. An empty
   `desktop_image` keeps the current appearance. These settings do not change
   controls drawn by application toolkits.
+- `src/settings.cpp` implements the GTK 3 `midnightbsd-settings` companion,
+  launched from the Midnight menu. Keep font/color/file controls accessible,
+  preserve unknown INI keys and comments when saving, and report errors without
+  overwriting malformed files. Live reload must retain existing windows and
+  refresh shell controls, frame geometry, wallpaper, and desktop shortcuts.
+  Test with isolated HOME/XDG directories; never alter the real user config
+  during automated checks.
 - `src/clipboard.*` implements the X11 `CLIPBOARD` selection and persistence.
 - `src/dnd.*` implements XDND file drag and drop. A drop reports completion
   through its callback after the file operation finishes.
@@ -122,6 +129,10 @@ smaller one. Keep panel controls, menus, folder windows, dialogs, and the
 desktop usable at each size.
 Use `.agents/skills/screen-resolution-checks/SKILL.md` for the repeatable
 isolated display matrix and its manual two-monitor Xorg checklist.
+For settings UI or live configuration changes, run
+`python3 tests/settings_smoke.py` after building. It checks menu launch, Apply,
+INI preservation, live color/scale changes, open-folder preservation, and
+malformed-file recovery in an isolated session.
 Before pushing, use `.agents/skills/pre-push-review/SKILL.md` to run cppcheck
 and review the outgoing diff for basic security issues.
 

@@ -21,6 +21,7 @@ public:
   [[nodiscard]] bool initialize();
   [[nodiscard]] bool handle(xcb_generic_event_t* event);
   void tick();
+  void refresh();
   void set_external_width(int width);
   [[nodiscard]] int external_x() const;
   [[nodiscard]] int external_width() const;

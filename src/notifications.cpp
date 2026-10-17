@@ -308,6 +308,11 @@ bool Notifications::handle(xcb_generic_event_t* event) {
   return false;
 }
 
+void Notifications::refresh() {
+  impl_->reposition();
+  for (const auto& popup : impl_->popups) impl_->paint(popup);
+}
+
 void Notifications::tick() {
   auto& self = *impl_;
   const auto now = std::chrono::steady_clock::now();

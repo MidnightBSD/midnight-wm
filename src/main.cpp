@@ -1,5 +1,6 @@
 #include "autostart.hpp"
 #include "clipboard.hpp"
+#include "config.hpp"
 #include "dnd.hpp"
 #include "file_manager1.hpp"
 #include "keyring_session.hpp"
@@ -22,17 +23,79 @@
 
 #include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
+#include <fstream>
+#include <optional>
 #include <poll.h>
 #include <string>
 #include <thread>
 #include <string_view>
+#include <utility>
 #include <unistd.h>
 
 namespace {
+#ifndef MIDNIGHT_WM_SETTINGS_PROGRAM
+#define MIDNIGHT_WM_SETTINGS_PROGRAM "/usr/local/bin/midnightbsd-settings"
+#endif
+
+std::string settings_program(const char* program) {
+  char* found = g_find_program_in_path(program);
+  std::error_code error;
+  const auto executable = std::filesystem::canonical(found ? found : program, error);
+  g_free(found);
+  if (!error) {
+    const auto sibling = executable.parent_path() / "midnightbsd-settings";
+    if (access(sibling.c_str(), X_OK) == 0) return sibling.string();
+  }
+  if (access(MIDNIGHT_WM_SETTINGS_PROGRAM, X_OK) == 0) return MIDNIGHT_WM_SETTINGS_PROGRAM;
+  return "midnightbsd-settings";
+}
+
+// Poll the file itself: directory watches can miss its initial creation or an
+// atomic replacement. Compare bounded snapshots, and wait for a stable read so
+// ordinary editors do not apply a transient truncated file.
+class ConfigReload {
+ public:
+  ConfigReload() : applied_(read()), pending_(applied_) {}
+  std::optional<midnight::ThemeConfig> poll() {
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last_poll_ < std::chrono::seconds(1)) return std::nullopt;
+    last_poll_ = now;
+    const auto contents = read();
+    if (!contents) { pending_.reset(); return std::nullopt; }
+    if (contents == applied_) return std::nullopt;
+    if (contents != pending_) { pending_ = contents; return std::nullopt; }
+    auto config = midnight::parse_config(*contents);
+    // Remember rejected input too, rather than retrying the same broken file.
+    applied_ = contents;
+    if (!config) std::cerr << "Ignoring malformed workspace configuration\n";
+    return config;
+  }
+ private:
+  std::optional<std::string> read() const {
+    const auto path = std::filesystem::path(g_get_user_config_dir()) / "midnight-wm/config.ini";
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return std::nullopt;
+    constexpr std::size_t limit = 1024 * 1024;
+    std::string contents(limit + 1, '\0');
+    input.read(contents.data(), contents.size());
+    const auto length = input.gcount();
+    if (length > static_cast<std::streamsize>(limit) || input.bad()) return std::nullopt;
+    contents.resize(static_cast<std::size_t>(length));
+    // Empty files are commonly an editor's intermediate save; retain the
+    // running configuration until a complete key file is available.
+    if (contents.empty()) return std::nullopt;
+    return contents;
+  }
+  std::optional<std::string> applied_, pending_;
+  std::chrono::steady_clock::time_point last_poll_{};
+};
+
 std::atomic_bool running{true};
 void stop(int) { running = false; }
 
@@ -157,6 +220,7 @@ int main(int argc, char** argv) {
     } else {
       midnight::X11Dnd dnd(connection, screen->root);
       midnight::Shell shell(connection, screen, store);
+      shell.set_settings_program(settings_program(argv[0]));
       midnight::X11Clipboard clipboard(connection, screen->root);
       midnight::X11WindowManager wm(connection, screen, shell);
       midnight::StartupNotification startup(connection, screen, screen_number);
@@ -206,6 +270,7 @@ int main(int argc, char** argv) {
         if (!file_manager.initialize()) std::cerr << "FileManager1 D-Bus unavailable\n";
         (void)xsettings.initialize();
         midnight::launch_autostart();
+        ConfigReload config_reload;
 
         pollfd display{.fd = xcb_get_file_descriptor(connection), .events = POLLIN, .revents = 0};
         while (running && !xcb_connection_has_error(connection)) {
@@ -229,6 +294,14 @@ int main(int argc, char** argv) {
             std::free(event);
           }
           while (g_main_context_pending(nullptr)) g_main_context_iteration(nullptr, false);
+          if (auto config = config_reload.poll()) {
+            shell.apply_config(std::move(*config));
+            wm.refresh_theme();
+            tray.refresh();
+            status_panel.refresh();
+            notifications.refresh();
+            menu_popup.refresh_geometry();
+          }
           shell.tick();
           tray.tick();
           status_panel.tick();

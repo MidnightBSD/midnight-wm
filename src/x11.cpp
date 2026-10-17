@@ -977,6 +977,29 @@ void X11WindowManager::update_screen_size(std::uint16_t width, std::uint16_t hei
   refresh_display_layout(width, height);
 }
 
+void X11WindowManager::refresh_theme() {
+  update_geometry_properties();
+  for (auto& [client, frame] : frames_) {
+    const std::uint32_t extents[]{static_cast<std::uint32_t>(decorated(frame) ? border_pixels() : 0),
+                                  static_cast<std::uint32_t>(decorated(frame) ? border_pixels() : 0),
+                                  static_cast<std::uint32_t>(decorated(frame) ? title_height_pixels() : 0),
+                                  static_cast<std::uint32_t>(decorated(frame) ? border_pixels() : 0)};
+    xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, client, atom("_NET_FRAME_EXTENTS"),
+                        XCB_ATOM_CARDINAL, 32, 4, extents);
+    if (!frame.fullscreen && (frame.maximized_horz || frame.maximized_vert)) update_maximized_geometry(frame);
+    else {
+      if (!frame.fullscreen) {
+        const auto monitor = monitor_for(frame);
+        const int top = monitor.y + (monitor.primary ? shell_.panel_height() : 0);
+        frame.y = std::clamp(frame.y, top,
+                             std::max(top, monitor.y + monitor.height - title_height_pixels()));
+      }
+      resize_frame(frame);
+    }
+    draw_frame(frame);
+  }
+}
+
 void X11WindowManager::refresh_display_layout(std::uint16_t width, std::uint16_t height) {
   auto monitors = query_display_monitors(connection_, screen_);
   if (monitors.size() == 1 && monitors.front().x == 0 && monitors.front().y == 0 &&

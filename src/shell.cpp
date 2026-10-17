@@ -267,7 +267,7 @@ struct TransferCompletion {
 };
 
 enum class MenuAction { noop, open_home, open_desktop, open_trash, new_folder, paste, show_programs,
-                        show_recent, open_recent,
+                        show_recent, open_recent, settings,
                         show_category, next_categories, previous_categories,
                         launch, next_apps, previous_apps,
                         open_item, open_with, copy, cut, create_shadow, create_template, properties, trash,
@@ -583,6 +583,7 @@ struct Shell::Impl {
   std::function<void(xcb_window_t)> dnd_unregister;
   std::function<void(xcb_window_t, std::vector<std::filesystem::path>, bool)> dnd_begin;
   std::function<void()> exit_handler;
+  std::string settings_program{"midnightbsd-settings"};
   xcb_key_symbols_t* key_symbols{};
   xcb_atom_t active_atom{};
   std::string last_clock;
@@ -1967,6 +1968,7 @@ struct Shell::Impl {
                                    {"Recent Documents ▶", MenuAction::show_recent},
                                    {"New folder on desktop", MenuAction::new_folder},
                                    {"Paste on desktop", MenuAction::paste},
+                                   {"Settings…", MenuAction::settings},
                                    {"Trash", MenuAction::open_trash},
                                    {"Exit X11 session…", MenuAction::exit_session}};
     const auto area = primary_area();
@@ -2199,6 +2201,15 @@ struct Shell::Impl {
         entry.action != MenuAction::previous_categories) close_menu();
     switch (entry.action) {
       case MenuAction::noop: break;
+      case MenuAction::settings: {
+        GError* error = nullptr;
+        auto* process = g_subprocess_new(G_SUBPROCESS_FLAGS_NONE, &error,
+                                        settings_program.c_str(), nullptr);
+        if (process) g_object_unref(process);
+        else show_notice("Could not open MidnightBSD Settings.");
+        if (error) g_error_free(error);
+        break;
+      }
       case MenuAction::open_home: open_folder(g_get_home_dir()); break;
       case MenuAction::open_desktop: open_folder(Store::desktop_path()); break;
       case MenuAction::open_trash: open_folder("trash:///"); break;
@@ -2977,6 +2988,29 @@ const std::array<double, 3>& Shell::accent_color() const {
 
 void Shell::set_exit_handler(std::function<void()> handler) {
   impl_->exit_handler = std::move(handler);
+}
+
+void Shell::set_settings_program(std::string program) {
+  impl_->settings_program = std::move(program);
+}
+
+void Shell::apply_config(ThemeConfig config) {
+  auto& p = *impl_;
+  const bool shortcuts_changed = p.config.show_documents != config.show_documents ||
+      p.config.show_pictures != config.show_pictures || p.config.show_music != config.show_music ||
+      p.config.show_videos != config.show_videos || p.config.show_public_share != config.show_public_share;
+  p.config = std::move(config);
+  // Clear even when the new selection is empty, and reload a changed image at
+  // the same monitor dimensions on the next desktop paint.
+  (void)p.wallpaper.load({}, 0, 0);
+  p.wallpaper_width = p.wallpaper_height = 0;
+  p.hidden_shortcuts.clear();
+  p.seed_objects();
+  p.desktop_items = p.list_items(Store::desktop_path(), true);
+  if (shortcuts_changed) p.selected_desktop = -1;
+  refresh_display_layout();
+  p.desktop_scroll_rows = std::clamp(p.desktop_scroll_rows, 0, p.desktop_max_scroll());
+  p.draw_desktop();
 }
 
 void Shell::set_startup_notification(StartupNotification* startup) {

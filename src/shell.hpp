@@ -37,6 +37,8 @@ public:
   void set_tasks(std::vector<Task> tasks);
   void set_screen_size(std::uint16_t width, std::uint16_t height);
   void refresh_display_layout();
+  void apply_config(ThemeConfig config);
+  void set_settings_program(std::string program);
   [[nodiscard]] const ThemeConfig& theme() const;
   [[nodiscard]] double ui_scale() const;
   [[nodiscard]] int panel_height() const;

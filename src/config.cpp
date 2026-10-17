@@ -34,13 +34,13 @@ std::optional<std::array<double, 3>> parse_color(std::string_view value) {
 }
 } // namespace
 
-ThemeConfig load_config() {
+std::optional<ThemeConfig> parse_config(std::string_view contents) {
   ThemeConfig config;
   const auto path = std::filesystem::path(g_get_user_config_dir()) / "midnight-wm" / "config.ini";
   auto* keyfile = g_key_file_new();
-  if (!g_key_file_load_from_file(keyfile, path.c_str(), G_KEY_FILE_NONE, nullptr)) {
+  if (!g_key_file_load_from_data(keyfile, contents.data(), contents.size(), G_KEY_FILE_NONE, nullptr)) {
     g_key_file_unref(keyfile);
-    return config;
+    return std::nullopt;
   }
   auto read = [keyfile](const char* key) -> std::string {
     char* value = g_key_file_get_string(keyfile, "Workspace", key, nullptr);
@@ -114,5 +114,14 @@ ThemeConfig load_config() {
   read_desktop_bool("show_public_share", config.show_public_share);
   g_key_file_unref(keyfile);
   return config;
+}
+ThemeConfig load_config() {
+  const auto path = std::filesystem::path(g_get_user_config_dir()) / "midnight-wm" / "config.ini";
+  char* contents = nullptr;
+  gsize length{};
+  if (!g_file_get_contents(path.c_str(), &contents, &length, nullptr)) return {};
+  const auto config = parse_config(std::string_view(contents, length));
+  g_free(contents);
+  return config.value_or(ThemeConfig{});
 }
 } // namespace midnight
