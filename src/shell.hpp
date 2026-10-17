@@ -57,6 +57,9 @@ public:
   [[nodiscard]] int panel_x() const;
   [[nodiscard]] int panel_y() const;
   [[nodiscard]] const std::array<double, 3>& panel_color() const;
+  // Returns a cached surface owned by the shell, or nullptr. The pointer is
+  // valid only until the next tick() or apply_config(); paint it immediately
+  // and do not keep it.
   [[nodiscard]] cairo_surface_t* themed_icon_surface(const std::string& name);
   [[nodiscard]] const std::array<double, 3>& accent_color() const;
   void set_exit_handler(std::function<void()> handler);
