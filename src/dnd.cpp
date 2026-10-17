@@ -411,11 +411,22 @@ void X11Dnd::handle_selection_request(const xcb_selection_request_event_t& reque
                         property, XCB_ATOM_ATOM, 32, 2, supported);
     response = property;
   } else if (request.target == atoms_.uri) {
-    response = property;
-    if (source_uris_.size() <= chunk_size) {
+    // A requestor can leave INCR transfers unfinished. Bound the retained copies
+    // across all peers, and reject ambiguous duplicate requestor/property pairs.
+    std::size_t retained = 0;
+    for (const auto& transfer : outgoing_) retained += transfer.data.size();
+    const bool duplicate = std::any_of(outgoing_.begin(), outgoing_.end(),
+        [&](const Outgoing& transfer) {
+          return transfer.requestor == request.requestor && transfer.property == property;
+        });
+    const bool rejected = source_uris_.size() > max_transfer || duplicate ||
+        (source_uris_.size() > chunk_size &&
+         (outgoing_.size() >= 16 || source_uris_.size() > max_transfer - retained));
+    if (!rejected) response = property;
+    if (!rejected && source_uris_.size() <= chunk_size) {
       xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, request.requestor,
                           property, atoms_.uri, 8, source_uris_.size(), source_uris_.data());
-    } else {
+    } else if (!rejected) {
       auto* attrs = xcb_get_window_attributes_reply(connection_,
           xcb_get_window_attributes(connection_, request.requestor), nullptr);
       if (attrs) {
@@ -426,7 +437,8 @@ void X11Dnd::handle_selection_request(const xcb_selection_request_event_t& reque
       const uint32_t bytes = std::min<std::size_t>(source_uris_.size(), UINT32_MAX);
       xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, request.requestor,
                           property, atoms_.incr, 32, 1, &bytes);
-      outgoing_.push_back({request.requestor, property, source_uris_, 0});
+      outgoing_.push_back({request.requestor, property, source_uris_, 0,
+                           std::chrono::steady_clock::now() + std::chrono::seconds(30)});
     }
   }
   xcb_selection_notify_event_t notify{};
@@ -498,6 +510,7 @@ void X11Dnd::handle_property(const xcb_property_notify_event_t& event) {
   xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, it->requestor, it->property,
                       atoms_.uri, 8, length, it->data.data() + it->offset);
   it->offset += length;
+  it->deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
   if (!length) outgoing_.erase(it);
   xcb_flush(connection_);
 }
@@ -587,8 +600,10 @@ bool X11Dnd::handle(xcb_generic_event_t* event) {
   return false;
 }
 
-void X11Dnd::tick() {
-  const auto now = std::chrono::steady_clock::now();
+void X11Dnd::tick(std::chrono::steady_clock::time_point now) {
+  std::erase_if(outgoing_, [now](const Outgoing& transfer) {
+    return now >= transfer.deadline;
+  });
   for (auto& [window, state] : targets_) {
     if (state.pending_finish && now >= state.deadline)
       finish_target(window, state.generation, false);

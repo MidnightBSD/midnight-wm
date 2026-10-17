@@ -40,8 +40,9 @@ public:
   [[nodiscard]] bool begin_drag(xcb_window_t source, std::vector<std::filesystem::path> files,
                                 bool move, DragFinished finished = {});
   [[nodiscard]] bool handle(xcb_generic_event_t* event);
-  // Call once per main-loop iteration to expire unresponsive XDND targets.
-  void tick();
+  // Call once per main-loop iteration to expire unresponsive XDND targets
+  // and stalled outgoing INCR transfers.
+  void tick(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
 
 private:
   struct Atoms {
@@ -66,6 +67,7 @@ private:
     xcb_atom_t property{};
     std::string data;
     std::size_t offset{};
+    std::chrono::steady_clock::time_point deadline{};
   };
 
   xcb_connection_t* connection_{};
