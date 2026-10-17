@@ -30,7 +30,7 @@ void stop(int) { running = false; }
 int main(int argc, char** argv) {
   if (argc > 1) {
     if (argc == 2 && std::string_view(argv[1]) == "--version") {
-      std::cout << "midnight-wm 0.1.0\n";
+      std::cout << "midnight-wm " MIDNIGHT_WM_VERSION "\n";
       return 0;
     }
     std::cerr << "Usage: midnight-wm [--version]\n";
