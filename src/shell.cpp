@@ -7,6 +7,7 @@
 
 #include <cairo/cairo-xcb.h>
 #include <gio/gio.h>
+#include <gio/gdesktopappinfo.h>
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #include <pango/pangocairo.h>
 #include <xcb/xcb_keysyms.h>
@@ -57,6 +58,10 @@ constexpr int icon_chooser_cell_height = 74;
 constexpr int icon_chooser_page_size = icon_chooser_columns * icon_chooser_rows;
 
 using Item = ShellItem;
+
+int launcher_menu_width(int screen_width) {
+  return std::clamp((screen_width - 3) / 3, 150, 250);
+}
 
 std::vector<std::string> icon_theme_list(GKeyFile* file, const char* group, const char* key) {
   std::vector<std::string> values;
@@ -182,6 +187,43 @@ struct IconChooser {
   std::size_t page{};
 };
 
+struct AppCategory {
+  std::string label;
+  std::string icon;
+  std::vector<std::size_t> apps;
+};
+
+struct CategoryDefinition {
+  std::string_view key;
+  std::string_view label;
+  std::string_view icon;
+};
+
+constexpr std::array<CategoryDefinition, 12> app_category_definitions{{
+  {"Utility", "Accessories", "applications-accessories"},
+  {"Development", "Development", "applications-development"},
+  {"Education", "Education", "applications-education"},
+  {"Game", "Games", "applications-games"},
+  {"Graphics", "Graphics", "applications-graphics"},
+  {"HealthFitness", "Health & Fitness", "applications-science"},
+  {"Network", "Internet", "applications-internet"},
+  {"AudioVideo", "Multimedia", "applications-multimedia"},
+  {"Office", "Office", "applications-office"},
+  {"Science", "Science", "applications-science"},
+  {"Settings", "Settings", "preferences-system"},
+  {"System", "System", "applications-system"}
+}};
+
+bool has_app_category(std::string_view categories, std::string_view category) {
+  while (!categories.empty()) {
+    const auto end = categories.find(';');
+    if (categories.substr(0, end) == category) return true;
+    if (end == std::string_view::npos) break;
+    categories.remove_prefix(end + 1);
+  }
+  return false;
+}
+
 struct TransferWork {
   std::vector<std::filesystem::path> paths;
   std::filesystem::path destination;
@@ -194,6 +236,7 @@ struct TransferCompletion {
 };
 
 enum class MenuAction { open_home, open_desktop, open_trash, new_folder, paste, show_programs,
+                        show_category, next_categories, previous_categories,
                         launch, next_apps, previous_apps,
                         open_item, copy, cut, create_shadow, create_template, properties, trash,
                         restore, delete_permanently, close_folder, exit_session, refresh_folder,
@@ -382,7 +425,7 @@ struct Shell::Impl {
   std::shared_ptr<bool> alive{std::make_shared<bool>(true)};
   int transfers_in_progress{};
   xcb_visualtype_t* visual{};
-  xcb_window_t desktop{}, panel{}, menu{}, submenu{}, exit_dialog{};
+  xcb_window_t desktop{}, panel{}, menu{}, submenu{}, app_menu{}, exit_dialog{};
   xcb_window_t notice{};
   std::string notice_text;
   std::optional<Properties> properties;
@@ -394,6 +437,7 @@ struct Shell::Impl {
   std::vector<Task> tasks;
   int requested_tray_width{};
   std::vector<GAppInfo*> apps;
+  std::vector<AppCategory> app_categories;
   std::vector<std::filesystem::path> icon_roots;
   std::unordered_map<std::string, IconTheme> icon_themes;
   std::unordered_map<std::string, std::filesystem::path> icon_files;
@@ -402,12 +446,17 @@ struct Shell::Impl {
   std::string icon_theme{selected_icon_theme()};
   std::vector<MenuEntry> menu_entries;
   std::vector<MenuEntry> submenu_entries;
+  std::vector<MenuEntry> app_menu_entries;
+  std::size_t category_page{};
+  std::size_t selected_category{};
   std::size_t app_page{};
   std::size_t task_page{};
   xcb_window_t menu_owner{};
   int menu_x{}, menu_y{}, menu_width{250};
+  int submenu_x{}, submenu_y{}, category_row{};
   int menu_hover{-1};
   int submenu_hover{-1};
+  int app_menu_hover{-1};
   int selected_desktop{-1};
   std::optional<Item> selected_item;
   std::filesystem::path clipboard_path;
@@ -433,7 +482,9 @@ struct Shell::Impl {
   int pending_icon_index{-1};
   int pending_icon_x{}, pending_icon_y{};
 
-  Impl(xcb_connection_t* c, xcb_screen_t* s, Store& st) : connection(c), screen(s), store(st), model(st), width(s->width_in_pixels), height(s->height_in_pixels) {}
+  Impl(xcb_connection_t* c, xcb_screen_t* s, Store& st) : connection(c), screen(s), store(st), model(st), width(s->width_in_pixels), height(s->height_in_pixels) {
+    menu_width = launcher_menu_width(width);
+  }
   ~Impl() {
     *alive = false;
     if (key_symbols) xcb_key_symbols_free(key_symbols);
@@ -444,6 +495,7 @@ struct Shell::Impl {
     for (auto& [window, folder] : folders) xcb_destroy_window(connection, window);
     if (menu) xcb_destroy_window(connection, menu);
     if (submenu) xcb_destroy_window(connection, submenu);
+    if (app_menu) xcb_destroy_window(connection, app_menu);
     if (exit_dialog) xcb_destroy_window(connection, exit_dialog);
     if (notice) xcb_destroy_window(connection, notice);
     if (icon_chooser) xcb_destroy_window(connection, icon_chooser->window);
@@ -486,6 +538,33 @@ struct Shell::Impl {
     std::ranges::sort(apps, [](GAppInfo* a, GAppInfo* b) {
       return g_utf8_collate(g_app_info_get_display_name(a), g_app_info_get_display_name(b)) < 0;
     });
+    std::array<std::vector<std::size_t>, app_category_definitions.size()> grouped;
+    std::vector<std::size_t> other;
+    for (std::size_t i = 0; i < apps.size(); ++i) {
+      const char* raw = G_IS_DESKTOP_APP_INFO(apps[i]) ?
+        g_desktop_app_info_get_categories(G_DESKTOP_APP_INFO(apps[i])) : nullptr;
+      const std::string_view tags = raw ? raw : "";
+      bool matched = false;
+      for (std::size_t category = 0; category < app_category_definitions.size(); ++category) {
+        const auto key = app_category_definitions[category].key;
+        const bool in_category = has_app_category(tags, key) ||
+          (key == "AudioVideo" && (has_app_category(tags, "Audio") ||
+                                   has_app_category(tags, "Video")));
+        if (in_category) {
+          grouped[category].push_back(i);
+          matched = true;
+        }
+      }
+      if (!matched) other.push_back(i);
+    }
+    app_categories.clear();
+    for (std::size_t category = 0; category < app_category_definitions.size(); ++category) {
+      if (grouped[category].empty()) continue;
+      const auto& definition = app_category_definitions[category];
+      app_categories.push_back({std::string(definition.label), std::string(definition.icon),
+                                std::move(grouped[category])});
+    }
+    if (!other.empty()) app_categories.push_back({"Other", "applications-other", std::move(other)});
   }
 
   void init_icon_roots() {
@@ -910,6 +989,7 @@ struct Shell::Impl {
     if (panel) xcb_configure_window(connection, panel, XCB_CONFIG_WINDOW_STACK_MODE, above);
     if (menu) xcb_configure_window(connection, menu, XCB_CONFIG_WINDOW_STACK_MODE, above);
     if (submenu) xcb_configure_window(connection, submenu, XCB_CONFIG_WINDOW_STACK_MODE, above);
+    if (app_menu) xcb_configure_window(connection, app_menu, XCB_CONFIG_WINDOW_STACK_MODE, above);
     xcb_flush(connection);
   }
 
@@ -1000,6 +1080,15 @@ struct Shell::Impl {
             fill(cr, .25, .25, .29, 12, y + 8, 12, 13);
             fill(cr, .66, .66, .68, 10, y + 6, 16, 3);
           }
+        } else if (entry.action == MenuAction::show_category && entry.index < app_categories.size()) {
+          if (auto* surface = themed_icon_surface(app_categories[entry.index].icon)) {
+            cairo_set_source_surface(cr, surface, 8, y + 3);
+            cairo_paint(cr);
+          } else {
+            fill(cr, .96, .77, .31, 8, y + 9, 16, 11);
+            fill(cr, .99, .88, .51, 8, y + 6, 9, 4);
+            bevel(cr, 8, y + 9, 16, 11);
+          }
         } else if (entry.action == MenuAction::open_home || entry.action == MenuAction::open_desktop ||
                    entry.action == MenuAction::new_folder || entry.action == MenuAction::show_programs) {
           fill(cr, .96, .77, .31, 8, y + 9, 16, 11);
@@ -1017,6 +1106,7 @@ struct Shell::Impl {
 
   void draw_menu() { draw_menu_window(menu, menu_entries, menu_hover); }
   void draw_submenu() { draw_menu_window(submenu, submenu_entries, submenu_hover); }
+  void draw_app_menu() { draw_menu_window(app_menu, app_menu_entries, app_menu_hover); }
 
   void show_notice(std::string message) {
     notice_text = std::move(message);
@@ -1256,10 +1346,18 @@ struct Shell::Impl {
   }
 
   void close_submenu() {
+    close_app_menu();
     if (submenu) xcb_destroy_window(connection, submenu);
     submenu = 0;
     submenu_entries.clear();
     submenu_hover = -1;
+  }
+
+  void close_app_menu() {
+    if (app_menu) xcb_destroy_window(connection, app_menu);
+    app_menu = 0;
+    app_menu_entries.clear();
+    app_menu_hover = -1;
   }
 
   void close_menu() {
@@ -1291,13 +1389,29 @@ struct Shell::Impl {
     if (submenu_entries.empty()) return;
     const int h = static_cast<int>(submenu_entries.size()) * row_height + 8;
     const int right = menu_x + menu_width - 1;
-    const int x = right + menu_width <= width ? right : std::max(0, menu_x - menu_width + 1);
-    const int y = std::clamp(menu_y + 4 + row * row_height, 0,
-                             std::max(0, static_cast<int>(height) - h));
-    submenu = create_window(x, y, menu_width, h);
+    submenu_x = right + menu_width <= width ? right : std::max(0, menu_x - menu_width + 1);
+    submenu_y = std::clamp(menu_y + 4 + row * row_height, 0,
+                            std::max(0, static_cast<int>(height) - h));
+    submenu = create_window(submenu_x, submenu_y, menu_width, h);
     xcb_map_window(connection, submenu);
     raise_panel();
     draw_submenu();
+  }
+
+  void show_app_menu(std::vector<MenuEntry> entries, int row) {
+    close_app_menu();
+    app_menu_entries = std::move(entries);
+    if (app_menu_entries.empty()) return;
+    const int h = static_cast<int>(app_menu_entries.size()) * row_height + 8;
+    const int right = submenu_x + menu_width - 1;
+    const int x = right + menu_width <= width ? right :
+      std::max(0, submenu_x - menu_width + 1);
+    const int y = std::clamp(submenu_y + 4 + row * row_height, 0,
+                             std::max(0, static_cast<int>(height) - h));
+    app_menu = create_window(x, y, menu_width, h);
+    xcb_map_window(connection, app_menu);
+    raise_panel();
+    draw_app_menu();
   }
 
   void show_launcher() {
@@ -1326,17 +1440,42 @@ struct Shell::Impl {
     if (error) g_error_free(error);
   }
 
-  void show_programs(std::size_t page = 0) {
-    reload_apps();
+  void show_categories(std::size_t page = 0) {
     std::vector<MenuEntry> entries;
     const auto page_size = static_cast<std::size_t>(std::clamp<int>((height - 130) / row_height, 1, 18));
-    app_page = std::min(page, apps.empty() ? 0 : (apps.size() - 1) / page_size);
+    category_page = std::min(page, app_categories.empty() ? 0 : (app_categories.size() - 1) / page_size);
+    if (category_page) entries.push_back({"◀ Previous categories", MenuAction::previous_categories});
+    const auto start = category_page * page_size;
+    for (std::size_t i = start; i < std::min(app_categories.size(), start + page_size); ++i)
+      entries.push_back({app_categories[i].label + " ▶", MenuAction::show_category, i});
+    if (start + page_size < app_categories.size())
+      entries.push_back({"More categories ▶", MenuAction::next_categories});
+    show_submenu(std::move(entries), 2);
+  }
+
+  void show_programs() {
+    reload_apps();
+    if (app_categories.empty()) { show_notice("No applications available"); return; }
+    show_categories();
+  }
+
+  void show_category(std::size_t category, std::size_t page = 0, int row = -1) {
+    if (category >= app_categories.size()) return;
+    selected_category = category;
+    if (row >= 0) category_row = row;
+    const auto& indices = app_categories[category].apps;
+    const auto page_size = static_cast<std::size_t>(std::clamp<int>((height - 130) / row_height, 1, 18));
+    app_page = std::min(page, (indices.size() - 1) / page_size);
+    std::vector<MenuEntry> entries;
     if (app_page) entries.push_back({"◀ Previous applications", MenuAction::previous_apps});
     const auto start = app_page * page_size;
-    for (std::size_t i = start; i < std::min(apps.size(), start + page_size); ++i)
-      entries.push_back({g_app_info_get_display_name(apps[i]), MenuAction::launch, i});
-    if (start + page_size < apps.size()) entries.push_back({"More applications ▶", MenuAction::next_apps});
-    show_submenu(std::move(entries), 2);
+    for (std::size_t i = start; i < std::min(indices.size(), start + page_size); ++i) {
+      const auto app_index = indices[i];
+      entries.push_back({g_app_info_get_display_name(apps[app_index]), MenuAction::launch, app_index});
+    }
+    if (start + page_size < indices.size())
+      entries.push_back({"More applications ▶", MenuAction::next_apps});
+    show_app_menu(std::move(entries), category_row);
   }
 
   void show_task_overflow(std::size_t page = 0) {
@@ -1456,10 +1595,12 @@ struct Shell::Impl {
     }
   }
 
-  void execute(MenuEntry entry) {
+  void execute(MenuEntry entry, int row = -1) {
     const auto destination = owner_path();
     if (entry.action != MenuAction::show_programs && entry.action != MenuAction::next_apps &&
-        entry.action != MenuAction::previous_apps) close_menu();
+        entry.action != MenuAction::previous_apps && entry.action != MenuAction::show_category &&
+        entry.action != MenuAction::next_categories &&
+        entry.action != MenuAction::previous_categories) close_menu();
     switch (entry.action) {
       case MenuAction::open_home: open_folder(g_get_home_dir()); break;
       case MenuAction::open_desktop: open_folder(Store::desktop_path()); break;
@@ -1497,8 +1638,11 @@ struct Shell::Impl {
         break;
       }
       case MenuAction::show_programs: show_programs(); break;
-      case MenuAction::next_apps: show_programs(app_page + 1); break;
-      case MenuAction::previous_apps: show_programs(app_page ? app_page - 1 : 0); break;
+      case MenuAction::show_category: show_category(entry.index, 0, row); break;
+      case MenuAction::next_categories: show_categories(category_page + 1); break;
+      case MenuAction::previous_categories: show_categories(category_page ? category_page - 1 : 0); break;
+      case MenuAction::next_apps: show_category(selected_category, app_page + 1); break;
+      case MenuAction::previous_apps: show_category(selected_category, app_page ? app_page - 1 : 0); break;
       case MenuAction::activate_task: activate_task_window(entry.window, XCB_CURRENT_TIME); break;
       case MenuAction::next_tasks: show_task_overflow(task_page + 1); break;
       case MenuAction::previous_tasks: show_task_overflow(task_page ? task_page - 1 : 0); break;
@@ -1648,11 +1792,12 @@ struct Shell::Impl {
       notice = 0;
       return;
     }
-    if (event->event == menu || event->event == submenu) {
-      const auto& entries = event->event == menu ? menu_entries : submenu_entries;
+    if (event->event == menu || event->event == submenu || event->event == app_menu) {
+      const auto& entries = event->event == menu ? menu_entries :
+                            event->event == submenu ? submenu_entries : app_menu_entries;
       const int index = (event->event_y - 4) / row_height;
       if (event->detail == 1 && event->event_y >= 4 && index >= 0 && static_cast<std::size_t>(index) < entries.size())
-        execute(entries[index]);
+        execute(entries[index], index);
       else close_menu();
       return;
     }
@@ -1899,14 +2044,24 @@ struct Shell::Impl {
   }
 
   void motion(const xcb_motion_notify_event_t* event) {
-    if (event->event == menu || event->event == submenu) {
-      const bool parent = event->event == menu;
-      const auto& entries = parent ? menu_entries : submenu_entries;
-      int& hover = parent ? menu_hover : submenu_hover;
+    if (event->event == menu || event->event == submenu || event->event == app_menu) {
+      const auto& entries = event->event == menu ? menu_entries :
+                            event->event == submenu ? submenu_entries : app_menu_entries;
+      int& hover = event->event == menu ? menu_hover :
+                   event->event == submenu ? submenu_hover : app_menu_hover;
       const int index = (event->event_y - 4) / row_height;
       const int next = event->event_y >= 4 && index >= 0 &&
         static_cast<std::size_t>(index) < entries.size() ? index : -1;
-      if (next != hover) { hover = next; if (parent) draw_menu(); else draw_submenu(); }
+      if (next != hover) {
+        hover = next;
+        if (event->event == menu) draw_menu();
+        else if (event->event == submenu) {
+          draw_submenu();
+          if (next >= 0 && entries[next].action == MenuAction::show_category)
+            show_category(entries[next].index, 0, next);
+          else close_app_menu();
+        } else draw_app_menu();
+      }
       return;
     }
     if (scroll_drag_window) {
@@ -1997,7 +2152,7 @@ bool Shell::initialize() {
 bool Shell::owns(xcb_window_t window) const {
   const auto& p = *impl_;
   return window && (window == p.desktop || window == p.panel || window == p.menu ||
-                    window == p.submenu || window == p.notice ||
+                    window == p.submenu || window == p.app_menu || window == p.notice ||
                     window == p.exit_dialog ||
                     (p.icon_chooser && window == p.icon_chooser->window) ||
                     (p.properties && window == p.properties->window) || p.folders.contains(window));
@@ -2023,6 +2178,7 @@ bool Shell::handle(xcb_generic_event_t* event) {
     else if (window == p.desktop) p.draw_desktop();
     else if (window == p.menu) p.draw_menu();
     else if (window == p.submenu) p.draw_submenu();
+    else if (window == p.app_menu) p.draw_app_menu();
     else if (window == p.notice) p.draw_notice();
     else if (window == p.exit_dialog) p.draw_exit_dialog();
     else if (p.icon_chooser && window == p.icon_chooser->window) p.draw_icon_chooser();
@@ -2094,8 +2250,10 @@ void Shell::set_exit_handler(std::function<void()> handler) {
 
 void Shell::set_screen_size(std::uint16_t width, std::uint16_t height) {
   auto& p = *impl_;
+  if (p.menu && (p.width != width || p.height != height)) p.close_menu();
   p.width = width;
   p.height = height;
+  p.menu_width = launcher_menu_width(width);
   if (p.desktop) {
     const std::uint32_t values[]{width, static_cast<std::uint32_t>(std::max(1, static_cast<int>(height) - panel_height))};
     xcb_configure_window(p.connection, p.desktop, XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, values);

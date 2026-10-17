@@ -36,9 +36,12 @@ in your X session to use the button. When windows exceed the available taskbar
 space, use the small down-arrow button after the visible tasks to open the
 remaining window list.
 The list has pages when needed, and selecting a window raises it. Open
-**Programs** in the launcher to browse installed X11
-applications with their desktop entry icons. The launcher stays open while you
-browse Programs pages and closes when you select an item or click outside.
+**Programs** in the launcher to browse categories such as Accessories, Internet,
+Multimedia, and System. Open a category to see its installed X11 applications
+with their desktop entry icons. Apps without a standard main category appear in
+**Other**; an app may appear in more than one category. Long lists have pages.
+The launcher and category menus stay open while you browse, then close when you
+launch an app or click outside.
 The launcher also opens Trash directly, just above **Exit X11 session…**.
 Launcher icons follow the selected freedesktop icon theme, including inherited
 themes and the `hicolor` fallback.

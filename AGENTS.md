@@ -14,8 +14,10 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
 - `src/x11.*` manages external X11 clients, frames, focus, geometry, EWMH, and
   the root pointer cursor.
 - `src/shell.*` draws the panel, desktop, menus, folder windows, scrollbars,
-  and properties. The Midnight menu opens `trash:///` directly. Properties
-  includes a visual icon chooser; it stores icon theme names or existing image
+  and properties. Programs uses desktop entry Categories and three cascading
+  menu windows; preserve the earlier menu levels while browsing a category.
+  The Midnight menu opens `trash:///` directly. Properties includes a visual
+  icon chooser; it stores icon theme names or existing image
   paths in the object model. Double-clicking an editable Properties text field
   selects its value. Icon lookup uses the selected theme, inherited themes,
   and `hicolor`, with GdkPixbuf rendering. Folder labels align with their
