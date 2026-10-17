@@ -21,7 +21,15 @@ control an X screen at a time. `midnight-wm --version` prints the version.
 
 ## Desktop behavior
 
-The top bar contains an application launcher, task buttons, and a clock.
+The top bar contains an application launcher, task buttons, a volume control,
+and a clock. Use `−` and `+` or the mouse wheel over the volume control to
+change output volume in 5% steps. **Mute** sets both master mixer channels to
+zero and restores their previous levels when pressed again during the same
+session. The control uses
+MidnightBSD's default OSS `/dev/mixer` device, falling back to its PCM control
+if a master volume control is unavailable. It shows `N/A` when no usable mixer
+is available.
+
 Double-click a desktop or folder object to open it. Right-click to see its
 actions. Folder windows support keyboard copy, cut, and paste. The shell uses
 the standard X11 `CLIPBOARD` selection, and file copy/paste uses

@@ -1,5 +1,6 @@
 #include "shell.hpp"
 
+#include "audio.hpp"
 #include "config.hpp"
 #include "model.hpp"
 #include "store.hpp"
@@ -184,6 +185,9 @@ struct Shell::Impl {
   Store& store;
   ShellModel model;
   ThemeConfig config{load_config()};
+  VolumeControl volume;
+  std::optional<VolumeState> volume_state;
+  std::chrono::steady_clock::time_point last_volume_poll{};
   std::shared_ptr<bool> alive{std::make_shared<bool>(true)};
   int transfers_in_progress{};
   xcb_visualtype_t* visual{};
@@ -371,14 +375,28 @@ struct Shell::Impl {
       text(cr, config.panel_label, 13, 8, 102, 12, true, true);
       int x = 128;
       const int clock_x = std::max(140, static_cast<int>(width) - 105);
-      if (transfers_in_progress) text(cr, "Working…", clock_x - 85, 8, 80, 11);
+      const int volume_x = clock_x - 130;
+      const bool show_volume = volume_x >= 245;
+      const int task_limit = (show_volume ? volume_x : clock_x) - (transfers_in_progress ? 85 : 0);
+      if (transfers_in_progress) text(cr, "Working…", (show_volume ? volume_x : clock_x) - 85, 8, 80, 11);
       for (const auto& task : panel_tasks()) {
-        if (x + 105 > clock_x) break;
+        if (x + 110 > task_limit) break;
         fill(cr, task.active ? .28 : .80, task.active ? .39 : .80,
              task.active ? .63 : .80, x, 5, 110, 24);
         bevel(cr, x, 5, 110, 24, task.active);
         text(cr, task.title, x + 7, 8, 95, 11, task.active);
         x += 114;
+      }
+      if (show_volume) {
+        bevel(cr, volume_x, 5, 18, 24);
+        text(cr, "−", volume_x + 4, 8, 12, 11, false, true);
+        bevel(cr, volume_x + 20, 5, 42, 24, true);
+        text(cr, volume_state ? std::to_string(volume_state->percent) + "%" : "N/A",
+             volume_x + 23, 8, 36, 11, false, true);
+        bevel(cr, volume_x + 64, 5, 18, 24);
+        text(cr, "+", volume_x + 4 + 64, 8, 12, 11, false, true);
+        bevel(cr, volume_x + 84, 5, 42, 24, volume_state && volume_state->muted);
+        text(cr, "Mute", volume_x + 87, 8, 36, 11, volume_state && volume_state->muted, true);
       }
       bevel(cr, clock_x, 5, 99, 24, true);
       text(cr, clock_text(config.clock_format), clock_x + 7, 8, 86, 11, false, true);
@@ -753,6 +771,21 @@ struct Shell::Impl {
       return;
     }
     if (event->event == panel) {
+      const int clock_x = std::max(140, static_cast<int>(width) - 105);
+      const int volume_x = clock_x - 130;
+      if (volume_x >= 245 && event->event_x >= volume_x && event->event_x < volume_x + 126) {
+        std::expected<VolumeState, std::string> changed = std::unexpected("No volume action");
+        const int relative_x = event->event_x - volume_x;
+        if (event->detail == 4 || (event->detail == 1 && relative_x >= 64 && relative_x < 82))
+          changed = volume.adjust(5);
+        else if (event->detail == 5 || (event->detail == 1 && relative_x < 18)) changed = volume.adjust(-5);
+        else if (event->detail == 3 || (event->detail == 1 && relative_x >= 84)) changed = volume.toggle_mute();
+        else return;
+        if (changed) volume_state = *changed;
+        else { volume_state.reset(); show_notice("Volume: " + changed.error()); }
+        draw_panel();
+        return;
+      }
       if (event->detail == 1 && event->event_x < 122) { if (menu) close_menu(); else show_launcher(); }
       else if (event->detail == 1 && event->event_x >= 128) {
         const int index = (event->event_x - 128) / 114;
@@ -951,6 +984,8 @@ bool Shell::initialize() {
   auto& p = *impl_;
   p.visual = visual_for(p.screen);
   if (!p.visual) return false;
+  if (auto state = p.volume.read(); state) p.volume_state = *state;
+  p.last_volume_poll = std::chrono::steady_clock::now();
   p.key_symbols = xcb_key_symbols_alloc(p.connection);
   auto atom_cookie = xcb_intern_atom(p.connection, 0, 18, "_NET_ACTIVE_WINDOW");
   if (auto* reply = xcb_intern_atom_reply(p.connection, atom_cookie, nullptr)) {
@@ -1017,8 +1052,17 @@ bool Shell::handle(xcb_generic_event_t* event) {
 
 void Shell::tick() {
   auto& p = *impl_;
+  bool redraw = false;
   const auto now = clock_text(p.config.clock_format);
-  if (now != p.last_clock) { p.last_clock = now; p.draw_panel(); }
+  if (now != p.last_clock) { p.last_clock = now; redraw = true; }
+  const auto steady_now = std::chrono::steady_clock::now();
+  if (steady_now - p.last_volume_poll >= std::chrono::seconds(1)) {
+    p.last_volume_poll = steady_now;
+    auto current = p.volume.read();
+    std::optional<VolumeState> state = current ? std::optional<VolumeState>(*current) : std::nullopt;
+    if (state != p.volume_state) { p.volume_state = state; redraw = true; }
+  }
+  if (redraw) p.draw_panel();
 }
 
 void Shell::set_tasks(std::vector<Task> tasks) {

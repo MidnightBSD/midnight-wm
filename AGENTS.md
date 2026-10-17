@@ -15,6 +15,7 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
 - `src/clipboard.*` implements the X11 `CLIPBOARD` selection and persistence.
 - `src/dnd.*` implements XDND file drag and drop. A drop reports completion
   through its callback after the file operation finishes.
+- `src/audio.*` controls the default OSS mixer and has no X11 dependency.
 - `src/model.*` and `src/store.*` own display independent object and file
   behavior. Keep XCB types and event handling out of these files so a future
   Wayland backend can reuse them.
@@ -32,8 +33,10 @@ cppcheck --enable=warning,performance,portability --std=c++20 \
 ```
 
 `cppcheck` uses its C++20 parser; the actual project builds as C++23. Run an
-isolated Xvfb session for changes to window management, drawing, selections, or
-XDND. Set temporary `XDG_CONFIG_HOME` and `XDG_DATA_HOME` paths so smoke tests
+isolated Xvfb session for changes to window management, drawing, selections,
+XDND, or panel audio controls. For audio checks, record the original mixer
+levels and restore them after testing mute. Set temporary `XDG_CONFIG_HOME` and
+`XDG_DATA_HOME` paths so smoke tests
 do not touch the user's desktop or workspace database. Check that a second
 window manager cannot take over the test screen, and clean up test processes.
 

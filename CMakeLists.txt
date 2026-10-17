@@ -10,7 +10,7 @@ pkg_check_modules(DEPS REQUIRED IMPORTED_TARGET
   xcb xcb-icccm xcb-keysyms xcb-xfixes xcb-randr cairo-xcb pangocairo
   gio-2.0 gio-unix-2.0 sqlite3)
 
-add_library(midnight_core src/store.cpp src/model.cpp src/config.cpp)
+add_library(midnight_core src/store.cpp src/model.cpp src/config.cpp src/audio.cpp)
 target_include_directories(midnight_core PUBLIC src)
 target_link_libraries(midnight_core PUBLIC PkgConfig::DEPS)
 target_compile_options(midnight_core PRIVATE -Wall -Wextra -Wpedantic)
