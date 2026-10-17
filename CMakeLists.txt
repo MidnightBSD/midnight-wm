@@ -12,7 +12,7 @@ pkg_check_modules(DEPS REQUIRED IMPORTED_TARGET
 
 add_library(midnight_core src/store.cpp src/model.cpp src/config.cpp src/audio.cpp
   src/desktop_launcher.cpp src/thumbnail.cpp src/recent_files.cpp
-  src/startup_notification.cpp src/browser_launcher.cpp)
+  src/startup_notification.cpp src/browser_launcher.cpp src/terminal_launcher.cpp)
 target_include_directories(midnight_core PUBLIC src)
 target_link_libraries(midnight_core PUBLIC PkgConfig::DEPS)
 target_compile_options(midnight_core PRIVATE -Wall -Wextra -Wpedantic)
@@ -51,6 +51,11 @@ add_executable(browser_launcher_test tests/browser_launcher_test.cpp)
 target_link_libraries(browser_launcher_test PRIVATE midnight_core)
 add_test(NAME browser_fallback_test COMMAND browser_launcher_test fallback)
 add_test(NAME browser_default_test COMMAND browser_launcher_test default)
+add_executable(terminal_launcher_test tests/terminal_launcher_test.cpp)
+target_link_libraries(terminal_launcher_test PRIVATE midnight_core)
+add_test(NAME terminal_fallback_test COMMAND terminal_launcher_test fallback)
+add_test(NAME terminal_default_test COMMAND terminal_launcher_test default)
+add_test(NAME terminal_env_test COMMAND terminal_launcher_test env)
 add_executable(thumbnail_test tests/thumbnail_test.cpp)
 target_link_libraries(thumbnail_test PRIVATE midnight_core)
 add_test(NAME thumbnail_test COMMAND thumbnail_test)

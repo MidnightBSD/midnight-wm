@@ -8,6 +8,7 @@
 #include "recent_files.hpp"
 #include "store.hpp"
 #include "startup_notification.hpp"
+#include "terminal_launcher.hpp"
 #include "thumbnail.hpp"
 
 #include <cairo/cairo-xcb.h>
@@ -45,9 +46,11 @@ constexpr int volume_group_width = 102;
 constexpr int volume_clock_gap = 4;
 constexpr int lock_button_x = 124;
 constexpr int lock_button_width = 24;
-constexpr int browser_button_x = 152;
+constexpr int terminal_button_x = 152;
+constexpr int terminal_button_width = 24;
+constexpr int browser_button_x = 180;
 constexpr int browser_button_width = 24;
-constexpr int task_start_x = 184;
+constexpr int task_start_x = 212;
 constexpr int task_button_width = 110;
 constexpr int task_step = 114;
 constexpr int task_overflow_width = 24;
@@ -387,6 +390,27 @@ void browser_icon(cairo_t* cr, int x, int y) {
   cairo_move_to(cr, x + 8, y + 1);
   cairo_curve_to(cr, x + 13, y + 5, x + 13, y + 11, x + 8, y + 15);
   cairo_stroke(cr);
+  cairo_restore(cr);
+}
+
+void terminal_icon(cairo_t* cr, int x, int y) {
+  cairo_save(cr);
+  cairo_set_source_rgb(cr, .16, .16, .20);
+  cairo_rectangle(cr, x + 1, y + 1, 16, 12);
+  cairo_fill(cr);
+  cairo_set_source_rgb(cr, .89, .89, .83);
+  cairo_rectangle(cr, x + 2.5, y + 2.5, 13, 9);
+  cairo_fill(cr);
+  cairo_set_source_rgb(cr, .16, .16, .20);
+  cairo_set_line_width(cr, 1.4);
+  cairo_move_to(cr, x + 4, y + 5);
+  cairo_line_to(cr, x + 7, y + 7);
+  cairo_line_to(cr, x + 4, y + 9);
+  cairo_move_to(cr, x + 9, y + 9);
+  cairo_line_to(cr, x + 13, y + 9);
+  cairo_stroke(cr);
+  cairo_rectangle(cr, x + 7, y + 13, 4, 2);
+  cairo_fill(cr);
   cairo_restore(cr);
 }
 
@@ -1085,6 +1109,8 @@ struct Shell::Impl {
            logo_surface ? 84 : 102, 11, false, true);
       bevel(cr, lock_button_x, 5, lock_button_width, 24);
       lock_icon(cr, lock_button_x + 4, 8);
+      bevel(cr, terminal_button_x, 5, terminal_button_width, 24);
+      terminal_icon(cr, terminal_button_x + 3, 9);
       bevel(cr, browser_button_x, 5, browser_button_width, 24);
       browser_icon(cr, browser_button_x + 4, 9);
       const int clock_x = this->clock_x();
@@ -2240,6 +2266,11 @@ struct Shell::Impl {
       if (event->detail == 1 && event->event_x < 122) { if (menu) close_menu(); else show_launcher(); }
       else if (event->detail == 1 && event->event_x >= lock_button_x &&
                event->event_x < lock_button_x + lock_button_width) lock_screen();
+      else if (event->detail == 1 && event->event_x >= terminal_button_x &&
+               event->event_x < terminal_button_x + terminal_button_width) {
+        auto result = launch_terminal(startup);
+        if (!result) show_notice("Terminal: " + result.error());
+      }
       else if (event->detail == 1 && event->event_x >= browser_button_x &&
                event->event_x < browser_button_x + browser_button_width) {
         auto result = launch_web_browser(startup);

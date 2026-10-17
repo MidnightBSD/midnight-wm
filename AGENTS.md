@@ -51,6 +51,8 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
 - `src/startup_notification.*` tracks launches over the X11 startup protocol;
   `src/browser_launcher.*` selects the XDG browser default and falls back to
   Raphael for the panel browser button;
+  `src/terminal_launcher.*` reads XDG terminal preferences and falls back to
+  xterm for the panel terminal button;
   `src/xsettings.*` publishes theme and input settings only when its X11
   selection is free. Programs uses Garcon to read freedesktop `.menu` layouts,
   falling back to its built-in categories.
