@@ -88,6 +88,12 @@ autostart entries. Keep system icon data available when testing the chooser.
 Check that a second window manager cannot take over the test screen, and clean
 up test processes. For Properties changes, verify the saved object metadata;
 for launcher Trash changes, verify that selecting it opens the Trash folder.
+For shell layout and scale changes, check 1280×720, 1920×1080, 2560×1440,
+3440×1440, and 3840×2160, including a live resize from a larger size to a
+smaller one. Keep panel controls, menus, folder windows, dialogs, and the
+desktop usable at each size.
+Use `.agents/skills/screen-resolution-checks/SKILL.md` for the repeatable
+isolated display matrix.
 
 For file operations, test copy, move, name collisions, and an unsuccessful
 operation. GIO Trash can be unsupported on `/tmp` mounts on MidnightBSD; treat

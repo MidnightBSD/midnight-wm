@@ -97,6 +97,8 @@ private:
   void install_key_grabs();
   bool install_root_cursor();
   void cycle_focus();
+  [[nodiscard]] int border_pixels() const;
+  [[nodiscard]] int title_height_pixels() const;
   xcb_window_t client_for(xcb_window_t window) const;
   xcb_visualtype_t* root_visual() const;
   Monitor monitor_for(const Frame& frame) const;

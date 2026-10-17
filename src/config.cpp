@@ -3,6 +3,7 @@
 #include <glib.h>
 
 #include <filesystem>
+#include <cmath>
 #include <optional>
 #include <string_view>
 
@@ -46,6 +47,12 @@ ThemeConfig load_config() {
   if (auto value = parse_color(read("desktop_color"))) config.desktop_color = *value;
   if (auto value = parse_color(read("panel_color"))) config.panel_color = *value;
   if (auto value = parse_color(read("accent_color"))) config.accent_color = *value;
+  if (auto value = read("ui_scale"); !value.empty()) {
+    char* end = nullptr;
+    const double scale = g_ascii_strtod(value.c_str(), &end);
+    if (end && *end == '\0' && std::isfinite(scale) && scale >= .75 && scale <= 3.0)
+      config.ui_scale = scale;
+  }
   auto read_desktop_bool = [keyfile](const char* key, bool& value) {
     GError* error = nullptr;
     const bool configured = g_key_file_get_boolean(keyfile, "Desktop", key, &error);

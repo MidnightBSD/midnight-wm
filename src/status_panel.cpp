@@ -8,16 +8,20 @@
 #include <cairo/cairo-xcb.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 
 namespace midnight {
 namespace {
-constexpr int icon_size = 18;
-constexpr int slot_width = 26;
-constexpr int padding = 4;
-constexpr int panel_y = 4;
-constexpr int panel_height = 22;
+constexpr int base_icon_size = 18;
+constexpr int base_slot_width = 26;
+constexpr int base_padding = 4;
+constexpr int base_panel_height = 22;
+
+int scaled(int pixels, double scale) {
+  return std::max(1, static_cast<int>(std::lround(pixels * scale)));
+}
 
 cairo_surface_t* pixmap_surface(const StatusNotifierPixmap& pixmap) {
   if (pixmap.width < 1 || pixmap.height < 1 || pixmap.width > 512 || pixmap.height > 512 ||
@@ -57,6 +61,8 @@ StatusNotifierPanel::~StatusNotifierPanel() {
 
 bool StatusNotifierPanel::initialize() {
   if (!shell_.panel_window()) return false;
+  const int panel_height = scaled(base_panel_height, shell_.ui_scale());
+  const int panel_y = std::max(0, (shell_.panel_height() - panel_height) / 2);
   window_ = xcb_generate_id(connection_);
   const std::uint32_t values[] = {screen_->white_pixel,
                                   XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_BUTTON_PRESS};
@@ -86,21 +92,29 @@ void StatusNotifierPanel::refresh() {
   visible_keys_.clear();
   for (const auto& item : notifier_.items())
     if (item.status != "Passive") visible_keys_.push_back(item.key);
-  tray_.set_external_width(visible_keys_.empty() ? 0 : padding +
-                           slot_width * static_cast<int>(visible_keys_.size()));
   tick();
   paint();
 }
 
 void StatusNotifierPanel::tick() {
   if (!window_) return;
+  const double scale = shell_.ui_scale();
+  const int padding = scaled(base_padding, scale);
+  const int slot_width = scaled(base_slot_width, scale);
+  const int panel_height = scaled(base_panel_height, scale);
+  const int panel_y = std::max(0, (shell_.panel_height() - panel_height) / 2);
+  tray_.set_external_width(visible_keys_.empty() ? 0 : padding +
+                           slot_width * static_cast<int>(visible_keys_.size()));
   const int x = tray_.external_x();
   const int width = tray_.external_width();
-  if (x == x_ && width == width_) return;
+  if (x == x_ && width == width_ && panel_height == height_ && slot_width == slot_width_) return;
   x_ = x;
   width_ = width;
+  height_ = panel_height;
+  slot_width_ = slot_width;
   if (width_) {
-    const std::uint32_t values[] = {std::uint32_t(x_), panel_y, std::uint32_t(width_), panel_height};
+    const std::uint32_t values[] = {std::uint32_t(x_), std::uint32_t(panel_y),
+                                    std::uint32_t(width_), std::uint32_t(panel_height)};
     xcb_configure_window(connection_, window_, XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y |
                          XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, values);
     xcb_map_window(connection_, window_);
@@ -110,6 +124,11 @@ void StatusNotifierPanel::tick() {
 
 void StatusNotifierPanel::paint() {
   if (!window_ || !width_) return;
+  const double scale = shell_.ui_scale();
+  const int icon_size = scaled(base_icon_size, scale);
+  const int padding = scaled(base_padding, scale);
+  const int slot_width = scaled(base_slot_width, scale);
+  const int panel_height = scaled(base_panel_height, scale);
   auto depth = xcb_screen_allowed_depths_iterator(screen_);
   xcb_visualtype_t* visual = nullptr;
   for (; depth.rem && !visual; xcb_depth_next(&depth)) {
@@ -148,10 +167,14 @@ void StatusNotifierPanel::paint() {
     const int w = cairo_image_surface_get_width(icon);
     const int h = cairo_image_surface_get_height(icon);
     cairo_save(cr);
-    cairo_translate(cr, 3 + i * slot_width + (icon_size - std::min(w, icon_size)) / 2,
-                    2 + (icon_size - std::min(h, icon_size)) / 2);
-    const double scale = std::min({1.0, double(icon_size) / w, double(icon_size) / h});
-    cairo_scale(cr, scale, scale);
+    const double icon_scale = std::min(double(icon_size) / w, double(icon_size) / h);
+    const int drawn_w = static_cast<int>(std::lround(w * icon_scale));
+    const int drawn_h = static_cast<int>(std::lround(h * icon_scale));
+    const int slot_x = padding / 2 + i * slot_width;
+    const int icon_x = slot_x + (slot_width - drawn_w) / 2;
+    const int icon_y = (panel_height - drawn_h) / 2;
+    cairo_translate(cr, icon_x, icon_y);
+    cairo_scale(cr, icon_scale, icon_scale);
     cairo_set_source_surface(cr, icon, 0, 0);
     cairo_paint(cr);
     cairo_restore(cr);
@@ -172,9 +195,11 @@ bool StatusNotifierPanel::handle(xcb_generic_event_t* event) {
   if (type != XCB_BUTTON_PRESS) return false;
   const auto* press = reinterpret_cast<xcb_button_press_event_t*>(event);
   if (press->event != window_) return false;
-  const int index = (press->event_x - 2) / slot_width;
-  if (press->event_x < 2 || index < 0 || index >= static_cast<int>(visible_keys_.size()) ||
-      2 + index * slot_width + slot_width > width_) return true;
+  const int padding = scaled(base_padding, shell_.ui_scale());
+  const int slot_x = padding / 2;
+  const int index = (press->event_x - slot_x) / slot_width_;
+  if (press->event_x < slot_x || index < 0 || index >= static_cast<int>(visible_keys_.size()) ||
+      slot_x + index * slot_width_ + slot_width_ > width_) return true;
   const auto& key = visible_keys_[index];
   if (press->detail == 4 || press->detail == 5) {
     notifier_.scroll(key, press->detail == 4 ? 120 : -120, "vertical");
@@ -186,7 +211,7 @@ bool StatusNotifierPanel::handle(xcb_generic_event_t* event) {
         it->menu_path != "/NO_DBUSMENU") {
       const auto service = it->service;
       active_menu_key_ = key;
-      menu_popup_.open(service, it->menu_path, press->root_x, 30,
+      menu_popup_.open(service, it->menu_path, press->root_x, shell_.panel_height(),
                        [this, key, x = press->root_x, y = press->root_y] {
                          notifier_.context_menu(key, x, y);
                        });
@@ -201,7 +226,7 @@ bool StatusNotifierPanel::handle(xcb_generic_event_t* event) {
       if (!it->menu_path.empty() && it->menu_path != "/NO_DBUSMENU") {
         const auto service = it->service;
         active_menu_key_ = key;
-        menu_popup_.open(service, it->menu_path, press->root_x, 30,
+        menu_popup_.open(service, it->menu_path, press->root_x, shell_.panel_height(),
                          [this, key, x = press->root_x, y = press->root_y] {
                            notifier_.context_menu(key, x, y);
                          });

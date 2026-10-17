@@ -37,6 +37,14 @@ The top bar contains an application launcher, a lock button immediately to its
 right, a terminal button, a web browser button, task buttons, a volume control,
 a system tray, and a clock. The tray accepts legacy XEmbed icons and D-Bus
 StatusNotifierItem icons from applications.
+Panel controls, menus, folders, dialogs, and window title bars scale with the
+screen height: 1× at 720p and 1080p, 1.25× at 1440p (including ultrawide), and
+2× at 4K. Set `ui_scale` in the `[Workspace]` section of `config.ini` to a value
+from `0.75` to `3.0` to override this automatic choice. A resolution change
+repositions open folders and dialogs within the new screen bounds. Scroll the
+desktop with the mouse wheel or Page Up/Page Down when its icons exceed the
+available height. Applications draw their own controls and use their toolkit's
+DPI settings.
 StatusNotifier items use icon theme names or embedded pixmaps and support left,
 middle, and right clicks plus mouse wheel actions. A session D-Bus is needed for
 StatusNotifier items; the legacy XEmbed tray also works without it.

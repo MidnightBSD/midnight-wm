@@ -4,15 +4,19 @@
 #include <cairo/cairo-xcb.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <memory>
 
 namespace midnight {
 namespace {
-constexpr int icon_size = 22;
-constexpr int icon_step = 26;
-constexpr int tray_padding = 4;
-constexpr int tray_y = 4;
+constexpr int base_icon_size = 22;
+constexpr int base_icon_step = 26;
+constexpr int base_tray_padding = 4;
+
+int scaled(int pixels, double scale) {
+  return std::max(1, static_cast<int>(std::lround(pixels * scale)));
+}
 
 template <class T> using Reply = std::unique_ptr<T, decltype(&std::free)>;
 } // namespace
@@ -51,6 +55,8 @@ bool X11SystemTray::initialize() {
       XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_STRUCTURE_NOTIFY |
       XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT |
       XCB_EVENT_MASK_BUTTON_PRESS};
+  const int icon_size = scaled(base_icon_size, shell_.ui_scale());
+  const int tray_y = std::max(0, (shell_.panel_height() - icon_size) / 2);
   auto created = xcb_create_window_checked(connection_, screen_->root_depth, host_, shell_.panel_window(),
                                            0, tray_y, 1, icon_size, 0, XCB_WINDOW_CLASS_INPUT_OUTPUT,
                                            screen_->root_visual,
@@ -142,6 +148,12 @@ void X11SystemTray::remove(xcb_window_t window, bool destroyed) {
 }
 
 void X11SystemTray::layout() {
+  const double scale = shell_.ui_scale();
+  const int icon_size = scaled(base_icon_size, scale);
+  const int icon_step = scaled(base_icon_step, scale);
+  const int tray_padding = scaled(base_tray_padding, scale);
+  const int icon_inset = scaled(2, scale);
+  const int tray_y = std::max(0, (shell_.panel_height() - icon_size) / 2);
   const auto count = std::ranges::count_if(order_, [this](xcb_window_t window) {
     return icons_.at(window).mapped;
   });
@@ -155,8 +167,8 @@ void X11SystemTray::layout() {
   for (auto window : order_) {
     const bool show = icons_.at(window).mapped && position < slots;
     if (show) {
-      const std::uint32_t values[] = {std::uint32_t(2 + position * icon_step), 0,
-                                      icon_size, icon_size, 0};
+      const std::uint32_t values[] = {std::uint32_t(icon_inset + position * icon_step), 0,
+                                      std::uint32_t(icon_size), std::uint32_t(icon_size), 0};
       xcb_configure_window(connection_, window,
                            XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH |
                            XCB_CONFIG_WINDOW_HEIGHT | XCB_CONFIG_WINDOW_BORDER_WIDTH, values);
@@ -165,7 +177,8 @@ void X11SystemTray::layout() {
     } else xcb_unmap_window(connection_, window);
   }
   if (host_ && width) {
-    const std::uint32_t values[] = {std::uint32_t(x), tray_y, std::uint32_t(width), icon_size};
+    const std::uint32_t values[] = {std::uint32_t(x), std::uint32_t(tray_y),
+                                    std::uint32_t(width), std::uint32_t(icon_size)};
     xcb_configure_window(connection_, host_, XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y |
                          XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, values);
     xcb_map_window(connection_, host_);
@@ -174,11 +187,14 @@ void X11SystemTray::layout() {
   host_width_ = width;
   layout_x_ = shell_.tray_x();
   layout_width_ = shell_.tray_width();
+  layout_height_ = shell_.panel_height();
+  layout_icon_size_ = icon_size;
   if (width) paint();
 }
 
 void X11SystemTray::paint() {
   if (!host_ || !host_width_) return;
+  const int icon_size = scaled(base_icon_size, shell_.ui_scale());
   auto depth = xcb_screen_allowed_depths_iterator(screen_);
   xcb_visualtype_t* visual = nullptr;
   for (; depth.rem && !visual; xcb_depth_next(&depth)) {
@@ -206,7 +222,9 @@ void X11SystemTray::paint() {
 }
 
 void X11SystemTray::tick() {
-  if (layout_x_ != shell_.tray_x() || layout_width_ != shell_.tray_width()) layout();
+  if (layout_x_ != shell_.tray_x() || layout_width_ != shell_.tray_width() ||
+      layout_height_ != shell_.panel_height() ||
+      layout_icon_size_ != scaled(base_icon_size, shell_.ui_scale())) layout();
 }
 
 void X11SystemTray::set_external_width(int width) {

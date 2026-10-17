@@ -213,7 +213,12 @@ int main(int argc, char** argv) {
                 !xsettings.handle(event) && !notifications.handle(event) &&
                 !menu_popup.handle(event) &&
                 !shell.handle(event) &&
-                !tray.handle(event) && !status_panel.handle(event)) wm.handle(event);
+                !tray.handle(event) && !status_panel.handle(event)) {
+              wm.handle(event);
+              if ((event->response_type & ~0x80) == XCB_CONFIGURE_NOTIFY &&
+                  reinterpret_cast<xcb_configure_notify_event_t*>(event)->window == screen->root)
+                menu_popup.refresh_geometry();
+            }
             std::free(event);
           }
           while (g_main_context_pending(nullptr)) g_main_context_iteration(nullptr, false);

@@ -8,14 +8,15 @@
 #include <pango/pangocairo.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <ranges>
 
 namespace midnight {
 namespace {
-constexpr int menu_width = 244;
-constexpr int row_height = 24;
-constexpr int border = 4;
+constexpr int base_menu_width = 244;
+constexpr int base_row_height = 24;
+constexpr int base_border = 4;
 constexpr int max_depth = 6;
 
 std::string display_label(const std::string& label) {
@@ -29,11 +30,13 @@ std::string display_label(const std::string& label) {
   return result;
 }
 
-void text(cairo_t* cr, const std::string& value, int x, int y, int width, bool disabled) {
+void text(cairo_t* cr, const std::string& value, int x, int y, int width,
+          double scale, bool disabled) {
   cairo_save(cr);
   cairo_set_source_rgb(cr, disabled ? .48 : .08, disabled ? .48 : .08, disabled ? .48 : .08);
   auto* layout = pango_cairo_create_layout(cr);
   auto* font = pango_font_description_from_string("Sans 10");
+  pango_font_description_set_size(font, static_cast<int>(std::lround(10 * scale * PANGO_SCALE)));
   pango_layout_set_font_description(layout, font);
   pango_layout_set_text(layout, value.c_str(), -1);
   pango_layout_set_width(layout, width * PANGO_SCALE);
@@ -59,9 +62,54 @@ DbusMenuPopup::~DbusMenuPopup() {
   if (key_symbols_) xcb_key_symbols_free(key_symbols_);
 }
 
+int DbusMenuPopup::scaled(int value) const {
+  return std::max(1, static_cast<int>(std::lround(value * scale_)));
+}
+
+int DbusMenuPopup::capacity(const Layer& layer) const {
+  return std::max(1, (layer.height - 2 * border_) / row_height_);
+}
+
+void DbusMenuPopup::sync_geometry() {
+  const int width = std::max(1, shell_.screen_width());
+  const int height = std::max(1, shell_.screen_height());
+  const double scale = std::clamp(shell_.ui_scale(), 1.0, 4.0);
+  if (width == screen_width_ && height == screen_height_ && scale == scale_) return;
+  screen_width_ = width;
+  screen_height_ = height;
+  scale_ = scale;
+  menu_width_ = std::min(screen_width_, scaled(base_menu_width));
+  row_height_ = scaled(base_row_height);
+  border_ = scaled(base_border);
+  const int available = std::clamp(screen_height_ - scaled(36), 1, screen_height_);
+  for (auto& layer : layers_) {
+    layer.width = menu_width_;
+    layer.height = std::min(available, 2 * border_ +
+                            static_cast<int>(layer.ids.size()) * row_height_);
+    layer.x = std::clamp(layer.x, 0, std::max(0, screen_width_ - layer.width));
+    layer.y = std::clamp(layer.y, 0, std::max(0, screen_height_ - layer.height));
+    layer.scroll = std::clamp(layer.scroll, 0,
+                              std::max(0, static_cast<int>(layer.ids.size()) - capacity(layer)));
+    const std::uint32_t values[]{static_cast<std::uint32_t>(layer.x),
+                                 static_cast<std::uint32_t>(layer.y),
+                                 static_cast<std::uint32_t>(layer.width),
+                                 static_cast<std::uint32_t>(layer.height)};
+    xcb_configure_window(connection_, layer.window,
+                         XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y |
+                         XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, values);
+    paint(layer);
+  }
+  if (!layers_.empty()) xcb_flush(connection_);
+}
+
+void DbusMenuPopup::refresh_geometry() {
+  sync_geometry();
+}
+
 void DbusMenuPopup::open(std::string service, std::string path, int x, int y,
                          std::function<void()> fallback) {
   close();
+  sync_geometry();
   if (path.empty() || path == "/NO_DBUSMENU") { if (fallback) fallback(); return; }
   if (!menu_.initialize()) { if (fallback) fallback(); return; }
   anchor_x_ = x;
@@ -89,6 +137,7 @@ void DbusMenuPopup::close() {
 }
 
 void DbusMenuPopup::changed() {
+  sync_geometry();
   if (!pending_ && layers_.empty()) return;
   if (!menu_.loaded() && !menu_.failed()) return;
   if (menu_.rows().empty()) {
@@ -115,21 +164,20 @@ void DbusMenuPopup::changed() {
       close_from(depth);
       break;
     }
-    const int available = std::max(row_height + 2 * border,
-                                   static_cast<int>(screen_->height_in_pixels) - 36);
-    const int new_height = std::min(available, border * 2 +
-                                   static_cast<int>(layer.ids.size()) * row_height);
+    const int available = std::clamp(screen_height_ - scaled(36), 1, screen_height_);
+    const int new_height = std::min(available, border_ * 2 +
+                                   static_cast<int>(layer.ids.size()) * row_height_);
     if (new_height != layer.height) {
       layer.height = new_height;
       layer.y = std::clamp(layer.y, 0,
-                           std::max(0, static_cast<int>(screen_->height_in_pixels) - layer.height));
+                           std::max(0, screen_height_ - layer.height));
       const std::uint32_t values[] = {std::uint32_t(layer.y), std::uint32_t(layer.height)};
       xcb_configure_window(connection_, layer.window,
                            XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_HEIGHT, values);
     }
     layer.hover = std::min(layer.hover, static_cast<int>(layer.ids.size()) - 1);
     layer.scroll = std::clamp(layer.scroll, 0, std::max(0, static_cast<int>(layer.ids.size()) -
-                             std::max(1, (layer.height - 2 * border) / row_height)));
+                             capacity(layer)));
     paint(layer);
   }
   for (std::size_t depth = 0; depth < layers_.size() && depth + 1 < max_depth; ++depth) {
@@ -138,14 +186,15 @@ void DbusMenuPopup::changed() {
         layer.hover >= static_cast<int>(layer.ids.size())) continue;
     const auto it = std::ranges::find(menu_.rows(), layer.ids[layer.hover], &DbusMenuRow::id);
     if (it == menu_.rows().end() || !it->has_children) continue;
-    const int right = layer.x + menu_width - 1;
-    const int x = right + menu_width <= screen_->width_in_pixels ? right : layer.x - menu_width + 1;
-    const int y = layer.y + border + (layer.hover - layer.scroll) * row_height;
+    const int right = layer.x + layer.width - 1;
+    const int x = right + menu_width_ <= screen_width_ ? right : layer.x - menu_width_ + 1;
+    const int y = layer.y + border_ + (layer.hover - layer.scroll) * row_height_;
     show_layer(it->id, x, y, depth + 1);
   }
 }
 
 void DbusMenuPopup::show_layer(int parent_id, int x, int y, std::size_t depth) {
+  sync_geometry();
   if (depth >= max_depth) return;
   close_from(depth);
   Layer layer;
@@ -153,16 +202,17 @@ void DbusMenuPopup::show_layer(int parent_id, int x, int y, std::size_t depth) {
   for (const auto& row : menu_.rows())
     if (row.parent_id == parent_id && row.id != parent_id && row.visible) layer.ids.push_back(row.id);
   if (layer.ids.empty()) return;
-  const int available = std::max(row_height + 2 * border, static_cast<int>(screen_->height_in_pixels) - 36);
-  layer.height = std::min(available, border * 2 + static_cast<int>(layer.ids.size()) * row_height);
-  layer.x = std::clamp(x, 0, std::max(0, static_cast<int>(screen_->width_in_pixels) - menu_width));
-  layer.y = std::clamp(y, 0, std::max(0, static_cast<int>(screen_->height_in_pixels) - layer.height));
+  const int available = std::clamp(screen_height_ - scaled(36), 1, screen_height_);
+  layer.height = std::min(available, border_ * 2 + static_cast<int>(layer.ids.size()) * row_height_);
+  layer.width = menu_width_;
+  layer.x = std::clamp(x, 0, std::max(0, screen_width_ - layer.width));
+  layer.y = std::clamp(y, 0, std::max(0, screen_height_ - layer.height));
   layer.window = xcb_generate_id(connection_);
   const std::uint32_t values[] = {screen_->white_pixel, 1,
       XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_BUTTON_PRESS | XCB_EVENT_MASK_POINTER_MOTION |
       XCB_EVENT_MASK_KEY_PRESS};
   auto cookie = xcb_create_window_checked(connection_, screen_->root_depth, layer.window, screen_->root,
-      layer.x, layer.y, menu_width, layer.height, 0, XCB_WINDOW_CLASS_INPUT_OUTPUT,
+      layer.x, layer.y, layer.width, layer.height, 0, XCB_WINDOW_CLASS_INPUT_OUTPUT,
       screen_->root_visual, XCB_CW_BACK_PIXEL | XCB_CW_OVERRIDE_REDIRECT | XCB_CW_EVENT_MASK, values);
   if (auto* error = xcb_request_check(connection_, cookie)) { std::free(error); return; }
   xcb_map_window(connection_, layer.window);
@@ -191,51 +241,60 @@ void DbusMenuPopup::paint(const Layer& layer) {
       if (candidate.data->visual_id == screen_->root_visual) { visual = candidate.data; break; }
   }
   if (!visual) return;
-  auto* surface = cairo_xcb_surface_create(connection_, layer.window, visual, menu_width, layer.height);
+  auto* surface = cairo_xcb_surface_create(connection_, layer.window, visual, layer.width, layer.height);
   auto* cr = cairo_create(surface);
   cairo_set_source_rgb(cr, .79, .79, .79);
   cairo_paint(cr);
   cairo_set_source_rgb(cr, .97, .97, .97);
-  cairo_rectangle(cr, 0, 0, menu_width, 1);
+  cairo_rectangle(cr, 0, 0, layer.width, 1);
   cairo_rectangle(cr, 0, 0, 1, layer.height);
   cairo_fill(cr);
   cairo_set_source_rgb(cr, .31, .31, .31);
-  cairo_rectangle(cr, menu_width - 1, 0, 1, layer.height);
-  cairo_rectangle(cr, 0, layer.height - 1, menu_width, 1);
+  cairo_rectangle(cr, layer.width - 1, 0, 1, layer.height);
+  cairo_rectangle(cr, 0, layer.height - 1, layer.width, 1);
   cairo_fill(cr);
   cairo_set_source_rgb(cr, .70, .70, .70);
-  cairo_rectangle(cr, 4, 4, 25, layer.height - 8);
+  cairo_rectangle(cr, border_, border_, scaled(25),
+                  std::max(0, layer.height - 2 * border_));
   cairo_fill(cr);
-  const int capacity = std::max(1, (layer.height - 2 * border) / row_height);
-  for (int visible = 0; visible < capacity; ++visible) {
+  const int visible_rows = capacity(layer);
+  for (int visible = 0; visible < visible_rows; ++visible) {
     const int index = layer.scroll + visible;
     if (index >= static_cast<int>(layer.ids.size())) break;
     const auto id = layer.ids[index];
     const auto it = std::ranges::find(menu_.rows(), id, &DbusMenuRow::id);
     if (it == menu_.rows().end()) continue;
-    const int y = border + visible * row_height;
+    const int y = border_ + visible * row_height_;
     if (index == layer.hover && !it->separator && it->enabled) {
       const auto& accent = shell_.accent_color();
       cairo_set_source_rgb(cr, accent[0], accent[1], accent[2]);
-      cairo_rectangle(cr, 4, y, menu_width - 8, row_height);
+      cairo_rectangle(cr, border_, y, layer.width - 2 * border_, row_height_);
       cairo_fill(cr);
     }
     if (it->separator) {
       cairo_set_source_rgb(cr, .36, .36, .36);
-      cairo_rectangle(cr, 34, y + row_height / 2, menu_width - 42, 1);
+      cairo_rectangle(cr, scaled(34), y + row_height_ / 2,
+                      std::max(1, layer.width - scaled(42)), 1);
       cairo_fill(cr);
       continue;
     }
     if (it->toggle_state == 1 && !it->toggle_type.empty())
-      text(cr, it->toggle_type == "radio" ? "●" : "✓", 9, y + 3, 17, !it->enabled);
+      text(cr, it->toggle_type == "radio" ? "●" : "✓",
+           scaled(9), y + scaled(3), scaled(17), scale_, !it->enabled);
     else if (!it->icon_name.empty()) {
       if (auto* icon = shell_.themed_icon_surface(it->icon_name)) {
-        cairo_set_source_surface(cr, icon, 8, y + 3);
+        cairo_save(cr);
+        cairo_translate(cr, scaled(8), y + scaled(3));
+        cairo_scale(cr, scale_, scale_);
+        cairo_set_source_surface(cr, icon, 0, 0);
         cairo_paint(cr);
+        cairo_restore(cr);
       }
     }
-    text(cr, display_label(it->label), 35, y + 3, menu_width - 55, !it->enabled);
-    if (it->has_children) text(cr, "▶", menu_width - 22, y + 3, 18, !it->enabled);
+    text(cr, display_label(it->label), scaled(35), y + scaled(3),
+         std::max(1, layer.width - scaled(55)), scale_, !it->enabled);
+    if (it->has_children)
+      text(cr, "▶", layer.width - scaled(22), y + scaled(3), scaled(18), scale_, !it->enabled);
   }
   cairo_destroy(cr);
   cairo_surface_flush(surface);
@@ -243,15 +302,15 @@ void DbusMenuPopup::paint(const Layer& layer) {
 }
 
 int DbusMenuPopup::row_index(const Layer& layer, int y) const {
-  if (y < layer.y + border || y >= layer.y + layer.height - border) return -1;
-  const int index = layer.scroll + (y - layer.y - border) / row_height;
+  if (y < layer.y + border_ || y >= layer.y + layer.height - border_) return -1;
+  const int index = layer.scroll + (y - layer.y - border_) / row_height_;
   return index < static_cast<int>(layer.ids.size()) ? index : -1;
 }
 
 int DbusMenuPopup::hit(int x, int y, std::size_t& depth) const {
   for (std::size_t i = layers_.size(); i > 0; --i) {
     const auto& layer = layers_[i - 1];
-    if (x >= layer.x && x < layer.x + menu_width && y >= layer.y && y < layer.y + layer.height) {
+    if (x >= layer.x && x < layer.x + layer.width && y >= layer.y && y < layer.y + layer.height) {
       depth = i - 1;
       return row_index(layer, y);
     }
@@ -272,9 +331,9 @@ void DbusMenuPopup::hover(std::size_t depth, int index) {
     return;
   }
   menu_.about_to_show(it->id);
-  const int right = layer.x + menu_width - 1;
-  const int x = right + menu_width <= screen_->width_in_pixels ? right : layer.x - menu_width + 1;
-  const int y = layer.y + border + (index - layer.scroll) * row_height;
+  const int right = layer.x + layer.width - 1;
+  const int x = right + menu_width_ <= screen_width_ ? right : layer.x - menu_width_ + 1;
+  const int y = layer.y + border_ + (index - layer.scroll) * row_height_;
   show_layer(it->id, x, y, depth + 1);
 }
 
@@ -288,6 +347,7 @@ void DbusMenuPopup::activate(std::size_t depth, int index, std::uint32_t time) {
 }
 
 bool DbusMenuPopup::handle(xcb_generic_event_t* event) {
+  sync_geometry();
   if (!pending_ && layers_.empty()) return false;
   const auto type = event->response_type & ~0x80;
   if (type == XCB_EXPOSE) {
@@ -315,9 +375,9 @@ bool DbusMenuPopup::handle(xcb_generic_event_t* event) {
     if (type == XCB_MOTION_NOTIFY) { hover(depth, index); return true; }
     if (button->detail == 4 || button->detail == 5) {
       auto& layer = layers_[depth];
-      const int capacity = std::max(1, (layer.height - 2 * border) / row_height);
+      const int visible_rows = capacity(layer);
       layer.scroll = std::clamp(layer.scroll + (button->detail == 5 ? 1 : -1), 0,
-                                std::max(0, static_cast<int>(layer.ids.size()) - capacity));
+                                std::max(0, static_cast<int>(layer.ids.size()) - visible_rows));
       paint(layer);
       return true;
     }
@@ -340,9 +400,9 @@ bool DbusMenuPopup::handle(xcb_generic_event_t* event) {
         const auto it = std::ranges::find(menu_.rows(), layer.ids[next], &DbusMenuRow::id);
         if (it != menu_.rows().end() && !it->separator && it->enabled) break;
       }
-      const int capacity = std::max(1, (layer.height - 2 * border) / row_height);
+      const int visible_rows = capacity(layer);
       if (layer.hover < layer.scroll) layer.scroll = layer.hover;
-      if (layer.hover >= layer.scroll + capacity) layer.scroll = layer.hover - capacity + 1;
+      if (layer.hover >= layer.scroll + visible_rows) layer.scroll = layer.hover - visible_rows + 1;
       paint(layer);
       return true;
     }

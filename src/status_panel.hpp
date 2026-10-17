@@ -39,5 +39,7 @@ private:
   std::string active_menu_key_;
   int x_{};
   int width_{};
+  int height_{};
+  int slot_width_{};
 };
 } // namespace midnight

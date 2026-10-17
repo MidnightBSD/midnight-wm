@@ -22,19 +22,23 @@ public:
   void open(std::string service, std::string path, int x, int y,
             std::function<void()> fallback);
   void close();
+  void refresh_geometry();
   [[nodiscard]] bool handle(xcb_generic_event_t* event);
 
 private:
   struct Layer {
     xcb_window_t window{};
     int parent_id{};
-    int x{}, y{}, height{};
+    int x{}, y{}, width{}, height{};
     int scroll{};
     int hover{-1};
     std::vector<int> ids;
   };
 
   void changed();
+  void sync_geometry();
+  [[nodiscard]] int scaled(int value) const;
+  [[nodiscard]] int capacity(const Layer& layer) const;
   void show_layer(int parent_id, int x, int y, std::size_t depth);
   void close_from(std::size_t depth);
   void paint(const Layer& layer);
@@ -51,6 +55,9 @@ private:
   std::vector<Layer> layers_;
   std::function<void()> fallback_;
   int anchor_x_{}, anchor_y_{};
+  int screen_width_{}, screen_height_{};
+  int menu_width_{244}, row_height_{24}, border_{4};
+  double scale_{1.0};
   bool pending_{};
   bool pointer_grabbed_{};
   bool keyboard_grabbed_{};

@@ -53,5 +53,7 @@ private:
   int external_requested_width_{};
   int layout_x_{};
   int layout_width_{};
+  int layout_height_{};
+  int layout_icon_size_{};
 };
 } // namespace midnight

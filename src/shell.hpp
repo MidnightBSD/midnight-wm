@@ -35,6 +35,10 @@ public:
   void tick();
   void set_tasks(std::vector<Task> tasks);
   void set_screen_size(std::uint16_t width, std::uint16_t height);
+  [[nodiscard]] double ui_scale() const;
+  [[nodiscard]] int panel_height() const;
+  [[nodiscard]] int screen_width() const;
+  [[nodiscard]] int screen_height() const;
   // Open a local folder, optionally revealing one of its items.
   [[nodiscard]] bool show_folder(const std::filesystem::path& path,
                                  const std::optional<std::filesystem::path>& selected = std::nullopt);

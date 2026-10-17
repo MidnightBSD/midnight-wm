@@ -1,6 +1,7 @@
 #include "x11.hpp"
 #include "shell.hpp"
 #include "startup_notification.hpp"
+#include "display_scale.hpp"
 
 #include <cairo/cairo-xcb.h>
 #include <pango/pangocairo.h>
@@ -11,6 +12,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -22,11 +24,8 @@
 
 namespace midnight {
 namespace {
-constexpr int border = 5;
-constexpr int title_height = 28;
-constexpr int panel_height = 30;
-constexpr std::uint16_t min_width = 80;
-constexpr std::uint16_t min_height = 40;
+constexpr int min_width = 80;
+constexpr int min_height = 40;
 
 void box(cairo_t* cr, double x, double y, double width, double height,
          double r, double g, double b) {
@@ -35,9 +34,11 @@ void box(cairo_t* cr, double x, double y, double width, double height,
   cairo_fill(cr);
 }
 
-void label(cairo_t* cr, const std::string& text, int x, int y, int width, bool bold = false) {
+void label(cairo_t* cr, const std::string& text, int x, int y, int width,
+           double scale, bool bold = false) {
   auto* layout = pango_cairo_create_layout(cr);
   auto* desc = pango_font_description_from_string(bold ? "Sans Bold 10" : "Sans 10");
+  pango_font_description_set_size(desc, static_cast<int>(std::lround(10 * scale * PANGO_SCALE)));
   pango_layout_set_font_description(layout, desc);
   pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
   pango_layout_set_width(layout, width * PANGO_SCALE);
@@ -54,6 +55,9 @@ template <class T> using Reply = std::unique_ptr<T, decltype(&std::free)>;
 X11WindowManager::X11WindowManager(xcb_connection_t* connection, xcb_screen_t* screen, Shell& shell)
   : connection_(connection), screen_(screen), shell_(shell),
     screen_width_(screen->width_in_pixels), screen_height_(screen->height_in_pixels) {}
+
+int X11WindowManager::border_pixels() const { return scaled_pixel(shell_.ui_scale(), 5); }
+int X11WindowManager::title_height_pixels() const { return scaled_pixel(shell_.ui_scale(), 28); }
 
 X11WindowManager::~X11WindowManager() {
   for (auto& [client, frame] : frames_) {
@@ -166,10 +170,12 @@ void X11WindowManager::constrain_size(const Frame& frame, std::uint16_t& width,
                                       std::uint16_t& height) const {
   const auto& hints = frame.size_hints;
   int minimum_w = std::clamp<int>(
-      (hints.flags & XCB_ICCCM_SIZE_HINT_P_MIN_SIZE) ? hints.min_width : min_width,
+      (hints.flags & XCB_ICCCM_SIZE_HINT_P_MIN_SIZE) ? hints.min_width :
+        scaled_pixel(shell_.ui_scale(), min_width),
       1, std::numeric_limits<std::uint16_t>::max());
   int minimum_h = std::clamp<int>(
-      (hints.flags & XCB_ICCCM_SIZE_HINT_P_MIN_SIZE) ? hints.min_height : min_height,
+      (hints.flags & XCB_ICCCM_SIZE_HINT_P_MIN_SIZE) ? hints.min_height :
+        scaled_pixel(shell_.ui_scale(), min_height),
       1, std::numeric_limits<std::uint16_t>::max());
   const int maximum_w = (hints.flags & XCB_ICCCM_SIZE_HINT_P_MAX_SIZE) && hints.max_width > 0
       ? std::clamp<int>(hints.max_width, 1, std::numeric_limits<std::uint16_t>::max())
@@ -329,7 +335,7 @@ void X11WindowManager::update_geometry_properties() {
 }
 
 X11WindowManager::Monitor X11WindowManager::workarea_for(const Monitor& monitor) const {
-  int left = 0, right = 0, top = panel_height, bottom = 0;
+  int left = 0, right = 0, top = shell_.panel_height(), bottom = 0;
   const auto overlaps = [](int a, int b, std::uint32_t start, std::uint32_t end) {
     return end >= std::uint32_t(std::max(0, a)) && start < std::uint32_t(std::max(0, b));
   };
@@ -429,7 +435,7 @@ void X11WindowManager::manage(xcb_window_t window) {
   frame.client = window;
   frame.frame = xcb_generate_id(connection_);
   frame.x = geometry->x;
-  frame.y = std::max<int>(geometry->y, panel_height);
+  frame.y = std::max<int>(geometry->y, shell_.panel_height());
   frame.width = geometry->width;
   frame.height = geometry->height;
   update_icccm_hints(frame);
@@ -464,8 +470,8 @@ void X11WindowManager::manage(xcb_window_t window) {
       XCB_EVENT_MASK_BUTTON_RELEASE | XCB_EVENT_MASK_POINTER_MOTION |
       XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_STRUCTURE_NOTIFY;
   const std::uint32_t values[] = {screen_->white_pixel, mask};
-  const int inset = decorated(frame) ? border : 0;
-  const int top_inset = decorated(frame) ? title_height : 0;
+  const int inset = decorated(frame) ? border_pixels() : 0;
+  const int top_inset = decorated(frame) ? title_height_pixels() : 0;
   xcb_create_window(connection_, screen_->root_depth, frame.frame, screen_->root,
                     frame.x, frame.y, frame.width + 2 * inset,
                     frame.height + top_inset + inset, 0, XCB_WINDOW_CLASS_INPUT_OUTPUT,
@@ -499,8 +505,8 @@ void X11WindowManager::unmanage(xcb_window_t client, bool destroyed) {
   auto frame = it->second;
   if (!destroyed) {
     xcb_reparent_window(connection_, client, screen_->root,
-                        frame.x + (decorated(frame) ? border : 0),
-                        frame.y + (decorated(frame) ? title_height : 0));
+                        frame.x + (decorated(frame) ? border_pixels() : 0),
+                        frame.y + (decorated(frame) ? title_height_pixels() : 0));
     xcb_change_save_set(connection_, XCB_SET_MODE_DELETE, client);
     xcb_delete_property(connection_, client, atom("WM_STATE"));
     xcb_delete_property(connection_, client, atom("_NET_WM_STATE"));
@@ -646,6 +652,9 @@ void X11WindowManager::draw_frame(Frame& frame) {
   if (!decorated(frame)) return;
   auto* visual = root_visual();
   if (!visual) return;
+  const int border = border_pixels();
+  const int title_height = title_height_pixels();
+  const double scale = shell_.ui_scale();
   const int width = frame.width + 2 * border;
   const int height = frame.height + title_height + border;
   auto* surface = cairo_xcb_surface_create(connection_, frame.frame, visual, width, height);
@@ -662,16 +671,20 @@ void X11WindowManager::draw_frame(Frame& frame) {
       selected ? accent[1] : accent[1] * .65 + .18,
       selected ? accent[2] : accent[2] * .65 + .18);
   cairo_set_source_rgb(cr, 1, 1, 1);
-  label(cr, frame.title, border + 9, border + 4, std::max(1, width - 124), true);
-  const int button_y = 7;
+  label(cr, frame.title, border + scaled_pixel(scale, 9), border + scaled_pixel(scale, 4),
+        std::max(1, width - scaled_pixel(scale, 124)), scale, true);
+  const int button_y = scaled_pixel(scale, 7);
   for (int i = 0; i < 3; ++i) {
-    const int x = width - 74 + i * 23;
-    box(cr, x, button_y, 20, 17, .88, .88, .86);
-    box(cr, x, button_y, 20, 1, 1, 1, 1);
-    box(cr, x + 19, button_y, 1, 17, .2, .2, .2);
-    box(cr, x, button_y + 16, 20, 1, .2, .2, .2);
+    const int x = width - scaled_pixel(scale, 74) + i * scaled_pixel(scale, 23);
+    const int button_width = scaled_pixel(scale, 20);
+    const int button_height = scaled_pixel(scale, 17);
+    box(cr, x, button_y, button_width, button_height, .88, .88, .86);
+    box(cr, x, button_y, button_width, 1, 1, 1, 1);
+    box(cr, x + button_width - 1, button_y, 1, button_height, .2, .2, .2);
+    box(cr, x, button_y + button_height - 1, button_width, 1, .2, .2, .2);
     cairo_set_source_rgb(cr, .12, .12, .12);
-    label(cr, i == 0 ? "_" : i == 1 ? "□" : "×", x + 5, button_y - 2, 16, true);
+    label(cr, i == 0 ? "_" : i == 1 ? "□" : "×", x + scaled_pixel(scale, 5),
+          button_y - scaled_pixel(scale, 2), scaled_pixel(scale, 16), scale, true);
   }
   cairo_destroy(cr);
   cairo_surface_flush(surface);
@@ -681,12 +694,12 @@ void X11WindowManager::draw_frame(Frame& frame) {
 void X11WindowManager::resize_frame(Frame& frame) {
   const bool has_decoration = decorated(frame);
   const std::uint32_t position[] = {static_cast<std::uint32_t>(frame.x), static_cast<std::uint32_t>(frame.y),
-                                    static_cast<std::uint32_t>(frame.width + (has_decoration ? 2 * border : 0)),
-                                    static_cast<std::uint32_t>(frame.height + (has_decoration ? title_height + border : 0))};
+                                    static_cast<std::uint32_t>(frame.width + (has_decoration ? 2 * border_pixels() : 0)),
+                                    static_cast<std::uint32_t>(frame.height + (has_decoration ? title_height_pixels() + border_pixels() : 0))};
   xcb_configure_window(connection_, frame.frame, XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y |
                        XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, position);
-  const std::uint32_t dimensions[] = {static_cast<std::uint32_t>(has_decoration ? border : 0),
-                                      static_cast<std::uint32_t>(has_decoration ? title_height : 0),
+  const std::uint32_t dimensions[] = {static_cast<std::uint32_t>(has_decoration ? border_pixels() : 0),
+                                      static_cast<std::uint32_t>(has_decoration ? title_height_pixels() : 0),
                                       frame.width, frame.height};
   xcb_configure_window(connection_, frame.client, XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y |
                        XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, dimensions);
@@ -698,8 +711,8 @@ void X11WindowManager::send_configure_notify(const Frame& frame) {
   notify.response_type = XCB_CONFIGURE_NOTIFY;
   notify.event = frame.client;
   notify.window = frame.client;
-  notify.x = frame.x + (decorated(frame) ? border : 0);
-  notify.y = frame.y + (decorated(frame) ? title_height : 0);
+  notify.x = frame.x + (decorated(frame) ? border_pixels() : 0);
+  notify.y = frame.y + (decorated(frame) ? title_height_pixels() : 0);
   notify.width = frame.width;
   notify.height = frame.height;
   xcb_send_event(connection_, 0, frame.client, XCB_EVENT_MASK_STRUCTURE_NOTIFY,
@@ -713,9 +726,9 @@ void X11WindowManager::configure_frame(Frame& frame, std::uint16_t mask, std::in
   if (gravity < XCB_GRAVITY_NORTH_WEST || gravity > XCB_GRAVITY_STATIC)
     gravity = XCB_GRAVITY_NORTH_WEST;
   if (!frame.fullscreen) {
-    const int left = decorated(frame) ? border : 0;
-    const int top = decorated(frame) ? title_height : 0;
-    const int bottom = decorated(frame) ? border : 0;
+    const int left = decorated(frame) ? border_pixels() : 0;
+    const int top = decorated(frame) ? title_height_pixels() : 0;
+    const int bottom = decorated(frame) ? border_pixels() : 0;
     const int old_width = frame.width;
     const int old_height = frame.height;
     if (!frame.maximized_horz && (mask & XCB_CONFIG_WINDOW_WIDTH))
@@ -828,11 +841,11 @@ void X11WindowManager::update_maximized_geometry(Frame& frame) {
   const bool has_decoration = decorated(frame);
   if (frame.maximized_horz) {
     frame.x = area.x;
-    frame.width = std::max(1, area.width - (has_decoration ? 2 * border : 0));
+    frame.width = std::max(1, area.width - (has_decoration ? 2 * border_pixels() : 0));
   }
   if (frame.maximized_vert) {
     frame.y = area.y;
-    frame.height = std::max(1, area.height - (has_decoration ? title_height + border : 0));
+    frame.height = std::max(1, area.height - (has_decoration ? title_height_pixels() + border_pixels() : 0));
   }
   resize_frame(frame);
 }
@@ -880,8 +893,10 @@ void X11WindowManager::set_fullscreen(xcb_window_t client, bool enabled) {
     frame.width = frame.old_width; frame.height = frame.old_height;
   }
   frame.fullscreen = enabled;
-  const std::uint32_t extents[] = {decorated(frame) ? border : 0u, decorated(frame) ? border : 0u,
-                                   decorated(frame) ? title_height : 0u, decorated(frame) ? border : 0u};
+  const std::uint32_t extents[] = {static_cast<std::uint32_t>(decorated(frame) ? border_pixels() : 0),
+                                   static_cast<std::uint32_t>(decorated(frame) ? border_pixels() : 0),
+                                   static_cast<std::uint32_t>(decorated(frame) ? title_height_pixels() : 0),
+                                   static_cast<std::uint32_t>(decorated(frame) ? border_pixels() : 0)};
   xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, client, atom("_NET_FRAME_EXTENTS"),
                       XCB_ATOM_CARDINAL, 32, 4, extents);
   update_window_state(frame);
@@ -948,15 +963,27 @@ void X11WindowManager::cycle_focus() {
 
 void X11WindowManager::update_screen_size(std::uint16_t width, std::uint16_t height) {
   screen_width_ = width; screen_height_ = height;
-  update_geometry_properties();
   shell_.set_screen_size(width, height);
+  update_geometry_properties();
   for (auto& [client, frame] : frames_) {
+    const std::uint32_t extents[]{static_cast<std::uint32_t>(decorated(frame) ? border_pixels() : 0),
+                                  static_cast<std::uint32_t>(decorated(frame) ? border_pixels() : 0),
+                                  static_cast<std::uint32_t>(decorated(frame) ? title_height_pixels() : 0),
+                                  static_cast<std::uint32_t>(decorated(frame) ? border_pixels() : 0)};
+    xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, client, atom("_NET_FRAME_EXTENTS"),
+                        XCB_ATOM_CARDINAL, 32, 4, extents);
     if (frame.fullscreen) {
       const auto monitor = monitor_for(frame);
       frame.x = monitor.x; frame.y = monitor.y;
       frame.width = monitor.width; frame.height = monitor.height;
       resize_frame(frame);
     } else if (frame.maximized_horz || frame.maximized_vert) update_maximized_geometry(frame);
+    else {
+      frame.x = std::clamp(frame.x, 0, std::max(0, int(screen_width_) - 80));
+      frame.y = std::clamp(frame.y, shell_.panel_height(),
+                           std::max(shell_.panel_height(), int(screen_height_) - title_height_pixels()));
+      resize_frame(frame);
+    }
   }
 }
 
@@ -1090,16 +1117,18 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
     if (e->detail != 1) break;
     if (!decorated(f)) break;
     const int x = e->event_x, y = e->event_y;
-    if (y < title_height && x > int(f.width + 2 * border) - 74) {
-      const int button = (x - (int(f.width + 2 * border) - 74)) / 23;
+    const int button_start = int(f.width + 2 * border_pixels()) - scaled_pixel(shell_.ui_scale(), 74);
+    if (y < title_height_pixels() && x > button_start) {
+      const int button = (x - button_start) / scaled_pixel(shell_.ui_scale(), 23);
       if (button == 0) minimize(client);
       else if (button == 1) toggle_maximize(client);
       else close(client);
       break;
     }
     if (f.fullscreen || f.maximized_horz || f.maximized_vert) break;
-    begin_drag(f, y < title_height ? DragMode::move : DragMode::resize,
-               e->root_x, e->root_y, y < title_height ? 8 : 4, e->detail);
+    begin_drag(f, y < title_height_pixels() ? DragMode::move : DragMode::resize,
+               e->root_x, e->root_y,
+               y < title_height_pixels() ? 8 : 4, e->detail);
     break;
   }
   case XCB_MOTION_NOTIFY: {
@@ -1174,7 +1203,10 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
   case XCB_CLIENT_MESSAGE: {
     auto* e = reinterpret_cast<xcb_client_message_event_t*>(event);
     if (e->type == atom("_NET_REQUEST_FRAME_EXTENTS")) {
-      const std::uint32_t extents[] = {border, border, title_height, border};
+      const std::uint32_t extents[] = {static_cast<std::uint32_t>(border_pixels()),
+                                      static_cast<std::uint32_t>(border_pixels()),
+                                      static_cast<std::uint32_t>(title_height_pixels()),
+                                      static_cast<std::uint32_t>(border_pixels())};
       xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, e->window, atom("_NET_FRAME_EXTENTS"),
                           XCB_ATOM_CARDINAL, 32, 4, extents);
     } else if (e->type == atom("_NET_ACTIVE_WINDOW")) {

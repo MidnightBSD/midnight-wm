@@ -4,6 +4,7 @@
 #include "browser_launcher.hpp"
 #include "config.hpp"
 #include "desktop_launcher.hpp"
+#include "display_scale.hpp"
 #include "model.hpp"
 #include "recent_files.hpp"
 #include "store.hpp"
@@ -41,7 +42,6 @@
 
 namespace midnight {
 namespace {
-constexpr int panel_height = 30;
 constexpr int volume_group_width = 102;
 constexpr int volume_clock_gap = 4;
 constexpr int lock_button_x = 124;
@@ -482,6 +482,7 @@ xcb_visualtype_t* visual_for(xcb_screen_t* screen) {
 } // namespace
 
 struct Shell::Impl {
+  static constexpr int panel_height = 30;
   xcb_connection_t* connection;
   xcb_screen_t* screen;
   Store& store;
@@ -500,6 +501,8 @@ struct Shell::Impl {
   std::optional<IconChooser> icon_chooser;
   std::optional<OpenWithDialog> open_with_dialog;
   std::uint16_t width{}, height{};
+  std::uint16_t physical_width{}, physical_height{};
+  double scale{1.0};
   std::unordered_map<xcb_window_t, Folder> folders;
   std::unordered_set<std::string> hidden_shortcuts;
   xcb_window_t focused_folder{};
@@ -535,6 +538,7 @@ struct Shell::Impl {
   int submenu_hover{-1};
   int app_menu_hover{-1};
   int selected_desktop{-1};
+  int desktop_scroll_rows{};
   std::optional<Item> selected_item;
   std::filesystem::path clipboard_path;
   bool clipboard_cut{};
@@ -559,7 +563,11 @@ struct Shell::Impl {
   int pending_icon_index{-1};
   int pending_icon_x{}, pending_icon_y{};
 
-  Impl(xcb_connection_t* c, xcb_screen_t* s, Store& st) : connection(c), screen(s), store(st), model(st), width(s->width_in_pixels), height(s->height_in_pixels) {
+  Impl(xcb_connection_t* c, xcb_screen_t* s, Store& st) : connection(c), screen(s), store(st), model(st),
+      physical_width(s->width_in_pixels), physical_height(s->height_in_pixels) {
+    scale = display_scale(physical_height, config.ui_scale);
+    width = std::max(1, static_cast<int>(physical_width / scale));
+    height = std::max(1, static_cast<int>(physical_height / scale));
     menu_width = launcher_menu_width(width);
   }
   ~Impl() {
@@ -592,7 +600,10 @@ struct Shell::Impl {
     const std::uint32_t values[] = {screen->black_pixel, 1,
       XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_BUTTON_PRESS | XCB_EVENT_MASK_BUTTON_RELEASE |
       XCB_EVENT_MASK_POINTER_MOTION | XCB_EVENT_MASK_KEY_PRESS | XCB_EVENT_MASK_STRUCTURE_NOTIFY | extra_mask};
-    xcb_create_window(connection, screen->root_depth, id, screen->root, x, y, w, h, 0,
+    xcb_create_window(connection, screen->root_depth, id, screen->root,
+                      static_cast<std::int16_t>(std::lround(x * scale)),
+                      static_cast<std::int16_t>(std::lround(y * scale)),
+                      scaled_pixel(scale, w), scaled_pixel(scale, h), 0,
                       XCB_WINDOW_CLASS_INPUT_OUTPUT, screen->root_visual,
                       XCB_CW_BACK_PIXEL | XCB_CW_OVERRIDE_REDIRECT | XCB_CW_EVENT_MASK, values);
     return id;
@@ -600,8 +611,10 @@ struct Shell::Impl {
 
   void paint(xcb_window_t window, int w, int h, auto&& draw) {
     if (!visual || w <= 0 || h <= 0) return;
-    auto* surface = cairo_xcb_surface_create(connection, window, visual, w, h);
+    auto* surface = cairo_xcb_surface_create(connection, window, visual,
+                                             scaled_pixel(scale, w), scaled_pixel(scale, h));
     auto* cr = cairo_create(surface);
+    cairo_scale(cr, scale, scale);
     draw(cr);
     cairo_destroy(cr);
     cairo_surface_flush(surface);
@@ -1028,6 +1041,7 @@ struct Shell::Impl {
     file_content_types.clear();
     file_icon_cache.clear();
     desktop_items = list_items(Store::desktop_path(), true);
+    desktop_scroll_rows = std::clamp(desktop_scroll_rows, 0, desktop_max_scroll());
     for (auto& [window, folder] : folders) {
       folder.items = list_items(folder.path, false);
       sort_folder(folder);
@@ -1255,10 +1269,21 @@ struct Shell::Impl {
   }
 
   void draw_desktop() {
+    desktop_scroll_rows = std::clamp(desktop_scroll_rows, 0, desktop_max_scroll());
     paint(desktop, width, std::max(1, static_cast<int>(height) - panel_height), [&](cairo_t* cr) {
       fill(cr, config.desktop_color[0], config.desktop_color[1], config.desktop_color[2], 0, 0, width, height - panel_height);
-      draw_items(cr, desktop_items, 13, width, selected_desktop, true);
+      draw_items(cr, desktop_items, 13, width, selected_desktop, true, desktop_scroll_rows);
     });
+  }
+
+  int desktop_visible_rows() const {
+    return std::max(1, (static_cast<int>(height) - panel_height - 13) / icon_height);
+  }
+
+  int desktop_max_scroll() const {
+    const int columns = std::max(1, static_cast<int>(width) / icon_width);
+    const int rows = static_cast<int>((desktop_items.size() + columns - 1) / columns);
+    return std::max(0, rows - desktop_visible_rows());
   }
 
   void draw_folder(Folder& folder) {
@@ -2399,11 +2424,17 @@ struct Shell::Impl {
     }
     const bool on_desktop = event->event == desktop;
     if (!on_desktop && !folder) return;
+    if (on_desktop && (event->detail == 4 || event->detail == 5)) {
+      desktop_scroll_rows = std::clamp(desktop_scroll_rows + (event->detail == 5 ? 1 : -1),
+                                       0, desktop_max_scroll());
+      draw_desktop();
+      return;
+    }
     auto& items = on_desktop ? desktop_items : folder->items;
     const int start_y = on_desktop ? 13 : folder_header + 11;
     const int width_px = on_desktop ? width : folder_scroll(*folder).view_width;
     const int index = item_index(event->event_x, event->event_y, start_y, width_px, items.size(),
-                                 folder ? folder->scroll_rows : 0);
+                                 folder ? folder->scroll_rows : desktop_scroll_rows);
     if (event->detail == 3) {
       show_context(event->event, event->root_x, event->root_y, index >= 0 ? &items[index] : nullptr);
       return;
@@ -2509,6 +2540,15 @@ struct Shell::Impl {
     int& selected = on_desktop ? selected_desktop : it->second.selected;
     const auto sym = key_symbols ? xcb_key_symbols_get_keysym(key_symbols, event->detail, 0) : 0;
     if (sym == XK_Escape) { close_menu(); return; }
+    if (on_desktop && (sym == XK_Page_Up || sym == XK_Page_Down || sym == XK_Home || sym == XK_End)) {
+      if (sym == XK_Home) desktop_scroll_rows = 0;
+      else if (sym == XK_End) desktop_scroll_rows = desktop_max_scroll();
+      else desktop_scroll_rows = std::clamp(desktop_scroll_rows +
+        (sym == XK_Page_Down ? desktop_visible_rows() : -desktop_visible_rows()), 0,
+        desktop_max_scroll());
+      draw_desktop();
+      return;
+    }
     if (!on_desktop && (sym == XK_Page_Up || sym == XK_Page_Down || sym == XK_Home || sym == XK_End)) {
       const auto scroll = folder_scroll(it->second);
       if (sym == XK_Home) it->second.scroll_rows = 0;
@@ -2601,13 +2641,15 @@ struct Shell::Impl {
     if (resizing) {
       folder.width = std::max(250, drag_start_x + dx);
       folder.height = std::max(180, drag_start_y + dy);
-      const std::uint32_t values[]{static_cast<std::uint32_t>(folder.width), static_cast<std::uint32_t>(folder.height)};
+      const std::uint32_t values[]{static_cast<std::uint32_t>(scaled_pixel(scale, folder.width)),
+                                   static_cast<std::uint32_t>(scaled_pixel(scale, folder.height))};
       xcb_configure_window(connection, folder.window, XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, values);
       draw_folder(folder);
     } else {
       folder.x = drag_start_x + dx;
       folder.y = drag_start_y + dy;
-      const std::uint32_t values[]{static_cast<std::uint32_t>(folder.x), static_cast<std::uint32_t>(folder.y)};
+      const std::uint32_t values[]{static_cast<std::uint32_t>(std::lround(folder.x * scale)),
+                                   static_cast<std::uint32_t>(std::lround(folder.y * scale))};
       xcb_configure_window(connection, folder.window, XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y, values);
     }
     xcb_flush(connection);
@@ -2634,8 +2676,17 @@ bool Shell::initialize() {
   std::error_code ec;
   std::filesystem::create_directories(Store::desktop_path(), ec);
   p.seed_objects();
-  p.desktop = p.create_window(0, panel_height, p.width, std::max(1, static_cast<int>(p.height) - panel_height));
-  p.panel = p.create_window(0, 0, p.width, panel_height);
+  p.desktop = p.create_window(0, Impl::panel_height, p.width,
+                              std::max(1, static_cast<int>(p.height) - Impl::panel_height));
+  p.panel = p.create_window(0, 0, p.width, Impl::panel_height);
+  const auto panel_pixels = scaled_pixel(p.scale, Impl::panel_height);
+  const std::uint32_t desktop_size[]{p.physical_width,
+      static_cast<std::uint32_t>(std::max(1, static_cast<int>(p.physical_height) - panel_pixels))};
+  xcb_configure_window(p.connection, p.desktop,
+                       XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, desktop_size);
+  const std::uint32_t panel_size[]{p.physical_width, static_cast<std::uint32_t>(panel_pixels)};
+  xcb_configure_window(p.connection, p.panel,
+                       XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, panel_size);
   p.watch_directory(p.desktop, Store::desktop_path());
   p.register_drop(p.desktop);
   xcb_map_window(p.connection, p.desktop);
@@ -2698,7 +2749,14 @@ bool Shell::handle(xcb_generic_event_t* event) {
     else if (p.open_with_dialog && window == p.open_with_dialog->window) p.draw_open_with_dialog();
     else if (p.properties && window == p.properties->window) p.draw_properties();
     else if (auto it = p.folders.find(window); it != p.folders.end()) p.draw_folder(it->second);
-  } else if (type == XCB_BUTTON_PRESS) p.button(reinterpret_cast<xcb_button_press_event_t*>(event));
+  } else if (type == XCB_BUTTON_PRESS) {
+    auto press = *reinterpret_cast<xcb_button_press_event_t*>(event);
+    press.event_x = static_cast<std::int16_t>(std::lround(press.event_x / p.scale));
+    press.event_y = static_cast<std::int16_t>(std::lround(press.event_y / p.scale));
+    press.root_x = static_cast<std::int16_t>(std::lround(press.root_x / p.scale));
+    press.root_y = static_cast<std::int16_t>(std::lround(press.root_y / p.scale));
+    p.button(&press);
+  }
   else if (type == XCB_BUTTON_RELEASE && p.scroll_drag_window == window) {
     p.scroll_drag_window = 0;
     xcb_ungrab_pointer(p.connection, XCB_CURRENT_TIME);
@@ -2706,7 +2764,14 @@ bool Shell::handle(xcb_generic_event_t* event) {
     p.drag_window = 0;
     xcb_ungrab_pointer(p.connection, XCB_CURRENT_TIME);
   } else if (type == XCB_BUTTON_RELEASE) p.pending_icon_window = 0;
-  else if (type == XCB_MOTION_NOTIFY) p.motion(reinterpret_cast<xcb_motion_notify_event_t*>(event));
+  else if (type == XCB_MOTION_NOTIFY) {
+    auto motion = *reinterpret_cast<xcb_motion_notify_event_t*>(event);
+    motion.event_x = static_cast<std::int16_t>(std::lround(motion.event_x / p.scale));
+    motion.event_y = static_cast<std::int16_t>(std::lround(motion.event_y / p.scale));
+    motion.root_x = static_cast<std::int16_t>(std::lround(motion.root_x / p.scale));
+    motion.root_y = static_cast<std::int16_t>(std::lround(motion.root_y / p.scale));
+    p.motion(&motion);
+  }
   else if (type == XCB_KEY_PRESS) p.key(reinterpret_cast<xcb_key_press_event_t*>(event));
   else if (type == XCB_DESTROY_NOTIFY) {
     p.unwatch(window);
@@ -2775,23 +2840,76 @@ void Shell::set_startup_notification(StartupNotification* startup) {
 
 void Shell::set_screen_size(std::uint16_t width, std::uint16_t height) {
   auto& p = *impl_;
-  if (p.menu && (p.width != width || p.height != height)) p.close_menu();
-  p.width = width;
-  p.height = height;
-  p.menu_width = launcher_menu_width(width);
+  if (p.physical_width == width && p.physical_height == height) return;
+  p.close_menu();
+  p.physical_width = width;
+  p.physical_height = height;
+  p.scale = display_scale(height, p.config.ui_scale);
+  p.width = std::max(1, static_cast<int>(width / p.scale));
+  p.height = std::max(1, static_cast<int>(height / p.scale));
+  p.menu_width = launcher_menu_width(p.width);
+  auto configure = [&p](xcb_window_t window, int x, int y, int w, int h) {
+    if (!window) return;
+    const std::uint32_t values[]{
+      static_cast<std::uint32_t>(std::lround(x * p.scale)),
+      static_cast<std::uint32_t>(std::lround(y * p.scale)),
+      static_cast<std::uint32_t>(scaled_pixel(p.scale, w)),
+      static_cast<std::uint32_t>(scaled_pixel(p.scale, h))};
+    xcb_configure_window(p.connection, window,
+                         XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y |
+                         XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, values);
+  };
   if (p.desktop) {
-    const std::uint32_t values[]{width, static_cast<std::uint32_t>(std::max(1, static_cast<int>(height) - panel_height))};
-    xcb_configure_window(p.connection, p.desktop, XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, values);
+    configure(p.desktop, 0, Impl::panel_height, p.width,
+              std::max(1, static_cast<int>(p.height) - Impl::panel_height));
+    const std::uint32_t size[]{p.physical_width,
+        static_cast<std::uint32_t>(std::max(1, static_cast<int>(p.physical_height) -
+                                                     scaled_pixel(p.scale, Impl::panel_height)))};
+    xcb_configure_window(p.connection, p.desktop,
+                         XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, size);
     const std::uint32_t below[]{XCB_STACK_MODE_BELOW};
     xcb_configure_window(p.connection, p.desktop, XCB_CONFIG_WINDOW_STACK_MODE, below);
     p.draw_desktop();
   }
   if (p.panel) {
-    const std::uint32_t values[]{width};
-    xcb_configure_window(p.connection, p.panel, XCB_CONFIG_WINDOW_WIDTH, values);
+    configure(p.panel, 0, 0, p.width, Impl::panel_height);
+    const std::uint32_t size[]{p.physical_width,
+                               static_cast<std::uint32_t>(scaled_pixel(p.scale, Impl::panel_height))};
+    xcb_configure_window(p.connection, p.panel,
+                         XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, size);
     p.draw_panel();
   }
+  for (auto& [window, folder] : p.folders) {
+    folder.width = std::min(folder.width, std::max(250, static_cast<int>(p.width) - 12));
+    folder.height = std::min(folder.height,
+                             std::max(180, static_cast<int>(p.height) - Impl::panel_height - 12));
+    folder.x = std::clamp(folder.x, 0, std::max(0, static_cast<int>(p.width) - folder.width));
+    folder.y = std::clamp(folder.y, Impl::panel_height,
+                          std::max(Impl::panel_height, static_cast<int>(p.height) - folder.height));
+    configure(window, folder.x, folder.y, folder.width, folder.height);
+    p.draw_folder(folder);
+  }
+  auto center = [&p, &configure](xcb_window_t window, int w, int h) {
+    configure(window, std::max(0, (static_cast<int>(p.width) - w) / 2),
+              std::max(Impl::panel_height, (static_cast<int>(p.height) - h) / 2), w, h);
+  };
+  center(p.notice, 420, 100);
+  center(p.exit_dialog, exit_dialog_width, exit_dialog_height);
+  if (p.properties) center(p.properties->window, 500, 220);
+  if (p.icon_chooser) center(p.icon_chooser->window, icon_chooser_width, icon_chooser_height);
+  if (p.open_with_dialog) center(p.open_with_dialog->window, open_with_width, open_with_height);
+  if (p.notice) p.draw_notice();
+  if (p.exit_dialog) p.draw_exit_dialog();
+  if (p.properties) p.draw_properties();
+  if (p.icon_chooser) p.draw_icon_chooser();
+  if (p.open_with_dialog) p.draw_open_with_dialog();
+  xcb_flush(p.connection);
 }
+
+double Shell::ui_scale() const { return impl_->scale; }
+int Shell::panel_height() const { return scaled_pixel(impl_->scale, Impl::panel_height); }
+int Shell::screen_width() const { return impl_->physical_width; }
+int Shell::screen_height() const { return impl_->physical_height; }
 
 void Shell::set_file_clipboard_handlers(
     std::function<void(const std::vector<std::filesystem::path>&, bool)> set,
