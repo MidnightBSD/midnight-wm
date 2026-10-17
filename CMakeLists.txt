@@ -20,7 +20,7 @@ target_compile_options(midnight_core PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(midnight-wm src/main.cpp src/x11.cpp src/shell.cpp src/clipboard.cpp src/dnd.cpp
   src/tray.cpp src/status_notifier.cpp src/status_panel.cpp src/dbus_menu.cpp
   src/dbus_menu_popup.cpp src/autostart.cpp src/notifications.cpp src/xsettings.cpp
-  src/file_manager1.cpp)
+  src/file_manager1.cpp src/keyring_session.cpp)
 target_link_libraries(midnight-wm PRIVATE midnight_core)
 target_compile_options(midnight-wm PRIVATE -Wall -Wextra -Wpedantic)
 
@@ -44,6 +44,11 @@ add_test(NAME model_test COMMAND model_test)
 add_executable(autostart_test tests/autostart_test.cpp src/autostart.cpp)
 target_link_libraries(autostart_test PRIVATE midnight_core)
 add_test(NAME autostart_test COMMAND autostart_test)
+add_executable(keyring_session_test tests/keyring_session_test.cpp src/keyring_session.cpp)
+target_link_libraries(keyring_session_test PRIVATE midnight_core)
+add_test(NAME keyring_inherited_test COMMAND keyring_session_test inherited)
+add_test(NAME keyring_fallback_test COMMAND keyring_session_test fallback)
+set_tests_properties(keyring_fallback_test PROPERTIES SKIP_RETURN_CODE 77)
 add_executable(desktop_launcher_test tests/desktop_launcher_test.cpp)
 target_link_libraries(desktop_launcher_test PRIVATE midnight_core)
 add_test(NAME desktop_launcher_test COMMAND desktop_launcher_test)

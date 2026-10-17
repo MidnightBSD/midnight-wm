@@ -2,6 +2,7 @@
 #include "clipboard.hpp"
 #include "dnd.hpp"
 #include "file_manager1.hpp"
+#include "keyring_session.hpp"
 #include "dbus_menu.hpp"
 #include "dbus_menu_popup.hpp"
 #include "notifications.hpp"
@@ -142,6 +143,9 @@ int main(int argc, char** argv) {
     xcb_disconnect(connection);
     return 1;
   }
+
+  midnight::KeyringSession keyring;
+  keyring.initialize();
 
   int result = 0;
   {

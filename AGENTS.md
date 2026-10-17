@@ -13,6 +13,10 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   project version through `MIDNIGHT_WM_VERSION`. Startup re-execs through
   `dbus-run-session` only if no reachable session bus is available; preserve
   the recursion guard and the wrapper's ownership of the new bus.
+- `src/keyring_session.*` initializes the configured Secret Service and SSH
+  agent before XDG autostart. Preserve an existing Secret Service owner and a
+  reachable inherited `SSH_AUTH_SOCK`; stop only the fallback ssh-agent owned
+  by Midnight Workspace.
 - `src/x11.*` manages external X11 clients, frames, focus, geometry, EWMH, and
   the root pointer cursor.
 - `src/shell.*` draws the panel, desktop, menus, folder windows, scrollbars,

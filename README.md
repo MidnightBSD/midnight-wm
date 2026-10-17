@@ -22,6 +22,14 @@ At startup, Midnight Workspace uses an existing D-Bus session bus when one is
 reachable. If none is available and `dbus-run-session` is installed, it starts
 a bus for the X11 session and stops it when Midnight Workspace exits. Without
 the D-Bus tools, the desktop still starts, but D-Bus integrations are unavailable.
+Before starting desktop applications, Midnight Workspace uses the session bus's
+configured `org.freedesktop.secrets` provider for password storage, preserving
+an existing provider such as KWallet or KeePassXC. If no provider is available,
+it starts GNOME Keyring when installed. A working inherited `SSH_AUTH_SOCK` is
+preserved; otherwise GNOME Keyring's SSH component is tried, followed by a
+session-owned OpenSSH `ssh-agent`. The fallback agent ends with the session.
+Keyring unlock at login depends on the display manager's PAM configuration;
+starting a keyring here may prompt for its password when first used.
 
 ## Desktop behavior
 
