@@ -310,7 +310,7 @@ int main(int argc, char** argv) {
           startup.tick();
           xsettings.tick();
           xcb_flush(connection);
-          if (poll(&display, 1, 100) < 0 && errno != EINTR) break;
+          if (poll(&display, 1, shell.menu_animation_active() ? 16 : 100) < 0 && errno != EINTR) break;
         }
         if (xcb_connection_has_error(connection)) result = 1;
       }

@@ -34,6 +34,7 @@ public:
   [[nodiscard]] bool initialize();
   [[nodiscard]] bool handle(xcb_generic_event_t* event);
   void tick();
+  [[nodiscard]] bool menu_animation_active() const;
   void set_tasks(std::vector<Task> tasks);
   void set_screen_size(std::uint16_t width, std::uint16_t height);
   void refresh_display_layout();

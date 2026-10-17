@@ -559,6 +559,16 @@ struct Shell::Impl {
   cairo_surface_t* logo_surface{};
   cairo_surface_t* exit_logo_surface{};
   std::string icon_theme{selected_icon_theme()};
+  struct MenuSurface {
+    xcb_pixmap_t pixmap{};
+    int height{};
+    int visible_height{};
+    bool revealing{};
+    std::chrono::steady_clock::time_point started{};
+  };
+  std::unordered_map<xcb_window_t, MenuSurface> menu_surfaces;
+  int pending_category_row{-1};
+  std::chrono::steady_clock::time_point category_deadline{};
   std::vector<MenuEntry> menu_entries;
   std::vector<MenuEntry> submenu_entries;
   std::vector<MenuEntry> app_menu_entries;
@@ -688,6 +698,8 @@ struct Shell::Impl {
     if (exit_logo_surface) cairo_surface_destroy(exit_logo_surface);
     for (auto& [window, monitor] : monitors) g_object_unref(monitor);
     for (auto& [window, folder] : folders) xcb_destroy_window(connection, window);
+    for (const auto& [window, cache] : menu_surfaces)
+      if (cache.pixmap) xcb_free_pixmap(connection, cache.pixmap);
     if (menu) xcb_destroy_window(connection, menu);
     if (submenu) xcb_destroy_window(connection, submenu);
     if (app_menu) xcb_destroy_window(connection, app_menu);
@@ -1493,10 +1505,91 @@ struct Shell::Impl {
     });
   }
 
-  void draw_menu_window(xcb_window_t window, const std::vector<MenuEntry>& entries, int hover) {
+  void paint_menu(xcb_window_t window, int h, bool present, auto&& draw) {
+    if (!visual || !window) return;
+    const auto pixmap = xcb_generate_id(connection);
+    auto* error = xcb_request_check(connection, xcb_create_pixmap_checked(
+      connection, screen->root_depth, pixmap, window,
+      scaled_pixel(scale, menu_width), scaled_pixel(scale, h)));
+    if (error) { std::free(error); return; }
+    auto* surface = cairo_xcb_surface_create(connection, pixmap, visual,
+      scaled_pixel(scale, menu_width), scaled_pixel(scale, h));
+    auto* cr = cairo_create(surface);
+    cairo_set_source_rgb(cr, config.surface_color[0], config.surface_color[1], config.surface_color[2]);
+    cairo_paint(cr);
+    cairo_scale(cr, scale, scale);
+    draw(cr);
+    const auto status = cairo_status(cr);
+    cairo_destroy(cr);
+    cairo_surface_flush(surface);
+    const bool complete = status == CAIRO_STATUS_SUCCESS &&
+                          cairo_surface_status(surface) == CAIRO_STATUS_SUCCESS;
+    cairo_surface_destroy(surface);
+    if (!complete) { xcb_free_pixmap(connection, pixmap); return; }
+    auto& cache = menu_surfaces[window];
+    xcb_change_window_attributes(connection, window, XCB_CW_BACK_PIXMAP, &pixmap);
+    if (present) xcb_clear_area(connection, false, window, 0, 0, 0, 0);
+    if (cache.pixmap) xcb_free_pixmap(connection, cache.pixmap);
+    cache.pixmap = pixmap;
+    cache.height = h;
+    if (present) xcb_flush(connection);
+  }
+
+  void destroy_menu_window(xcb_window_t& window) {
+    if (window) {
+      xcb_destroy_window(connection, window);
+      if (auto it = menu_surfaces.find(window); it != menu_surfaces.end()) {
+        if (it->second.pixmap) xcb_free_pixmap(connection, it->second.pixmap);
+        menu_surfaces.erase(it);
+      }
+      window = 0;
+    }
+  }
+
+  void position_menu(xcb_window_t window, int x, int y, bool reveal) {
+    auto it = menu_surfaces.find(window);
+    if (it == menu_surfaces.end()) return;
+    auto& cache = it->second;
+    cache.revealing = reveal;
+    cache.started = std::chrono::steady_clock::now();
+    cache.visible_height = reveal ? std::min(8, cache.height) : cache.height;
+    const std::uint32_t geometry[]{
+      static_cast<std::uint32_t>(std::lround(x * scale)),
+      static_cast<std::uint32_t>(std::lround(y * scale)),
+      static_cast<std::uint32_t>(scaled_pixel(scale, menu_width)),
+      static_cast<std::uint32_t>(scaled_pixel(scale, cache.visible_height))};
+    xcb_configure_window(connection, window,
+      XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT,
+      geometry);
+    xcb_clear_area(connection, false, window, 0, 0, 0, 0);
+  }
+
+  void advance_menus(std::chrono::steady_clock::time_point now) {
+    if (pending_category_row >= 0 && now >= category_deadline) {
+      const int row = std::exchange(pending_category_row, -1);
+      if (submenu && row == submenu_hover && static_cast<std::size_t>(row) < submenu_entries.size() &&
+          submenu_entries[row].action == MenuAction::show_category)
+        show_category(submenu_entries[row].index, 0, row);
+    }
+    for (auto& [window, cache] : menu_surfaces) {
+      if (!cache.revealing) continue;
+      const double progress = std::clamp(std::chrono::duration<double, std::milli>(now - cache.started).count() / 120.0, 0.0, 1.0);
+      const double eased = 1.0 - (1.0 - progress) * (1.0 - progress);
+      const int visible = std::clamp(static_cast<int>(std::lround(8 + (cache.height - 8) * eased)), 1, cache.height);
+      if (visible != cache.visible_height) {
+        const std::uint32_t size[]{static_cast<std::uint32_t>(scaled_pixel(scale, visible))};
+        xcb_configure_window(connection, window, XCB_CONFIG_WINDOW_HEIGHT, size);
+        cache.visible_height = visible;
+      }
+      if (progress >= 1.0) cache.revealing = false;
+    }
+    xcb_flush(connection);
+  }
+
+  void draw_menu_window(xcb_window_t window, const std::vector<MenuEntry>& entries, int hover, bool present = true) {
     if (!window) return;
     const int h = static_cast<int>(entries.size()) * row_height + 8;
-    paint(window, menu_width, h, [&](cairo_t* cr) {
+    paint_menu(window, h, present, [&](cairo_t* cr) {
       themed_fill(cr, config.surface_color, .79, .79, .79, 0, 0, menu_width, h);
       bevel(cr, 0, 0, menu_width, h);
       themed_fill(cr, config.button_color, .70, .70, .70, 4, 4, 25, h - 8);
@@ -1545,8 +1638,8 @@ struct Shell::Impl {
   }
 
   void draw_menu() { draw_menu_window(menu, menu_entries, menu_hover); }
-  void draw_submenu() { draw_menu_window(submenu, submenu_entries, submenu_hover); }
-  void draw_app_menu() { draw_menu_window(app_menu, app_menu_entries, app_menu_hover); }
+  void draw_submenu(bool present = true) { draw_menu_window(submenu, submenu_entries, submenu_hover, present); }
+  void draw_app_menu(bool present = true) { draw_menu_window(app_menu, app_menu_entries, app_menu_hover, present); }
 
   void show_notice(std::string message) {
     notice_text = std::move(message);
@@ -1931,23 +2024,21 @@ struct Shell::Impl {
 
   void close_submenu() {
     close_app_menu();
-    if (submenu) xcb_destroy_window(connection, submenu);
-    submenu = 0;
+    pending_category_row = -1;
+    destroy_menu_window(submenu);
     submenu_entries.clear();
     submenu_hover = -1;
   }
 
   void close_app_menu() {
-    if (app_menu) xcb_destroy_window(connection, app_menu);
-    app_menu = 0;
+    destroy_menu_window(app_menu);
     app_menu_entries.clear();
     app_menu_hover = -1;
   }
 
   void close_menu() {
     close_submenu();
-    if (menu) xcb_destroy_window(connection, menu);
-    menu = 0;
+    destroy_menu_window(menu);
     menu_entries.clear();
     menu_hover = -1;
     xcb_flush(connection);
@@ -1963,15 +2054,18 @@ struct Shell::Impl {
     menu_x = std::clamp(x, area.x, std::max(area.x, area.x + area.width - menu_width));
     menu_y = std::clamp(y, area.y, std::max(area.y, area.y + area.height - h));
     menu = create_window(menu_x, menu_y, menu_width, h);
+    draw_menu();
     xcb_map_window(connection, menu);
     raise_panel();
-    draw_menu();
   }
 
   void show_submenu(std::vector<MenuEntry> entries, int row) {
-    close_submenu();
+    const bool reveal = !submenu;
+    close_app_menu();
+    pending_category_row = -1;
+    submenu_hover = -1;
     submenu_entries = std::move(entries);
-    if (submenu_entries.empty()) return;
+    if (submenu_entries.empty()) { close_submenu(); return; }
     const int h = static_cast<int>(submenu_entries.size()) * row_height + 8;
     const int right = menu_x + menu_width - 1;
     const auto area = area_at(menu_x, menu_y);
@@ -1979,16 +2073,18 @@ struct Shell::Impl {
       std::max(area.x, menu_x - menu_width + 1);
     submenu_y = std::clamp(menu_y + 4 + row * row_height, area.y,
                             std::max(area.y, area.y + area.height - h));
-    submenu = create_window(submenu_x, submenu_y, menu_width, h);
+    if (!submenu) submenu = create_window(submenu_x, submenu_y, menu_width, h, XCB_EVENT_MASK_LEAVE_WINDOW);
+    draw_submenu(false);
+    position_menu(submenu, submenu_x, submenu_y, reveal);
     xcb_map_window(connection, submenu);
     raise_panel();
-    draw_submenu();
   }
 
   void show_app_menu(std::vector<MenuEntry> entries, int row) {
-    close_app_menu();
+    const bool reveal = !app_menu;
+    app_menu_hover = -1;
     app_menu_entries = std::move(entries);
-    if (app_menu_entries.empty()) return;
+    if (app_menu_entries.empty()) { close_app_menu(); return; }
     const int h = static_cast<int>(app_menu_entries.size()) * row_height + 8;
     const int right = submenu_x + menu_width - 1;
     const auto area = area_at(submenu_x, submenu_y);
@@ -1996,10 +2092,11 @@ struct Shell::Impl {
       std::max(area.x, submenu_x - menu_width + 1);
     const int y = std::clamp(submenu_y + 4 + row * row_height, area.y,
                              std::max(area.y, area.y + area.height - h));
-    app_menu = create_window(x, y, menu_width, h);
+    if (!app_menu) app_menu = create_window(x, y, menu_width, h);
+    draw_app_menu(false);
+    position_menu(app_menu, x, y, reveal);
     xcb_map_window(connection, app_menu);
     raise_panel();
-    draw_app_menu();
   }
 
   void show_launcher() {
@@ -2061,7 +2158,9 @@ struct Shell::Impl {
   }
 
   void show_category(std::size_t category, std::size_t page = 0, int row = -1) {
+    pending_category_row = -1;
     if (category >= app_categories.size()) return;
+    if (app_menu && selected_category == category && app_page == page) return;
     selected_category = category;
     if (row >= 0) category_row = row;
     const auto& indices = app_categories[category].apps;
@@ -2478,6 +2577,7 @@ struct Shell::Impl {
       return;
     }
     if (event->event == menu || event->event == submenu || event->event == app_menu) {
+      pending_category_row = -1;
       const auto& entries = event->event == menu ? menu_entries :
                             event->event == submenu ? submenu_entries : app_menu_entries;
       const int index = (event->event_y - 4) / row_height;
@@ -2792,13 +2892,19 @@ struct Shell::Impl {
         if (event->event == menu) draw_menu();
         else if (event->event == submenu) {
           draw_submenu();
-          if (next >= 0 && entries[next].action == MenuAction::show_category)
-            show_category(entries[next].index, 0, next);
-          else close_app_menu();
+          if (next < 0 || entries[next].action != MenuAction::show_category) close_app_menu();
         } else draw_app_menu();
       }
+      if (event->event == submenu && next >= 0 && entries[next].action == MenuAction::show_category &&
+          (!app_menu || selected_category != entries[next].index)) {
+        if (pending_category_row != next) {
+          pending_category_row = next;
+          category_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(120);
+        }
+      } else pending_category_row = -1;
       return;
     }
+    pending_category_row = -1;
     if (scroll_drag_window) {
       auto it = folders.find(scroll_drag_window);
       if (it == folders.end()) return;
@@ -2916,6 +3022,7 @@ bool Shell::handle(xcb_generic_event_t* event) {
     case XCB_BUTTON_PRESS: window = reinterpret_cast<xcb_button_press_event_t*>(event)->event; break;
     case XCB_BUTTON_RELEASE: window = reinterpret_cast<xcb_button_release_event_t*>(event)->event; break;
     case XCB_MOTION_NOTIFY: window = reinterpret_cast<xcb_motion_notify_event_t*>(event)->event; break;
+    case XCB_LEAVE_NOTIFY: window = reinterpret_cast<xcb_leave_notify_event_t*>(event)->event; break;
     case XCB_KEY_PRESS: window = reinterpret_cast<xcb_key_press_event_t*>(event)->event; break;
     case XCB_FOCUS_IN:
     case XCB_FOCUS_OUT: window = reinterpret_cast<xcb_focus_in_event_t*>(event)->event; break;
@@ -2937,15 +3044,16 @@ bool Shell::handle(xcb_generic_event_t* event) {
     else if (window == p.desktop) {
       if (!p.desktop_pixmap) p.draw_desktop();
     }
-    else if (window == p.menu) p.draw_menu();
-    else if (window == p.submenu) p.draw_submenu();
-    else if (window == p.app_menu) p.draw_app_menu();
+    // Xorg restores complete menu background pixmaps, including newly revealed rows.
+    else if (window == p.menu || window == p.submenu || window == p.app_menu) {}
     else if (window == p.notice) p.draw_notice();
     else if (window == p.exit_dialog) p.draw_exit_dialog();
     else if (p.icon_chooser && window == p.icon_chooser->window) p.draw_icon_chooser();
     else if (p.open_with_dialog && window == p.open_with_dialog->window) p.draw_open_with_dialog();
     else if (p.properties && window == p.properties->window) p.draw_properties();
     else if (auto it = p.folders.find(window); it != p.folders.end()) p.draw_folder(it->second);
+  } else if (type == XCB_LEAVE_NOTIFY && window == p.submenu) {
+    p.pending_category_row = -1;
   } else if (type == XCB_BUTTON_PRESS) {
     auto press = *reinterpret_cast<xcb_button_press_event_t*>(event);
     press.event_x = static_cast<std::int16_t>(std::lround(press.event_x / p.scale));
@@ -2984,6 +3092,7 @@ void Shell::tick() {
   const auto now = clock_text(p.config.clock_format);
   if (now != p.last_clock) { p.last_clock = now; redraw = true; }
   const auto steady_now = std::chrono::steady_clock::now();
+  p.advance_menus(steady_now);
   if (steady_now - p.last_volume_poll >= std::chrono::seconds(1)) {
     p.last_volume_poll = steady_now;
     auto current = p.volume.read();
@@ -2991,6 +3100,11 @@ void Shell::tick() {
     if (state != p.volume_state) { p.volume_state = state; redraw = true; }
   }
   if (redraw) p.draw_panel();
+}
+
+bool Shell::menu_animation_active() const {
+  return impl_->pending_category_row >= 0 || std::ranges::any_of(impl_->menu_surfaces,
+    [](const auto& entry) { return entry.second.revealing; });
 }
 
 void Shell::set_tasks(std::vector<Task> tasks) {

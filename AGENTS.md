@@ -31,7 +31,10 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   color fill. Release replaced pixmaps and do not repaint the desktop on every
   Expose when its background cache is valid. Programs reads freedesktop `.menu` layouts through Garcon,
   then falls back to desktop entry Categories; preserve the earlier menu levels
-  while browsing a category.
+  while browsing a category. Render launcher menus fully offscreen before
+  mapping them. Keep submenu animation nonblocking, cancel pending hover
+  actions and animations on close, and update the main-loop polling interval
+  only while a menu transition is active.
   Built-in desktop folders use XDG user directory paths; Documents and Pictures
   are visible by default, while Music, Videos, and Public Share have config
   switches. Hidden shortcut metadata remains in the workspace database.
@@ -139,6 +142,8 @@ malformed-file recovery in an isolated session.
 For desktop repaint changes, run `python3 tests/desktop_repaint_smoke.py`;
 it uncovers wallpaper and a live-updated solid background while the WM is
 suspended, verifying that Xorg restores the complete cached desktop.
+For launcher menu changes, run `python3 tests/menu_smoke.py`; it checks
+category navigation, popup reuse, application launch, and dismissal during reveal.
 Before pushing, use `.agents/skills/pre-push-review/SKILL.md` to run cppcheck
 and review the outgoing diff for basic security issues.
 
