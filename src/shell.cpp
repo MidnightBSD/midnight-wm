@@ -584,7 +584,7 @@ struct Shell::Impl {
   int submenu_hover{-1};
   int app_menu_hover{-1};
   int selected_desktop{-1};
-  int desktop_scroll_rows{};
+  int desktop_scroll_columns{};
   std::optional<Item> selected_item;
   std::filesystem::path clipboard_path;
   bool clipboard_cut{};
@@ -1201,7 +1201,7 @@ struct Shell::Impl {
     file_content_types.clear();
     file_icon_cache.clear();
     desktop_items = list_items(Store::desktop_path(), true);
-    desktop_scroll_rows = std::clamp(desktop_scroll_rows, 0, desktop_max_scroll());
+    desktop_scroll_columns = std::clamp(desktop_scroll_columns, 0, desktop_max_scroll());
     for (auto& [window, folder] : folders) {
       folder.items = list_items(folder.path, false);
       sort_folder(folder);
@@ -1412,9 +1412,14 @@ struct Shell::Impl {
   void draw_items(cairo_t* cr, const std::vector<Item>& items, int start_y, int width_px,
                   int selected, bool on_desktop, int scroll_rows = 0) {
     const int cols = std::max(1, width_px / icon_width);
-    for (std::size_t i = static_cast<std::size_t>(scroll_rows * cols); i < items.size(); ++i) {
-      const int x = 12 + static_cast<int>(i % cols) * icon_width;
-      const int y = start_y + (static_cast<int>(i / cols) - scroll_rows) * icon_height;
+    const int rows = on_desktop ? desktop_visible_rows() : 1;
+    const auto first = static_cast<std::size_t>(scroll_rows * (on_desktop ? rows : cols));
+    const auto end = on_desktop ? std::min(items.size(), first + static_cast<std::size_t>(rows * cols)) : items.size();
+    for (std::size_t i = first; i < end; ++i) {
+      const int column = on_desktop ? static_cast<int>(i / rows) - scroll_rows : static_cast<int>(i % cols);
+      const int row = on_desktop ? static_cast<int>(i % rows) : static_cast<int>(i / cols) - scroll_rows;
+      const int x = 12 + column * icon_width;
+      const int y = start_y + row * icon_height;
       if (selected == static_cast<int>(i))
         fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
              x, y, 78, 74);
@@ -1441,7 +1446,7 @@ struct Shell::Impl {
       if (!wallpaper.load(config.desktop_image, target_width, target_height))
         g_warning("Could not load desktop image: %s", config.desktop_image.c_str());
     }
-    desktop_scroll_rows = std::clamp(desktop_scroll_rows, 0, desktop_max_scroll());
+    desktop_scroll_columns = std::clamp(desktop_scroll_columns, 0, desktop_max_scroll());
     paint_desktop([&](cairo_t* cr) {
       fill(cr, config.desktop_color[0], config.desktop_color[1], config.desktop_color[2], 0, 0, width, height);
       for (const auto& monitor : display_monitors)
@@ -1453,7 +1458,7 @@ struct Shell::Impl {
       cairo_rectangle(cr, area.x, area.y + panel_height, desktop_width, desktop_height);
       cairo_clip(cr);
       cairo_translate(cr, area.x, area.y + panel_height);
-      draw_items(cr, desktop_items, 13, desktop_width, selected_desktop, true, desktop_scroll_rows);
+      draw_items(cr, desktop_items, 13, desktop_width, selected_desktop, true, desktop_scroll_columns);
       cairo_restore(cr);
     });
   }
@@ -1462,10 +1467,14 @@ struct Shell::Impl {
     return std::max(1, (desktop_height - 13) / icon_height);
   }
 
+  int desktop_visible_columns() const {
+    return std::max(1, desktop_width / icon_width);
+  }
+
   int desktop_max_scroll() const {
-    const int columns = std::max(1, desktop_width / icon_width);
-    const int rows = static_cast<int>((desktop_items.size() + columns - 1) / columns);
-    return std::max(0, rows - desktop_visible_rows());
+    const int rows = desktop_visible_rows();
+    const int columns = static_cast<int>((desktop_items.size() + rows - 1) / rows);
+    return std::max(0, columns - desktop_visible_columns());
   }
 
   void draw_folder(Folder& folder) {
@@ -2469,13 +2478,15 @@ struct Shell::Impl {
     }
   }
 
-  int item_index(int x, int y, int start_y, int width_px, std::size_t count, int scroll_rows = 0) const {
+  int item_index(int x, int y, int start_y, int width_px, std::size_t count, int scroll_rows = 0, bool on_desktop = false) const {
     if (x < 12 || y < start_y) return -1;
     const int cols = std::max(1, width_px / icon_width);
     const int col = (x - 12) / icon_width;
-    const int row = (y - start_y) / icon_height + scroll_rows;
+    const int row = (y - start_y) / icon_height;
     if (col >= cols || (x - 12) % icon_width >= 78 || (y - start_y) % icon_height >= 78) return -1;
-    const int index = row * cols + col;
+    if (on_desktop && row >= desktop_visible_rows()) return -1;
+    const int index = on_desktop ? (col + scroll_rows) * desktop_visible_rows() + row :
+                                  (row + scroll_rows) * cols + col;
     return index >= 0 && static_cast<std::size_t>(index) < count ? index : -1;
   }
 
@@ -2714,7 +2725,7 @@ struct Shell::Impl {
     const bool on_desktop = event->event == desktop;
     if (!on_desktop && !folder) return;
     if (on_desktop && (event->detail == 4 || event->detail == 5)) {
-      desktop_scroll_rows = std::clamp(desktop_scroll_rows + (event->detail == 5 ? 1 : -1),
+      desktop_scroll_columns = std::clamp(desktop_scroll_columns + (event->detail == 5 ? 1 : -1),
                                        0, desktop_max_scroll());
       draw_desktop();
       return;
@@ -2728,7 +2739,7 @@ struct Shell::Impl {
     const int index = on_desktop && (icon_x < 0 || icon_x >= desktop_width ||
                                    icon_y < 0 || icon_y >= desktop_height) ? -1 :
       item_index(icon_x, icon_y, start_y, width_px, items.size(),
-                 folder ? folder->scroll_rows : desktop_scroll_rows);
+                 folder ? folder->scroll_rows : desktop_scroll_columns, on_desktop);
     if (event->detail == 3) {
       show_context(event->event, event->root_x, event->root_y, index >= 0 ? &items[index] : nullptr);
       return;
@@ -2835,10 +2846,10 @@ struct Shell::Impl {
     const auto sym = key_symbols ? xcb_key_symbols_get_keysym(key_symbols, event->detail, 0) : 0;
     if (sym == XK_Escape) { close_menu(); return; }
     if (on_desktop && (sym == XK_Page_Up || sym == XK_Page_Down || sym == XK_Home || sym == XK_End)) {
-      if (sym == XK_Home) desktop_scroll_rows = 0;
-      else if (sym == XK_End) desktop_scroll_rows = desktop_max_scroll();
-      else desktop_scroll_rows = std::clamp(desktop_scroll_rows +
-        (sym == XK_Page_Down ? desktop_visible_rows() : -desktop_visible_rows()), 0,
+      if (sym == XK_Home) desktop_scroll_columns = 0;
+      else if (sym == XK_End) desktop_scroll_columns = desktop_max_scroll();
+      else desktop_scroll_columns = std::clamp(desktop_scroll_columns +
+        (sym == XK_Page_Down ? desktop_visible_columns() : -desktop_visible_columns()), 0,
         desktop_max_scroll());
       draw_desktop();
       return;
@@ -3165,7 +3176,7 @@ void Shell::apply_config(ThemeConfig config) {
   p.desktop_items = p.list_items(Store::desktop_path(), true);
   if (shortcuts_changed) p.selected_desktop = -1;
   refresh_display_layout();
-  p.desktop_scroll_rows = std::clamp(p.desktop_scroll_rows, 0, p.desktop_max_scroll());
+  p.desktop_scroll_columns = std::clamp(p.desktop_scroll_columns, 0, p.desktop_max_scroll());
   p.draw_desktop();
 }
 

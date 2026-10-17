@@ -35,6 +35,9 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   mapping them. Keep submenu animation nonblocking, cancel pending hover
   actions and animations on close, and update the main-loop polling interval
   only while a menu transition is active.
+  Desktop icons fill top to bottom from the upper left, then continue in the
+  next column. Overflow scrolls by columns; keep drawing and hit testing aligned
+  after monitor or scale changes. Folder windows retain their row-first layout.
   Built-in desktop folders use XDG user directory paths; Documents and Pictures
   are visible by default, while Music, Videos, and Public Share have config
   switches. Hidden shortcut metadata remains in the workspace database.
