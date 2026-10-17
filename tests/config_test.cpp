@@ -12,6 +12,8 @@ int main() {
   const std::filesystem::path root(temporary);
   g_free(temporary);
   g_setenv("XDG_CONFIG_HOME", root.c_str(), true);
+  g_setenv("XDG_DATA_HOME", (root / "data").c_str(), true);
+  g_setenv("XDG_DATA_DIRS", (root / "system").c_str(), true);
   std::filesystem::create_directories(root / "midnight-wm");
   const auto write = [&](const char* content) {
     std::ofstream(root / "midnight-wm/config.ini") << content;
@@ -45,6 +47,21 @@ int main() {
   const auto invalid = midnight::load_config();
   check(!invalid.dark_mode && invalid.desktop_color == defaults.desktop_color &&
         invalid.ui_font == defaults.ui_font, "invalid values must retain defaults");
+  check(defaults.desktop_image.empty() && defaults.desktop_image_mode == "fill",
+        "wallpapers must be disabled by default");
+  std::filesystem::create_directories(root / "system/backgrounds/midnightbsd");
+  std::ofstream(root / "system/backgrounds/midnightbsd/example.png") << "fixture";
+  write("[Workspace]\ndesktop_image=example.png\ndesktop_image_mode=fit\n");
+  auto image_config = midnight::load_config();
+  check(image_config.desktop_image == (root / "system/backgrounds/midnightbsd/example.png").string() &&
+        image_config.desktop_image_mode == "fit", "installed background search path must resolve filenames");
+  std::ofstream(root / "midnight-wm/example.png") << "local fixture";
+  check(midnight::load_config().desktop_image == (root / "midnight-wm/example.png").string(),
+        "config-relative image must take priority over installed images");
+  write("[Workspace]\ndesktop_image=~/Pictures/background.svg\ndesktop_image_mode=invalid\n");
+  image_config = midnight::load_config();
+  check(image_config.desktop_image == (std::filesystem::path(g_get_home_dir()) / "Pictures/background.svg").string() &&
+        image_config.desktop_image_mode == "fill", "home expansion and invalid mode fallback");
   std::filesystem::remove_all(root);
   return passed ? 0 : 1;
 }

@@ -6,6 +6,7 @@
 #include "desktop_launcher.hpp"
 #include "display_scale.hpp"
 #include "display_monitors.hpp"
+#include "wallpaper.hpp"
 #include "model.hpp"
 #include "recent_files.hpp"
 #include "store.hpp"
@@ -531,6 +532,8 @@ struct Shell::Impl {
   std::uint16_t width{}, height{};
   std::uint16_t physical_width{}, physical_height{};
   double scale{1.0};
+  Wallpaper wallpaper;
+  int wallpaper_width{}, wallpaper_height{};
   std::vector<DisplayMonitor> display_monitors;
   DisplayMonitor primary_monitor{};
   int panel_width{};
@@ -1373,9 +1376,25 @@ struct Shell::Impl {
   }
 
   void draw_desktop() {
+    int target_width = 1, target_height = 1;
+    for (const auto& monitor : display_monitors) {
+      target_width = std::max(target_width, monitor.width);
+      target_height = std::max(target_height, monitor.height);
+    }
+    if (!config.desktop_image.empty() &&
+        (target_width != wallpaper_width || target_height != wallpaper_height)) {
+      wallpaper_width = target_width;
+      wallpaper_height = target_height;
+      if (!wallpaper.load(config.desktop_image, target_width, target_height))
+        g_warning("Could not load desktop image: %s", config.desktop_image.c_str());
+    }
     desktop_scroll_rows = std::clamp(desktop_scroll_rows, 0, desktop_max_scroll());
     paint(desktop, width, height, [&](cairo_t* cr) {
       fill(cr, config.desktop_color[0], config.desktop_color[1], config.desktop_color[2], 0, 0, width, height);
+      for (const auto& monitor : display_monitors)
+        wallpaper.paint(cr, monitor.x / scale, monitor.y / scale,
+                         monitor.width / scale, monitor.height / scale,
+                         config.desktop_image_mode == "fill");
       const auto area = primary_area();
       cairo_save(cr);
       cairo_rectangle(cr, area.x, area.y + panel_height, desktop_width, desktop_height);

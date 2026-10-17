@@ -11,6 +11,8 @@ struct ThemeConfig {
   bool dark_mode{};
   std::string ui_font{"Sans"};
   std::string title_font{"Sans Bold"};
+  std::string desktop_image;
+  std::string desktop_image_mode{"fill"};
   std::array<double, 3> text_color{.04, .04, .04};
   std::array<double, 3> surface_color{.75, .75, .75};
   std::array<double, 3> field_color{.96, .96, .92};

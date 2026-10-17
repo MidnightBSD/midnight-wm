@@ -7,6 +7,11 @@
 #include <optional>
 #include <string_view>
 #include <utility>
+#include <vector>
+
+#ifndef MIDNIGHT_WM_BACKGROUND_DIR
+#define MIDNIGHT_WM_BACKGROUND_DIR "/usr/local/share/backgrounds/midnightbsd"
+#endif
 
 namespace midnight {
 namespace {
@@ -45,6 +50,32 @@ ThemeConfig load_config() {
   };
   if (auto value = read("panel_label"); !value.empty()) config.panel_label = std::move(value);
   if (auto value = read("clock_format"); !value.empty()) config.clock_format = std::move(value);
+  if (auto value = read("desktop_image"); !value.empty()) {
+    std::filesystem::path image(value);
+    if (value.starts_with("~/")) image = std::filesystem::path(g_get_home_dir()) / value.substr(2);
+    if (image.is_relative()) {
+      const auto local = path.parent_path() / image;
+      std::error_code error;
+      if (std::filesystem::is_regular_file(local, error)) image = local;
+      else {
+        std::vector<std::filesystem::path> directories{
+          std::filesystem::path(g_get_user_data_dir()) / "backgrounds"};
+        for (const char* const* data = g_get_system_data_dirs(); *data; ++data) {
+          directories.emplace_back(std::filesystem::path(*data) / "backgrounds/midnightbsd");
+          directories.emplace_back(std::filesystem::path(*data) / "backgrounds");
+        }
+        directories.emplace_back(MIDNIGHT_WM_BACKGROUND_DIR);
+        image = local;
+        for (const auto& directory : directories) {
+          const auto candidate = directory / value;
+          if (std::filesystem::is_regular_file(candidate, error)) { image = candidate; break; }
+        }
+      }
+    }
+    config.desktop_image = image.lexically_normal().string();
+  }
+  if (auto value = read("desktop_image_mode"); value == "fit" || value == "fill")
+    config.desktop_image_mode = std::move(value);
   config.dark_mode = g_key_file_get_boolean(keyfile, "Workspace", "dark_mode", nullptr);
   if (config.dark_mode) {
     config.panel_color = {.18, .18, .21};

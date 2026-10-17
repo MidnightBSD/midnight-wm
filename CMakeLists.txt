@@ -10,7 +10,7 @@ pkg_check_modules(DEPS REQUIRED IMPORTED_TARGET
   xcb xcb-icccm xcb-keysyms xcb-xfixes xcb-randr cairo-xcb pangocairo
   gio-2.0 gio-unix-2.0 gdk-pixbuf-2.0 garcon-1 sqlite3)
 
-add_library(midnight_core src/store.cpp src/model.cpp src/config.cpp src/audio.cpp
+add_library(midnight_core src/store.cpp src/model.cpp src/config.cpp src/audio.cpp src/wallpaper.cpp
   src/desktop_launcher.cpp src/thumbnail.cpp src/recent_files.cpp
   src/startup_notification.cpp src/browser_launcher.cpp src/terminal_launcher.cpp)
 target_include_directories(midnight_core PUBLIC src)
@@ -25,6 +25,8 @@ target_link_libraries(midnight-wm PRIVATE midnight_core)
 target_compile_options(midnight-wm PRIVATE -Wall -Wextra -Wpedantic)
 
 include(GNUInstallDirs)
+target_compile_definitions(midnight_core PRIVATE
+  MIDNIGHT_WM_BACKGROUND_DIR="${CMAKE_INSTALL_FULL_DATADIR}/backgrounds/midnightbsd")
 target_compile_definitions(midnight-wm PRIVATE
   MIDNIGHT_WM_DATA_DIR="${CMAKE_INSTALL_FULL_DATADIR}/midnight-wm"
   MIDNIGHT_WM_VERSION="${PROJECT_VERSION}")
@@ -35,6 +37,9 @@ install(FILES data/config.ini data/MidnightBSDLogo.svg data/MidnightBSDLogo22x22
 install(FILES README.md LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/midnight-wm)
 
 enable_testing()
+add_executable(wallpaper_test tests/wallpaper_test.cpp)
+target_link_libraries(wallpaper_test PRIVATE midnight_core)
+add_test(NAME wallpaper_test COMMAND wallpaper_test)
 add_executable(config_test tests/config_test.cpp)
 target_link_libraries(config_test PRIVATE midnight_core)
 add_test(NAME config_test COMMAND config_test)

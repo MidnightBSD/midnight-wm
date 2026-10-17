@@ -41,14 +41,26 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   callback asks the main loop to end the session.
 - `data/config.ini` documents the `[Workspace]` appearance settings. `dark_mode`
   defaults to light and applies the dark preset to shell controls, frames,
-  notifications, D-Bus menus, and shared UI scale. `ui_font` and `title_font`
+  notifications, and D-Bus menus. `ui_font` and `title_font`
   accept Pango family/style descriptions with an optional 6–32 point size;
   omitting the size preserves each widget's default. `desktop_color` remains
-  the `#RRGGBB` background in either mode; optional `panel_color` and
-  `accent_color` override their defaults. These settings are read from
+  the `#RRGGBB` background in either mode. Optional `desktop_image` sets a
+  wallpaper path (absolute or `~/...`; relative paths resolve against the
+  config file directory first, then user XDG data `backgrounds`, system XDG
+  data `backgrounds/midnightbsd` and `backgrounds`, and the installation
+  prefix `share/backgrounds/midnightbsd`). The optional MidnightBSD backgrounds
+  port installs into `/usr/local/share/backgrounds/midnightbsd`; preserve this
+  default search location. `desktop_image_mode` selects `fill` (default,
+  centered crop) or `fit` (whole image centered with letterboxing). Supported
+  formats are PNG, JPEG, GIF, and SVG through GdkPixbuf; GIF displays its first
+  frame. The image repeats independently on each monitor. `desktop_color` shows
+  when the image is unset or unreadable and behind transparent or letterboxed
+  areas. Optional `panel_color` and `accent_color` override their defaults.
+  These settings are read from
   `$XDG_CONFIG_HOME/midnight-wm/config.ini` (normally
-  `~/.config/midnight-wm/config.ini`) and require a session restart. They do
-  not change controls drawn by application toolkits.
+  `~/.config/midnight-wm/config.ini`) and require a session restart. An empty
+  `desktop_image` keeps the current appearance. These settings do not change
+  controls drawn by application toolkits.
 - `src/clipboard.*` implements the X11 `CLIPBOARD` selection and persistence.
 - `src/dnd.*` implements XDND file drag and drop. A drop reports completion
   through its callback after the file operation finishes.

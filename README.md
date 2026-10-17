@@ -7,6 +7,8 @@ MidnightBSD. The current target is MidnightBSD 4.2 with Clang 19 and C++23.
 
 The build needs CMake, pkg-config, XCB (including icccm, keysyms, XFixes, and
 RandR), Cairo, Pango, GLib/GIO, GdkPixbuf, Garcon, and SQLite 3.
+Install the librsvg GdkPixbuf loader for SVG wallpapers; the mport includes
+this runtime dependency. PNG, JPEG, and GIF loaders must also be available.
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -144,7 +146,21 @@ size keeps each UI element's default size. The dark preset does not change
 controls drawn by application toolkits. `desktop_color` remains a `#RRGGBB`
 desktop background in either mode; `panel_color` optionally overrides the
 panel color, and `accent_color` sets the accent color. The shared `ui_scale`
-override is also configured here. Restart the session after editing the file.
+override is also configured here. Set `desktop_image` to an absolute path,
+`~/...` path, or path relative to this config file to use a wallpaper.
+If a relative path is not found there, lookup searches the user XDG data
+`backgrounds` directory, then system XDG data `backgrounds/midnightbsd` and
+`backgrounds` directories, and the installation prefix
+`share/backgrounds/midnightbsd`. The optional `midnightbsd-backgrounds` port
+installs into `/usr/local/share/backgrounds/midnightbsd`, so a filename such
+as `desktop_image=mnbsd_bg_purple.png` works directly. PNG,
+JPEG, GIF, and SVG images are supported through GdkPixbuf; GIF uses its first
+frame. The wallpaper repeats independently on each monitor. `desktop_image_mode`
+can be `fill` (the default, centered crop) or `fit` (the whole image centered
+with `desktop_color` showing around it). `desktop_color` also appears if the
+wallpaper is unset or unreadable and behind transparent parts of an image.
+Leave `desktop_image` empty to keep the current appearance. Restart the session
+after editing the file.
 In the `[Desktop]` section,
 `show_documents` and `show_pictures` default to `true`; `show_music`,
 `show_videos`, and `show_public_share` default to `false`. Set any of these to

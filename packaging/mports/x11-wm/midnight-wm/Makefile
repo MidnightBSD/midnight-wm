@@ -17,7 +17,7 @@ LIB_DEPENDS=	libxcb-icccm.so:x11/xcb-util-wm \
 RUN_DEPENDS=	${LOCALBASE}/libexec/gvfsd-trash:filesystems/gvfs
 
 USES=		cmake:testing compiler:c++23-lang gnome localbase pkgconfig xorg
-USE_GNOME=	cairo glib20 pango gdkpixbuf
+USE_GNOME=	cairo glib20 pango gdkpixbuf librsvg2:run
 USE_XORG=	xcb
 
 .include <bsd.port.mk>
