@@ -29,6 +29,10 @@ namespace {
 constexpr int panel_height = 30;
 constexpr int volume_group_width = 102;
 constexpr int volume_clock_gap = 4;
+constexpr int task_start_x = 128;
+constexpr int task_button_width = 110;
+constexpr int task_step = 114;
+constexpr int task_overflow_width = 24;
 constexpr int row_height = 24;
 constexpr int icon_width = 90;
 constexpr int icon_height = 90;
@@ -53,6 +57,12 @@ struct FolderScroll {
   int track_y{}, track_height{};
   int thumb_y{}, thumb_height{};
   int visible_rows{}, max_scroll{};
+};
+
+struct TaskLayout {
+  int overflow_x{};
+  std::size_t visible{};
+  bool overflow{};
 };
 
 FolderScroll folder_scroll(const Folder& folder) {
@@ -97,8 +107,8 @@ enum class MenuAction { open_home, open_desktop, new_folder, paste, show_program
                         launch, next_apps, previous_apps,
                         open_item, copy, cut, create_shadow, create_template, properties, trash,
                         restore, delete_permanently, close_folder, exit_session, refresh_folder,
-                        sort_by_name, sort_by_type };
-struct MenuEntry { std::string label; MenuAction action; std::size_t index{}; };
+                        sort_by_name, sort_by_type, activate_task, next_tasks, previous_tasks };
+struct MenuEntry { std::string label; MenuAction action; std::size_t index{}; xcb_window_t window{}; };
 
 std::string basename(const std::filesystem::path& path) {
   auto name = path.filename().string();
@@ -301,6 +311,7 @@ struct Shell::Impl {
   std::vector<MenuEntry> menu_entries;
   std::vector<MenuEntry> submenu_entries;
   std::size_t app_page{};
+  std::size_t task_page{};
   xcb_window_t menu_owner{};
   int menu_x{}, menu_y{}, menu_width{250};
   int menu_hover{-1};
@@ -562,6 +573,8 @@ struct Shell::Impl {
   }
 
   void draw_panel() {
+    const auto all_tasks = panel_tasks();
+    const auto layout = task_layout(all_tasks.size());
     paint(panel, width, panel_height, [&](cairo_t* cr) {
       fill(cr, config.panel_color[0], config.panel_color[1], config.panel_color[2], 0, 0, width, panel_height);
       fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2], 0, 0, width, 3);
@@ -573,19 +586,21 @@ struct Shell::Impl {
       }
       text(cr, config.panel_label, logo_surface ? 31 : 13, 7,
            logo_surface ? 84 : 102, 11, false, true);
-      int x = 128;
       const int clock_x = std::max(140, static_cast<int>(width) - 105);
       const int volume_x = clock_x - volume_group_width - volume_clock_gap;
       const bool show_volume = volume_x >= 245;
-      const int task_limit = (show_volume ? volume_x : clock_x) - (transfers_in_progress ? 85 : 0);
       if (transfers_in_progress) text(cr, "Working…", (show_volume ? volume_x : clock_x) - 85, 8, 80, 11);
-      for (const auto& task : panel_tasks()) {
-        if (x + 110 > task_limit) break;
+      for (std::size_t i = 0; i < layout.visible; ++i) {
+        const auto& task = all_tasks[i];
+        const int x = task_start_x + static_cast<int>(i) * task_step;
         fill(cr, task.active ? .28 : .80, task.active ? .39 : .80,
-             task.active ? .63 : .80, x, 5, 110, 24);
-        bevel(cr, x, 5, 110, 24, task.active);
+             task.active ? .63 : .80, x, 5, task_button_width, 24);
+        bevel(cr, x, 5, task_button_width, 24, task.active);
         text(cr, task.title, x + 7, 8, 95, 11, task.active);
-        x += 114;
+      }
+      if (layout.overflow) {
+        bevel(cr, layout.overflow_x, 5, task_overflow_width, 24);
+        text(cr, "▾", layout.overflow_x + 6, 6, 16, 15, false, true);
       }
       if (show_volume) {
         bevel(cr, volume_x, 5, 18, 24);
@@ -613,6 +628,48 @@ struct Shell::Impl {
       result.push_back({window, folder.trash ? "Trash" : basename(folder.path), false});
     }
     return result;
+  }
+
+  TaskLayout task_layout(std::size_t count) const {
+    const int clock_x = std::max(140, static_cast<int>(width) - 105);
+    const int volume_x = clock_x - volume_group_width - volume_clock_gap;
+    const int limit = (volume_x >= 245 ? volume_x : clock_x) -
+                      (transfers_in_progress ? 85 : 0);
+    const auto capacity = [](int right) -> std::size_t {
+      return right < task_start_x + task_button_width ? 0 :
+        1 + static_cast<std::size_t>((right - task_start_x - task_button_width) / task_step);
+    };
+    TaskLayout layout;
+    layout.visible = std::min(count, capacity(limit));
+    layout.overflow = count > layout.visible;
+    if (layout.overflow) {
+      layout.visible = std::min(count, capacity(limit - task_overflow_width - 4));
+      layout.overflow_x = task_start_x + static_cast<int>(layout.visible) * task_step;
+    }
+    return layout;
+  }
+
+  void activate_task_window(xcb_window_t window, xcb_timestamp_t time) {
+    const auto all_tasks = panel_tasks();
+    if (std::ranges::none_of(all_tasks, [window](const Task& task) { return task.window == window; })) return;
+    if (folders.contains(window)) {
+      const std::uint32_t above[]{XCB_STACK_MODE_ABOVE};
+      xcb_configure_window(connection, window, XCB_CONFIG_WINDOW_STACK_MODE, above);
+      xcb_set_input_focus(connection, XCB_INPUT_FOCUS_POINTER_ROOT, window, time);
+      raise_panel();
+      return;
+    }
+    xcb_client_message_event_t request{};
+    request.response_type = XCB_CLIENT_MESSAGE;
+    request.format = 32;
+    request.window = window;
+    request.type = active_atom;
+    request.data.data32[0] = 2;
+    request.data.data32[1] = time;
+    xcb_send_event(connection, 0, screen->root,
+                   XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY,
+                   reinterpret_cast<const char*>(&request));
+    xcb_flush(connection);
   }
 
   void raise_panel() {
@@ -899,6 +956,24 @@ struct Shell::Impl {
     show_submenu(std::move(entries), 2);
   }
 
+  void show_task_overflow(std::size_t page = 0) {
+    const auto all_tasks = panel_tasks();
+    const auto layout = task_layout(all_tasks.size());
+    if (!layout.overflow) { close_menu(); return; }
+    const std::size_t hidden = all_tasks.size() - layout.visible;
+    const auto page_size = static_cast<std::size_t>(std::clamp<int>((height - panel_height - 88) / row_height, 1, 18));
+    task_page = std::min(page, (hidden - 1) / page_size);
+    std::vector<MenuEntry> entries;
+    if (task_page) entries.push_back({"◀ Previous windows", MenuAction::previous_tasks});
+    const auto start = layout.visible + task_page * page_size;
+    for (std::size_t i = start; i < std::min(all_tasks.size(), start + page_size); ++i)
+      entries.push_back({(all_tasks[i].active ? "✓ " : "") + all_tasks[i].title,
+                         MenuAction::activate_task, 0, all_tasks[i].window});
+    if (start + page_size < all_tasks.size())
+      entries.push_back({"More windows ▶", MenuAction::next_tasks});
+    show_menu(layout.overflow_x, panel_height, panel, std::move(entries));
+  }
+
   void show_context(xcb_window_t window, int root_x, int root_y, const Item* item) {
     if (item) selected_item = *item;
     else selected_item.reset();
@@ -1040,6 +1115,9 @@ struct Shell::Impl {
       case MenuAction::show_programs: show_programs(); break;
       case MenuAction::next_apps: show_programs(app_page + 1); break;
       case MenuAction::previous_apps: show_programs(app_page ? app_page - 1 : 0); break;
+      case MenuAction::activate_task: activate_task_window(entry.window, XCB_CURRENT_TIME); break;
+      case MenuAction::next_tasks: show_task_overflow(task_page + 1); break;
+      case MenuAction::previous_tasks: show_task_overflow(task_page ? task_page - 1 : 0); break;
       case MenuAction::open_item: if (selected_item) open_item(*selected_item); break;
       case MenuAction::copy:
       case MenuAction::cut:
@@ -1166,27 +1244,20 @@ struct Shell::Impl {
       }
       if (event->detail == 1 && event->event_x < 122) { if (menu) close_menu(); else show_launcher(); }
       else if (event->detail == 1 && event->event_x >= 128) {
-        const int index = (event->event_x - 128) / 114;
         const auto all_tasks = panel_tasks();
-        if (index >= 0 && static_cast<std::size_t>(index) < all_tasks.size()) {
-          if (folders.contains(all_tasks[index].window)) {
-            const std::uint32_t above[]{XCB_STACK_MODE_ABOVE};
-            xcb_configure_window(connection, all_tasks[index].window, XCB_CONFIG_WINDOW_STACK_MODE, above);
-            xcb_set_input_focus(connection, XCB_INPUT_FOCUS_POINTER_ROOT, all_tasks[index].window, event->time);
-            raise_panel();
-            return;
+        const auto layout = task_layout(all_tasks.size());
+        if (layout.overflow && event->event_x >= layout.overflow_x &&
+            event->event_x < layout.overflow_x + task_overflow_width) {
+          if (menu && menu_owner == panel) close_menu();
+          else show_task_overflow();
+          return;
+        }
+        if (event->event_x < task_start_x + static_cast<int>(layout.visible) * task_step) {
+          const int index = (event->event_x - task_start_x) / task_step;
+          if ((event->event_x - task_start_x) % task_step < task_button_width) {
+            if (menu) close_menu();
+            activate_task_window(all_tasks[index].window, event->time);
           }
-          xcb_client_message_event_t request{};
-          request.response_type = XCB_CLIENT_MESSAGE;
-          request.format = 32;
-          request.window = all_tasks[index].window;
-          request.type = active_atom;
-          request.data.data32[0] = 2;
-          request.data.data32[1] = event->time;
-          xcb_send_event(connection, 0, screen->root,
-                         XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY,
-                         reinterpret_cast<const char*>(&request));
-          xcb_flush(connection);
         }
       }
       return;

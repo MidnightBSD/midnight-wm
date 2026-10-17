@@ -22,7 +22,10 @@ control an X screen at a time. `midnight-wm --version` prints the version.
 ## Desktop behavior
 
 The top bar contains an application launcher, task buttons, a volume control,
-and a clock. Open **Programs** in the launcher to browse installed X11
+and a clock. When windows exceed the available taskbar space, use the small
+down-arrow button after the visible tasks to open the remaining window list.
+The list has pages when needed, and selecting a window raises it. Open
+**Programs** in the launcher to browse installed X11
 applications with their desktop entry icons. The launcher stays open while you
 browse Programs pages and closes when you select an item or click outside.
 Use the speaker buttons marked `−` and `+`, or the mouse wheel over the volume
