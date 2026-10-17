@@ -10,8 +10,10 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
 - `src/main.cpp` owns the XCB connection and dispatches events to clipboard,
   drag and drop, shell, then window manager. Preserve that dispatch order and
   destroy X11 users before disconnecting XCB.
-- `src/x11.*` manages external X11 clients, frames, focus, geometry, and EWMH.
-- `src/shell.*` draws the panel, desktop, menus, folder windows, and properties.
+- `src/x11.*` manages external X11 clients, frames, focus, geometry, EWMH, and
+  the root pointer cursor.
+- `src/shell.*` draws the panel, desktop, menus, folder windows, scrollbars,
+  and properties. Its exit callback asks the main loop to end the session.
 - `src/clipboard.*` implements the X11 `CLIPBOARD` selection and persistence.
 - `src/dnd.*` implements XDND file drag and drop. A drop reports completion
   through its callback after the file operation finishes.

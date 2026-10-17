@@ -61,6 +61,7 @@ int main(int argc, char** argv) {
       midnight::Shell shell(connection, screen, store);
       midnight::X11Clipboard clipboard(connection, screen->root);
       midnight::X11WindowManager wm(connection, screen, shell);
+      shell.set_exit_handler([] { running = false; });
       if (!dnd.initialize()) std::cerr << "XDND integration unavailable\n";
       if (!clipboard.initialize()) std::cerr << "XFixes clipboard integration unavailable\n";
       shell.set_file_clipboard_handlers(

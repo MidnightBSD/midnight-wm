@@ -31,6 +31,7 @@ public:
   void tick();
   void set_tasks(std::vector<Task> tasks);
   void set_screen_size(std::uint16_t width, std::uint16_t height);
+  void set_exit_handler(std::function<void()> handler);
   [[nodiscard]] bool owns(xcb_window_t window) const;
   void set_file_clipboard_handlers(
       std::function<void(const std::vector<std::filesystem::path>&, bool)> set,

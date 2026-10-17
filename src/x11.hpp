@@ -61,6 +61,7 @@ private:
   void draw_frame(Frame& frame);
   void update_title(Frame& frame);
   void install_key_grabs();
+  bool install_root_cursor();
   void cycle_focus();
   xcb_window_t client_for(xcb_window_t window) const;
   xcb_visualtype_t* root_visual() const;
@@ -73,6 +74,7 @@ private:
   std::map<xcb_window_t, xcb_window_t> frame_to_client_;
   std::map<std::string, xcb_atom_t> atoms_;
   xcb_window_t support_window_{};
+  xcb_cursor_t root_cursor_{};
   xcb_window_t active_{};
   std::uint16_t screen_width_{};
   std::uint16_t screen_height_{};

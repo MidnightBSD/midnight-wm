@@ -30,6 +30,7 @@ constexpr int row_height = 30;
 constexpr int icon_width = 90;
 constexpr int icon_height = 90;
 constexpr int folder_header = 55;
+constexpr int scrollbar_width = 18;
 
 using Item = ShellItem;
 
@@ -42,6 +43,32 @@ struct Folder {
   std::vector<Item> items;
   bool trash{};
 };
+
+struct FolderScroll {
+  int x{}, view_width{}, view_height{};
+  int track_y{}, track_height{};
+  int thumb_y{}, thumb_height{};
+  int visible_rows{}, max_scroll{};
+};
+
+FolderScroll folder_scroll(const Folder& folder) {
+  FolderScroll scroll;
+  scroll.x = folder.width - 5 - scrollbar_width;
+  scroll.view_width = folder.width - 10 - scrollbar_width;
+  scroll.view_height = folder.height - folder_header - 22;
+  const int columns = std::max(1, scroll.view_width / icon_width);
+  const int rows = static_cast<int>((folder.items.size() + columns - 1) / columns);
+  scroll.visible_rows = std::max(1, (scroll.view_height - 11) / icon_height);
+  scroll.max_scroll = std::max(0, rows - scroll.visible_rows);
+  scroll.track_y = folder_header + scrollbar_width;
+  scroll.track_height = std::max(1, scroll.view_height - 2 * scrollbar_width);
+  scroll.thumb_height = std::min(scroll.track_height,
+    std::max(24, scroll.track_height * scroll.visible_rows / std::max(1, rows)));
+  const int travel = scroll.track_height - scroll.thumb_height;
+  scroll.thumb_y = scroll.track_y + (scroll.max_scroll ?
+    travel * std::clamp(folder.scroll_rows, 0, scroll.max_scroll) / scroll.max_scroll : 0);
+  return scroll;
+}
 
 struct Properties {
   xcb_window_t window{};
@@ -64,7 +91,7 @@ struct TransferCompletion {
 
 enum class MenuAction { open_home, open_desktop, new_folder, paste, launch, next_apps, previous_apps,
                         open_item, copy, cut, create_shadow, create_template, properties, trash,
-                        restore, delete_permanently, close_folder };
+                        restore, delete_permanently, close_folder, exit_session };
 struct MenuEntry { std::string label; MenuAction action; std::size_t index{}; };
 
 std::string basename(const std::filesystem::path& path) {
@@ -191,7 +218,7 @@ struct Shell::Impl {
   std::shared_ptr<bool> alive{std::make_shared<bool>(true)};
   int transfers_in_progress{};
   xcb_visualtype_t* visual{};
-  xcb_window_t desktop{}, panel{}, menu{};
+  xcb_window_t desktop{}, panel{}, menu{}, exit_dialog{};
   xcb_window_t notice{};
   std::string notice_text;
   std::optional<Properties> properties;
@@ -214,6 +241,7 @@ struct Shell::Impl {
   std::function<void(xcb_window_t, Shell::DropHandler)> dnd_register;
   std::function<void(xcb_window_t)> dnd_unregister;
   std::function<void(xcb_window_t, std::vector<std::filesystem::path>, bool)> dnd_begin;
+  std::function<void()> exit_handler;
   xcb_key_symbols_t* key_symbols{};
   xcb_atom_t active_atom{};
   std::string last_clock;
@@ -221,6 +249,8 @@ struct Shell::Impl {
   int last_click_index{-1};
   xcb_window_t last_click_window{};
   xcb_window_t drag_window{};
+  xcb_window_t scroll_drag_window{};
+  int scroll_grab_offset{};
   int drag_root_x{}, drag_root_y{}, drag_start_x{}, drag_start_y{};
   bool resizing{};
   xcb_window_t pending_icon_window{};
@@ -235,6 +265,7 @@ struct Shell::Impl {
     for (auto& [window, monitor] : monitors) g_object_unref(monitor);
     for (auto& [window, folder] : folders) xcb_destroy_window(connection, window);
     if (menu) xcb_destroy_window(connection, menu);
+    if (exit_dialog) xcb_destroy_window(connection, exit_dialog);
     if (notice) xcb_destroy_window(connection, notice);
     if (properties) xcb_destroy_window(connection, properties->window);
     if (panel) xcb_destroy_window(connection, panel);
@@ -443,6 +474,9 @@ struct Shell::Impl {
   }
 
   void draw_folder(Folder& folder) {
+    auto scroll = folder_scroll(folder);
+    folder.scroll_rows = std::clamp(folder.scroll_rows, 0, scroll.max_scroll);
+    scroll = folder_scroll(folder);
     paint(folder.window, folder.width, folder.height, [&](cairo_t* cr) {
       fill(cr, .73, .73, .73, 0, 0, folder.width, folder.height);
       bevel(cr, 0, 0, folder.width, folder.height);
@@ -452,12 +486,22 @@ struct Shell::Impl {
       bevel(cr, folder.width - 30, 7, 20, 19);
       text(cr, "×", folder.width - 25, 6, 17, 15);
       text(cr, "File    Edit    View", 12, 34, folder.width - 24, 11);
-      fill(cr, .96, .96, .92, 5, folder_header, folder.width - 10, folder.height - folder_header - 22);
+      fill(cr, .96, .96, .92, 5, folder_header, scroll.view_width, scroll.view_height);
       cairo_save(cr);
-      cairo_rectangle(cr, 5, folder_header, folder.width - 10, folder.height - folder_header - 22);
+      cairo_rectangle(cr, 5, folder_header, scroll.view_width, scroll.view_height);
       cairo_clip(cr);
-      draw_items(cr, folder.items, folder_header + 11, folder.width - 10, folder.selected, false, folder.scroll_rows);
+      draw_items(cr, folder.items, folder_header + 11, scroll.view_width, folder.selected, false, folder.scroll_rows);
       cairo_restore(cr);
+      fill(cr, .69, .69, .69, scroll.x, folder_header, scrollbar_width, scroll.view_height);
+      bevel(cr, scroll.x, folder_header, scrollbar_width, scrollbar_width);
+      text(cr, "▲", scroll.x + 3, folder_header + 2, 12, 10);
+      const int down_y = folder_header + scroll.view_height - scrollbar_width;
+      bevel(cr, scroll.x, down_y, scrollbar_width, scrollbar_width);
+      text(cr, "▼", scroll.x + 3, down_y + 2, 12, 10);
+      fill(cr, .57, .57, .57, scroll.x, scroll.track_y, scrollbar_width, scroll.track_height);
+      bevel(cr, scroll.x, scroll.track_y, scrollbar_width, scroll.track_height, true);
+      fill(cr, .77, .77, .77, scroll.x + 1, scroll.thumb_y, scrollbar_width - 2, scroll.thumb_height);
+      bevel(cr, scroll.x + 1, scroll.thumb_y, scrollbar_width - 2, scroll.thumb_height);
       fill(cr, .73, .73, .73, 5, folder.height - 21, folder.width - 10, 16);
       text(cr, std::to_string(folder.items.size()) + " objects", 11, folder.height - 21, folder.width - 22, 10);
     });
@@ -547,6 +591,51 @@ struct Shell::Impl {
     });
   }
 
+  void draw_exit_dialog() {
+    if (!exit_dialog) return;
+    paint(exit_dialog, 380, 140, [&](cairo_t* cr) {
+      fill(cr, .75, .75, .75, 0, 0, 380, 140);
+      bevel(cr, 0, 0, 380, 140);
+      fill(cr, .14, .27, .56, 4, 4, 372, 25);
+      text(cr, "Exit X11 session", 12, 7, 350, 12, true, true);
+      text(cr, "End this X11 session?", 14, 43, 350, 12);
+      text(cr, "Open applications may close.", 14, 65, 350, 11);
+      bevel(cr, 165, 96, 82, 26);
+      text(cr, "Cancel", 183, 100, 64, 11);
+      bevel(cr, 265, 96, 90, 26);
+      text(cr, "Exit", 294, 100, 55, 11);
+    });
+  }
+
+  void close_exit_dialog() {
+    if (!exit_dialog) return;
+    xcb_destroy_window(connection, exit_dialog);
+    exit_dialog = 0;
+  }
+
+  void show_exit_dialog() {
+    if (!exit_dialog) {
+      const int x = std::max(0, (static_cast<int>(width) - 380) / 2);
+      const int y = std::max(panel_height, (static_cast<int>(height) - 140) / 2);
+      exit_dialog = create_window(x, y, 380, 140);
+      xcb_map_window(connection, exit_dialog);
+    }
+    const std::uint32_t above[]{XCB_STACK_MODE_ABOVE};
+    xcb_configure_window(connection, exit_dialog, XCB_CONFIG_WINDOW_STACK_MODE, above);
+    xcb_set_input_focus(connection, XCB_INPUT_FOCUS_POINTER_ROOT, exit_dialog, XCB_CURRENT_TIME);
+    draw_exit_dialog();
+    xcb_flush(connection);
+  }
+
+  void confirm_exit() {
+    close_exit_dialog();
+    if (transfers_in_progress > 0) {
+      show_notice("Wait for file transfers to finish before exiting.");
+      return;
+    }
+    if (exit_handler) exit_handler();
+  }
+
   void close_menu() {
     if (!menu) return;
     xcb_destroy_window(connection, menu);
@@ -580,6 +669,7 @@ struct Shell::Impl {
     for (std::size_t i = start; i < std::min(apps.size(), start + page_size); ++i)
       entries.push_back({g_app_info_get_display_name(apps[i]), MenuAction::launch, i});
     if (start + page_size < apps.size()) entries.push_back({"More applications ▶", MenuAction::next_apps});
+    entries.push_back({"Exit X11 session…", MenuAction::exit_session});
     show_menu(3, panel_height, desktop, std::move(entries));
   }
 
@@ -730,6 +820,7 @@ struct Shell::Impl {
         }
         break;
       case MenuAction::close_folder: break;
+      case MenuAction::exit_session: show_exit_dialog(); break;
     }
   }
 
@@ -744,6 +835,13 @@ struct Shell::Impl {
   }
 
   void button(const xcb_button_press_event_t* event) {
+    if (exit_dialog && event->event == exit_dialog) {
+      if (event->detail == 1 && event->event_y >= 96 && event->event_y < 122) {
+        if (event->event_x >= 265 && event->event_x < 355) confirm_exit();
+        else if (event->event_x >= 165 && event->event_x < 247) close_exit_dialog();
+      }
+      return;
+    }
     if (properties && event->event == properties->window) {
       if (event->event_y >= 184 && event->event_y <= 211) {
         if (event->event_x >= 316 && event->event_x <= 391) save_properties();
@@ -816,11 +914,9 @@ struct Shell::Impl {
     if (menu) close_menu();
     auto* folder = [&]() -> Folder* { auto it = folders.find(event->event); return it == folders.end() ? nullptr : &it->second; }();
     if (folder && (event->detail == 4 || event->detail == 5)) {
-      const int cols = std::max(1, (folder->width - 10) / icon_width);
-      const int rows = static_cast<int>((folder->items.size() + cols - 1) / cols);
-      const int visible = std::max(1, (folder->height - folder_header - 22) / icon_height);
+      const auto scroll = folder_scroll(*folder);
       folder->scroll_rows = std::clamp(folder->scroll_rows + (event->detail == 5 ? 1 : -1), 0,
-                                       std::max(0, rows - visible));
+                                       scroll.max_scroll);
       draw_folder(*folder);
       return;
     }
@@ -859,11 +955,36 @@ struct Shell::Impl {
                        XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC, XCB_NONE, XCB_NONE, event->time);
       return;
     }
+    if (folder) {
+      const auto scroll = folder_scroll(*folder);
+      if (event->event_y >= folder_header && event->event_y < folder_header + scroll.view_height &&
+          event->event_x >= scroll.x) {
+        if (event->detail != 1) return;
+        pending_icon_window = 0;
+        xcb_set_input_focus(connection, XCB_INPUT_FOCUS_POINTER_ROOT, folder->window, event->time);
+        if (event->event_y < scroll.track_y) --folder->scroll_rows;
+        else if (event->event_y >= scroll.track_y + scroll.track_height) ++folder->scroll_rows;
+        else if (event->event_y < scroll.thumb_y) folder->scroll_rows -= scroll.visible_rows;
+        else if (event->event_y >= scroll.thumb_y + scroll.thumb_height)
+          folder->scroll_rows += scroll.visible_rows;
+        else if (scroll.max_scroll) {
+          scroll_drag_window = folder->window;
+          scroll_grab_offset = event->event_y - scroll.thumb_y;
+          xcb_grab_pointer(connection, 0, folder->window,
+                           XCB_EVENT_MASK_BUTTON_RELEASE | XCB_EVENT_MASK_POINTER_MOTION,
+                           XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC, XCB_NONE, XCB_NONE, event->time);
+        }
+        folder->scroll_rows = std::clamp(folder->scroll_rows, 0, scroll.max_scroll);
+        draw_folder(*folder);
+        return;
+      }
+      if (event->event_y < folder_header || event->event_y >= folder->height - 22) return;
+    }
     const bool on_desktop = event->event == desktop;
     if (!on_desktop && !folder) return;
     auto& items = on_desktop ? desktop_items : folder->items;
     const int start_y = on_desktop ? 13 : folder_header + 11;
-    const int width_px = on_desktop ? width : folder->width - 10;
+    const int width_px = on_desktop ? width : folder_scroll(*folder).view_width;
     const int index = item_index(event->event_x, event->event_y, start_y, width_px, items.size(),
                                  folder ? folder->scroll_rows : 0);
     if (event->detail == 3) {
@@ -890,6 +1011,12 @@ struct Shell::Impl {
   }
 
   void key(const xcb_key_press_event_t* event) {
+    if (exit_dialog && event->event == exit_dialog) {
+      const auto sym = key_symbols ? xcb_key_symbols_get_keysym(key_symbols, event->detail, 0) : 0;
+      if (sym == XK_Escape) close_exit_dialog();
+      else if (sym == XK_Return) confirm_exit();
+      return;
+    }
     if (properties && event->event == properties->window) {
       const auto sym = key_symbols ? xcb_key_symbols_get_keysym(key_symbols, event->detail,
                                                        (event->state & XCB_MOD_MASK_SHIFT) ? 1 : 0) : 0;
@@ -913,6 +1040,15 @@ struct Shell::Impl {
     int& selected = on_desktop ? selected_desktop : it->second.selected;
     const auto sym = key_symbols ? xcb_key_symbols_get_keysym(key_symbols, event->detail, 0) : 0;
     if (sym == XK_Escape) { close_menu(); return; }
+    if (!on_desktop && (sym == XK_Page_Up || sym == XK_Page_Down || sym == XK_Home || sym == XK_End)) {
+      const auto scroll = folder_scroll(it->second);
+      if (sym == XK_Home) it->second.scroll_rows = 0;
+      else if (sym == XK_End) it->second.scroll_rows = scroll.max_scroll;
+      else it->second.scroll_rows = std::clamp(it->second.scroll_rows +
+        (sym == XK_Page_Down ? scroll.visible_rows : -scroll.visible_rows), 0, scroll.max_scroll);
+      draw_folder(it->second);
+      return;
+    }
     if (sym == XK_Return && selected >= 0 && static_cast<std::size_t>(selected) < items.size()) {
       menu_owner = event->event;
       open_item(items[selected]);
@@ -940,6 +1076,19 @@ struct Shell::Impl {
   }
 
   void motion(const xcb_motion_notify_event_t* event) {
+    if (scroll_drag_window) {
+      auto it = folders.find(scroll_drag_window);
+      if (it == folders.end()) return;
+      auto& folder = it->second;
+      const auto scroll = folder_scroll(folder);
+      const int travel = scroll.track_height - scroll.thumb_height;
+      if (travel > 0 && scroll.max_scroll > 0) {
+        const int position = std::clamp(event->event_y - scroll_grab_offset - scroll.track_y, 0, travel);
+        const int row = (position * scroll.max_scroll + travel / 2) / travel;
+        if (row != folder.scroll_rows) { folder.scroll_rows = row; draw_folder(folder); }
+      }
+      return;
+    }
     if (pending_icon_window && dnd_begin) {
       const int dx = event->root_x - pending_icon_x;
       const int dy = event->root_y - pending_icon_y;
@@ -1014,6 +1163,7 @@ bool Shell::initialize() {
 bool Shell::owns(xcb_window_t window) const {
   const auto& p = *impl_;
   return window && (window == p.desktop || window == p.panel || window == p.menu || window == p.notice ||
+                    window == p.exit_dialog ||
                     (p.properties && window == p.properties->window) || p.folders.contains(window));
 }
 
@@ -1037,10 +1187,14 @@ bool Shell::handle(xcb_generic_event_t* event) {
     else if (window == p.desktop) p.draw_desktop();
     else if (window == p.menu) p.draw_menu();
     else if (window == p.notice) p.draw_notice();
+    else if (window == p.exit_dialog) p.draw_exit_dialog();
     else if (p.properties && window == p.properties->window) p.draw_properties();
     else if (auto it = p.folders.find(window); it != p.folders.end()) p.draw_folder(it->second);
   } else if (type == XCB_BUTTON_PRESS) p.button(reinterpret_cast<xcb_button_press_event_t*>(event));
-  else if (type == XCB_BUTTON_RELEASE && p.drag_window == window) {
+  else if (type == XCB_BUTTON_RELEASE && p.scroll_drag_window == window) {
+    p.scroll_drag_window = 0;
+    xcb_ungrab_pointer(p.connection, XCB_CURRENT_TIME);
+  } else if (type == XCB_BUTTON_RELEASE && p.drag_window == window) {
     p.drag_window = 0;
     xcb_ungrab_pointer(p.connection, XCB_CURRENT_TIME);
   } else if (type == XCB_BUTTON_RELEASE) p.pending_icon_window = 0;
@@ -1068,6 +1222,10 @@ void Shell::tick() {
 void Shell::set_tasks(std::vector<Task> tasks) {
   impl_->tasks = std::move(tasks);
   if (impl_->panel) { impl_->raise_panel(); impl_->draw_panel(); }
+}
+
+void Shell::set_exit_handler(std::function<void()> handler) {
+  impl_->exit_handler = std::move(handler);
 }
 
 void Shell::set_screen_size(std::uint16_t width, std::uint16_t height) {

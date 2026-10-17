@@ -9,6 +9,7 @@
 #include <X11/keysym.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -60,7 +61,67 @@ X11WindowManager::~X11WindowManager() {
   xcb_delete_property(connection_, screen_->root, atom("_NET_SUPPORTING_WM_CHECK"));
   xcb_delete_property(connection_, screen_->root, atom("_NET_ACTIVE_WINDOW"));
   xcb_delete_property(connection_, screen_->root, atom("_NET_CLIENT_LIST"));
+  if (root_cursor_) {
+    const std::uint32_t none = XCB_NONE;
+    xcb_change_window_attributes(connection_, screen_->root, XCB_CW_CURSOR, &none);
+    xcb_free_cursor(connection_, root_cursor_);
+  }
   xcb_flush(connection_);
+}
+
+bool X11WindowManager::install_root_cursor() {
+  // A bitmap cursor is available even when a cursor theme or cursor font is not.
+  constexpr std::array<const char*, 16> arrow{
+    "B...............", "BB..............", "BWB.............", "BWWB............",
+    "BWWWB...........", "BWWWWB..........", "BWWWWWB.........", "BWWWWWWB........",
+    "BWWWWWWWB.......", "BWWWWWWWWB......", "BWWWWWBBBB......", "BWWBWWB.........",
+    "BW.BWWB.........", "B..BWWB.........", "...BWWB.........", "...BBBB........."
+  };
+  const auto source = xcb_generate_id(connection_);
+  const auto mask = xcb_generate_id(connection_);
+  const auto gc = xcb_generate_id(connection_);
+  xcb_create_pixmap(connection_, 1, source, screen_->root, 16, 16);
+  xcb_create_pixmap(connection_, 1, mask, screen_->root, 16, 16);
+  const std::uint32_t black = 0;
+  xcb_create_gc(connection_, gc, source, XCB_GC_FOREGROUND, &black);
+  const xcb_rectangle_t bounds{0, 0, 16, 16};
+  xcb_poly_fill_rectangle(connection_, source, gc, 1, &bounds);
+  xcb_poly_fill_rectangle(connection_, mask, gc, 1, &bounds);
+  const std::uint32_t white = 1;
+  xcb_change_gc(connection_, gc, XCB_GC_FOREGROUND, &white);
+  std::vector<xcb_point_t> shape;
+  std::vector<xcb_point_t> visible;
+  for (std::int16_t y = 0; y < 16; ++y)
+    for (std::int16_t x = 0; x < 16; ++x) {
+      const char pixel = arrow[y][x];
+      if (pixel != '.') visible.push_back({x, y});
+      if (pixel == 'B') shape.push_back({x, y});
+    }
+  xcb_poly_point(connection_, XCB_COORD_MODE_ORIGIN, source, gc, shape.size(), shape.data());
+  xcb_poly_point(connection_, XCB_COORD_MODE_ORIGIN, mask, gc, visible.size(), visible.data());
+  xcb_free_gc(connection_, gc);
+
+  root_cursor_ = xcb_generate_id(connection_);
+  const auto created = xcb_create_cursor_checked(connection_, root_cursor_, source, mask,
+                                                  0, 0, 0, 0xffff, 0xffff, 0xffff, 0, 0);
+  xcb_free_pixmap(connection_, source);
+  xcb_free_pixmap(connection_, mask);
+  if (auto* error = xcb_request_check(connection_, created)) {
+    std::cerr << "Could not create pointer cursor (X error " << int(error->error_code) << ")\n";
+    std::free(error);
+    root_cursor_ = XCB_NONE;
+    return false;
+  }
+  const std::uint32_t cursor = root_cursor_;
+  const auto applied = xcb_change_window_attributes_checked(connection_, screen_->root, XCB_CW_CURSOR, &cursor);
+  if (auto* error = xcb_request_check(connection_, applied)) {
+    std::cerr << "Could not set pointer cursor (X error " << int(error->error_code) << ")\n";
+    std::free(error);
+    xcb_free_cursor(connection_, root_cursor_);
+    root_cursor_ = XCB_NONE;
+    return false;
+  }
+  return true;
 }
 
 xcb_atom_t X11WindowManager::atom(const std::string& name) {
@@ -115,6 +176,7 @@ bool X11WindowManager::initialize() {
     std::free(error);
     return false;
   }
+  if (!install_root_cursor()) return false;
   set_root_properties();
   install_key_grabs();
   scan_existing();

@@ -34,6 +34,10 @@ Double-click a desktop or folder object to open it. Right-click to see its
 actions. Folder windows support keyboard copy, cut, and paste. The shell uses
 the standard X11 `CLIPBOARD` selection, and file copy/paste uses
 `text/uri-list` plus `x-special/gnome-copied-files` for other file managers.
+Folder windows have vertical scrollbars: use the arrows, click the track to
+move a page, or drag the thumb. The mouse wheel and Page Up, Page Down, Home,
+and End keys also scroll. Other applications draw and control their own
+scrollbars.
 
 The `Home`, `Trash`, and `Templates` objects are created on the desktop at first
 run. Physical files appear from the user's XDG Desktop directory. Shell object
@@ -55,7 +59,10 @@ and workspace colors. Restart the session after editing it.
 
 Alt+Tab switches tasks, and Alt+F4 closes the active window. The title bar
 provides minimize, maximize, and close buttons; drag the title bar to move a
-window and its lower frame to resize it.
+window and its lower frame to resize it. The launcher menu has **Exit X11
+session…**, which asks for confirmation before closing the window manager. When
+started as the Xsession or from `.xinitrc`, that also ends the X11 session.
+The desktop sets an explicit pointer cursor as soon as the window manager starts.
 
 ## Design
 
