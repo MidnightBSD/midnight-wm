@@ -54,6 +54,9 @@ constexpr int task_start_x = 212;
 constexpr int task_button_width = 110;
 constexpr int task_step = 114;
 constexpr int task_overflow_width = 24;
+constexpr int exit_dialog_width = 380;
+constexpr int exit_dialog_height = 174;
+constexpr int exit_dialog_button_y = 136;
 constexpr int row_height = 24;
 constexpr int icon_width = 90;
 constexpr int icon_height = 90;
@@ -515,6 +518,7 @@ struct Shell::Impl {
   ThumbnailCache thumbnail_cache;
   StartupNotification* startup{};
   cairo_surface_t* logo_surface{};
+  cairo_surface_t* exit_logo_surface{};
   std::string icon_theme{selected_icon_theme()};
   std::vector<MenuEntry> menu_entries;
   std::vector<MenuEntry> submenu_entries;
@@ -564,6 +568,7 @@ struct Shell::Impl {
     for (auto* app : apps) g_object_unref(app);
     for (auto& [name, surface] : icon_surfaces) if (surface) cairo_surface_destroy(surface);
     if (logo_surface) cairo_surface_destroy(logo_surface);
+    if (exit_logo_surface) cairo_surface_destroy(exit_logo_surface);
     for (auto& [window, monitor] : monitors) g_object_unref(monitor);
     for (auto& [window, folder] : folders) xcb_destroy_window(connection, window);
     if (menu) xcb_destroy_window(connection, menu);
@@ -954,7 +959,10 @@ struct Shell::Impl {
       "data/MidnightBSDLogo22x22.png"
     };
     for (const auto& path : candidates)
-      if ((logo_surface = image_surface(path, 20))) break;
+      if ((logo_surface = image_surface(path, 20))) {
+        exit_logo_surface = image_surface(path, 48);
+        break;
+      }
   }
 
   void seed_objects() {
@@ -1668,18 +1676,34 @@ struct Shell::Impl {
 
   void draw_exit_dialog() {
     if (!exit_dialog) return;
-    paint(exit_dialog, 380, 140, [&](cairo_t* cr) {
-      fill(cr, .75, .75, .75, 0, 0, 380, 140);
-      bevel(cr, 0, 0, 380, 140);
+    paint(exit_dialog, exit_dialog_width, exit_dialog_height, [&](cairo_t* cr) {
+      fill(cr, .75, .75, .75, 0, 0, exit_dialog_width, exit_dialog_height);
+      bevel(cr, 0, 0, exit_dialog_width, exit_dialog_height);
       fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
-           4, 4, 372, 25);
+           4, 4, exit_dialog_width - 8, 25);
       text(cr, "Exit X11 session", 12, 7, 350, 12, true, true);
-      text(cr, "End this X11 session?", 14, 43, 350, 12);
-      text(cr, "Open applications may close.", 14, 65, 350, 11);
-      bevel(cr, 165, 96, 82, 26);
-      text(cr, "Cancel", 183, 100, 64, 11);
-      bevel(cr, 265, 96, 90, 26);
-      text(cr, "Exit", 294, 100, 55, 11);
+      fill(cr, .87, .83, .93, 16, 42, 66, 66);
+      bevel(cr, 16, 42, 66, 66, true);
+      if (exit_logo_surface) {
+        cairo_set_source_surface(cr, exit_logo_surface, 25, 51);
+        cairo_paint(cr);
+      } else {
+        cairo_set_source_rgb(cr, .25, .14, .38);
+        cairo_set_line_width(cr, 4);
+        cairo_arc(cr, 49, 75, 18, -.29 * std::numbers::pi, 1.29 * std::numbers::pi);
+        cairo_stroke(cr);
+        cairo_move_to(cr, 49, 54);
+        cairo_line_to(cr, 49, 76);
+        cairo_stroke(cr);
+      }
+      text(cr, "End this X11 session?", 96, 53, 265, 13, false, true);
+      text(cr, "Open applications may close.", 96, 78, 265, 11);
+      fill(cr, .43, .43, .43, 12, 122, exit_dialog_width - 24, 1);
+      fill(cr, .93, .93, .93, 12, 123, exit_dialog_width - 24, 1);
+      bevel(cr, 165, exit_dialog_button_y, 82, 26);
+      text(cr, "Cancel", 183, exit_dialog_button_y + 4, 64, 11);
+      bevel(cr, 265, exit_dialog_button_y, 90, 26);
+      text(cr, "Exit", 294, exit_dialog_button_y + 4, 55, 11);
     });
   }
 
@@ -1691,9 +1715,9 @@ struct Shell::Impl {
 
   void show_exit_dialog() {
     if (!exit_dialog) {
-      const int x = std::max(0, (static_cast<int>(width) - 380) / 2);
-      const int y = std::max(panel_height, (static_cast<int>(height) - 140) / 2);
-      exit_dialog = create_window(x, y, 380, 140);
+      const int x = std::max(0, (static_cast<int>(width) - exit_dialog_width) / 2);
+      const int y = std::max(panel_height, (static_cast<int>(height) - exit_dialog_height) / 2);
+      exit_dialog = create_window(x, y, exit_dialog_width, exit_dialog_height);
       xcb_map_window(connection, exit_dialog);
     }
     const std::uint32_t above[]{XCB_STACK_MODE_ABOVE};
@@ -2202,7 +2226,8 @@ struct Shell::Impl {
     }
     if (icon_chooser) return;
     if (exit_dialog && event->event == exit_dialog) {
-      if (event->detail == 1 && event->event_y >= 96 && event->event_y < 122) {
+      if (event->detail == 1 && event->event_y >= exit_dialog_button_y &&
+          event->event_y < exit_dialog_button_y + 26) {
         if (event->event_x >= 265 && event->event_x < 355) confirm_exit();
         else if (event->event_x >= 165 && event->event_x < 247) close_exit_dialog();
       }
