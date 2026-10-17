@@ -4,6 +4,7 @@
 #include <xcb/xcb_icccm.h>
 
 #include <cstdint>
+#include <array>
 #include <map>
 #include <string>
 #include <vector>
@@ -35,7 +36,8 @@ private:
     std::uint16_t old_width{};
     std::uint16_t old_height{};
     int ignore_unmap{};
-    bool maximized{};
+    bool maximized_horz{};
+    bool maximized_vert{};
     bool fullscreen{};
     bool mapped{};
     bool minimized{};
@@ -47,11 +49,18 @@ private:
     std::string title;
   };
   struct Monitor { int x{}, y{}, width{}, height{}; };
+  struct Dock {
+    std::array<std::uint32_t, 12> strut{};
+    bool mapped{};
+  };
 
   enum class DragMode { none, move, resize };
   xcb_atom_t atom(const std::string& name);
   void set_root_properties();
   void update_geometry_properties();
+  void refresh_dock(xcb_window_t window);
+  void update_maximized_geometry(Frame& frame);
+  Monitor workarea_for(const Monitor& monitor) const;
   void update_client_list();
   void update_tasks();
   void scan_existing();
@@ -62,7 +71,7 @@ private:
   void update_icccm_hints(Frame& frame);
   void constrain_size(const Frame& frame, std::uint16_t& width, std::uint16_t& height) const;
   void update_window_state(const Frame& frame);
-  void set_maximized(xcb_window_t client, bool enabled);
+  void set_maximized(xcb_window_t client, bool horz, bool vert);
   void close(xcb_window_t client);
   void toggle_maximize(xcb_window_t client);
   void set_fullscreen(xcb_window_t client, bool enabled);
@@ -82,6 +91,7 @@ private:
   xcb_screen_t* screen_{};
   Shell& shell_;
   std::map<xcb_window_t, Frame> frames_;
+  std::map<xcb_window_t, Dock> docks_;
   std::map<xcb_window_t, xcb_window_t> frame_to_client_;
   std::map<std::string, xcb_atom_t> atoms_;
   xcb_window_t support_window_{};

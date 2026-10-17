@@ -21,7 +21,7 @@ namespace midnight {
 namespace {
 constexpr int border = 5;
 constexpr int title_height = 28;
-constexpr int panel_height = 34;
+constexpr int panel_height = 30;
 constexpr std::uint16_t min_width = 80;
 constexpr std::uint16_t min_height = 40;
 
@@ -207,10 +207,8 @@ void X11WindowManager::constrain_size(const Frame& frame, std::uint16_t& width,
 
 void X11WindowManager::update_window_state(const Frame& frame) {
   std::vector<xcb_atom_t> states;
-  if (frame.maximized) {
-    states.push_back(atom("_NET_WM_STATE_MAXIMIZED_VERT"));
-    states.push_back(atom("_NET_WM_STATE_MAXIMIZED_HORZ"));
-  }
+  if (frame.maximized_vert) states.push_back(atom("_NET_WM_STATE_MAXIMIZED_VERT"));
+  if (frame.maximized_horz) states.push_back(atom("_NET_WM_STATE_MAXIMIZED_HORZ"));
   if (frame.fullscreen) states.push_back(atom("_NET_WM_STATE_FULLSCREEN"));
   if (frame.minimized) states.push_back(atom("_NET_WM_STATE_HIDDEN"));
   if (frame.skip_taskbar) states.push_back(atom("_NET_WM_STATE_SKIP_TASKBAR"));
@@ -291,7 +289,8 @@ void X11WindowManager::set_root_properties() {
                           "_NET_WM_STATE_HIDDEN", "_NET_WM_STATE_SKIP_TASKBAR",
                           "_NET_FRAME_EXTENTS", "_NET_REQUEST_FRAME_EXTENTS",
                           "_NET_NUMBER_OF_DESKTOPS", "_NET_CURRENT_DESKTOP", "_NET_WORKAREA",
-                          "_NET_DESKTOP_GEOMETRY", "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_DOCK"})
+                          "_NET_DESKTOP_GEOMETRY", "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_DOCK",
+                          "_NET_WM_STRUT", "_NET_WM_STRUT_PARTIAL"})
     supported.push_back(atom(key));
   xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, screen_->root, atom("_NET_SUPPORTED"),
                       XCB_ATOM_ATOM, 32, supported.size(), supported.data());
@@ -305,12 +304,70 @@ void X11WindowManager::set_root_properties() {
 
 void X11WindowManager::update_geometry_properties() {
   const std::uint32_t geometry[] = {screen_width_, screen_height_};
-  const std::uint32_t workarea[] = {0, panel_height, screen_width_,
-                                   std::uint32_t(screen_height_ > panel_height ? screen_height_ - panel_height : 0)};
+  const auto area = workarea_for({0, 0, screen_width_, screen_height_});
+  const std::uint32_t workarea[] = {std::uint32_t(area.x), std::uint32_t(area.y),
+                                   std::uint32_t(area.width), std::uint32_t(area.height)};
   xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, screen_->root, atom("_NET_DESKTOP_GEOMETRY"),
                       XCB_ATOM_CARDINAL, 32, 2, geometry);
   xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, screen_->root, atom("_NET_WORKAREA"),
                       XCB_ATOM_CARDINAL, 32, 4, workarea);
+}
+
+X11WindowManager::Monitor X11WindowManager::workarea_for(const Monitor& monitor) const {
+  int left = 0, right = 0, top = panel_height, bottom = 0;
+  const auto overlaps = [](int a, int b, std::uint32_t start, std::uint32_t end) {
+    return end >= std::uint32_t(std::max(0, a)) && start < std::uint32_t(std::max(0, b));
+  };
+  for (const auto& [window, dock] : docks_) {
+    (void)window;
+    if (!dock.mapped) continue;
+    const auto& s = dock.strut;
+    if (s[0] && overlaps(monitor.y, monitor.y + monitor.height, s[4], s[5]))
+      left = std::max(left, int(std::min<std::uint32_t>(s[0], screen_width_)));
+    if (s[1] && overlaps(monitor.y, monitor.y + monitor.height, s[6], s[7]))
+      right = std::max(right, int(std::min<std::uint32_t>(s[1], screen_width_)));
+    if (s[2] && overlaps(monitor.x, monitor.x + monitor.width, s[8], s[9]))
+      top = std::max(top, int(std::min<std::uint32_t>(s[2], screen_height_)));
+    if (s[3] && overlaps(monitor.x, monitor.x + monitor.width, s[10], s[11]))
+      bottom = std::max(bottom, int(std::min<std::uint32_t>(s[3], screen_height_)));
+  }
+  const int x = std::clamp(left, monitor.x, monitor.x + monitor.width);
+  const int y = std::clamp(top, monitor.y, monitor.y + monitor.height);
+  const int end_x = std::clamp(int(screen_width_) - right, x, monitor.x + monitor.width);
+  const int end_y = std::clamp(int(screen_height_) - bottom, y, monitor.y + monitor.height);
+  return {x, y, end_x - x, end_y - y};
+}
+
+void X11WindowManager::refresh_dock(xcb_window_t window) {
+  auto it = docks_.find(window);
+  if (it == docks_.end()) return;
+  Dock dock = it->second;
+  auto cookie = xcb_get_property(connection_, 0, window, atom("_NET_WM_STRUT_PARTIAL"),
+                                 XCB_ATOM_CARDINAL, 0, 12);
+  Reply<xcb_get_property_reply_t> partial(xcb_get_property_reply(connection_, cookie, nullptr), std::free);
+  if (partial && partial->type == XCB_ATOM_CARDINAL && partial->format == 32 &&
+      xcb_get_property_value_length(partial.get()) >= 48) {
+    std::memcpy(dock.strut.data(), xcb_get_property_value(partial.get()), 48);
+  } else {
+    cookie = xcb_get_property(connection_, 0, window, atom("_NET_WM_STRUT"), XCB_ATOM_CARDINAL, 0, 4);
+    Reply<xcb_get_property_reply_t> legacy(xcb_get_property_reply(connection_, cookie, nullptr), std::free);
+    dock.strut = {};
+    if (legacy && legacy->type == XCB_ATOM_CARDINAL && legacy->format == 32 &&
+        xcb_get_property_value_length(legacy.get()) >= 16) {
+      std::memcpy(dock.strut.data(), xcb_get_property_value(legacy.get()), 16);
+      dock.strut[4] = dock.strut[6] = dock.strut[8] = dock.strut[10] = 0;
+      dock.strut[5] = dock.strut[7] = screen_height_ ? screen_height_ - 1 : 0;
+      dock.strut[9] = dock.strut[11] = screen_width_ ? screen_width_ - 1 : 0;
+    }
+  }
+  if (dock.strut != it->second.strut) {
+    it->second.strut = dock.strut;
+    update_geometry_properties();
+    for (auto& [client, frame] : frames_) {
+      (void)client;
+      if (frame.maximized_horz || frame.maximized_vert) update_maximized_geometry(frame);
+    }
+  }
 }
 
 void X11WindowManager::scan_existing() {
@@ -332,9 +389,16 @@ void X11WindowManager::manage(xcb_window_t window) {
   Reply<xcb_get_property_reply_t> types(xcb_get_property_reply(connection_, type_cookie, nullptr), std::free);
   if (types) {
     auto* values = static_cast<xcb_atom_t*>(xcb_get_property_value(types.get()));
-    for (int i = 0; i < xcb_get_property_value_length(types.get()) / 4; ++i)
-      if (values[i] == atom("_NET_WM_WINDOW_TYPE_DOCK") ||
-          values[i] == atom("_NET_WM_WINDOW_TYPE_DESKTOP")) return;
+    for (int i = 0; i < xcb_get_property_value_length(types.get()) / 4; ++i) {
+      if (values[i] == atom("_NET_WM_WINDOW_TYPE_DOCK")) {
+        docks_[window] = Dock{.mapped = attr->map_state != XCB_MAP_STATE_UNMAPPED};
+        const std::uint32_t events = XCB_EVENT_MASK_PROPERTY_CHANGE | XCB_EVENT_MASK_STRUCTURE_NOTIFY;
+        xcb_change_window_attributes(connection_, window, XCB_CW_EVENT_MASK, &events);
+        refresh_dock(window);
+        return;
+      }
+      if (values[i] == atom("_NET_WM_WINDOW_TYPE_DESKTOP")) return;
+    }
   }
   Reply<xcb_get_geometry_reply_t> geometry(
       xcb_get_geometry_reply(connection_, xcb_get_geometry(connection_, window), nullptr), std::free);
@@ -354,14 +418,14 @@ void X11WindowManager::manage(xcb_window_t window) {
   }
   auto state_cookie = xcb_get_property(connection_, 0, window, atom("_NET_WM_STATE"), XCB_ATOM_ATOM, 0, 32);
   Reply<xcb_get_property_reply_t> initial_states(xcb_get_property_reply(connection_, state_cookie, nullptr), std::free);
-  bool initial_maximized = false, initial_fullscreen = false;
+  bool initial_horz = false, initial_vert = false, initial_fullscreen = false;
   if (initial_states && initial_states->type == XCB_ATOM_ATOM) {
     auto* states = static_cast<xcb_atom_t*>(xcb_get_property_value(initial_states.get()));
     for (int i = 0; i < xcb_get_property_value_length(initial_states.get()) / 4; ++i) {
       if (states[i] == atom("_NET_WM_STATE_SKIP_TASKBAR")) frame.skip_taskbar = true;
       if (states[i] == atom("_NET_WM_STATE_FULLSCREEN")) initial_fullscreen = true;
-      if (states[i] == atom("_NET_WM_STATE_MAXIMIZED_VERT") ||
-          states[i] == atom("_NET_WM_STATE_MAXIMIZED_HORZ")) initial_maximized = true;
+      if (states[i] == atom("_NET_WM_STATE_MAXIMIZED_VERT")) initial_vert = true;
+      if (states[i] == atom("_NET_WM_STATE_MAXIMIZED_HORZ")) initial_horz = true;
     }
   }
   frame.ignore_unmap = attr->map_state != XCB_MAP_STATE_UNMAPPED ? 1 : 0;
@@ -388,7 +452,7 @@ void X11WindowManager::manage(xcb_window_t window) {
   frame_to_client_[frame.frame] = window;
   frames_[window] = frame;
   if (initial_fullscreen) set_fullscreen(window, true);
-  else if (initial_maximized) set_maximized(window, true);
+  else if (initial_horz || initial_vert) set_maximized(window, initial_horz, initial_vert);
   if (frame.mapped) map(window);
   update_client_list();
   update_tasks();
@@ -570,34 +634,54 @@ void X11WindowManager::close(xcb_window_t client) {
 void X11WindowManager::toggle_maximize(xcb_window_t client) {
   auto it = frames_.find(client);
   if (it == frames_.end()) return;
-  set_maximized(client, !it->second.maximized);
+  const bool enabled = !(it->second.maximized_horz && it->second.maximized_vert);
+  set_maximized(client, enabled, enabled);
 }
 
-void X11WindowManager::set_maximized(xcb_window_t client, bool enabled) {
-  auto it = frames_.find(client);
-  if (it == frames_.end() || it->second.maximized == enabled || it->second.fullscreen) return;
-  auto& frame = it->second;
-  if (enabled) {
-    frame.old_x = frame.x; frame.old_y = frame.y;
-    frame.old_width = frame.width; frame.old_height = frame.height;
-    const auto monitor = monitor_for(frame);
-    const int top = monitor.y == 0 ? panel_height : monitor.y;
-    frame.x = monitor.x; frame.y = top;
-    frame.width = std::max<int>(min_width, monitor.width - 2 * border);
-    frame.height = std::max<int>(min_height, monitor.height - (top - monitor.y) - title_height - border);
-  } else {
-    frame.x = frame.old_x; frame.y = frame.old_y;
-    frame.width = frame.old_width; frame.height = frame.old_height;
+void X11WindowManager::update_maximized_geometry(Frame& frame) {
+  const auto area = workarea_for(monitor_for(frame));
+  if (frame.maximized_horz) {
+    frame.x = area.x;
+    frame.width = std::max(1, area.width - 2 * border);
   }
-  frame.maximized = enabled;
-  update_window_state(frame);
+  if (frame.maximized_vert) {
+    frame.y = area.y;
+    frame.height = std::max(1, area.height - title_height - border);
+  }
   resize_frame(frame);
+}
+
+void X11WindowManager::set_maximized(xcb_window_t client, bool horz, bool vert) {
+  auto it = frames_.find(client);
+  if (it == frames_.end() || it->second.fullscreen) return;
+  auto& frame = it->second;
+  if (frame.maximized_horz == horz && frame.maximized_vert == vert) return;
+  if (horz && !frame.maximized_horz) {
+    frame.old_x = frame.x;
+    frame.old_width = frame.width;
+  } else if (!horz && frame.maximized_horz) {
+    frame.x = frame.old_x;
+    frame.width = frame.old_width;
+  }
+  if (vert && !frame.maximized_vert) {
+    frame.old_y = frame.y;
+    frame.old_height = frame.height;
+  } else if (!vert && frame.maximized_vert) {
+    frame.y = frame.old_y;
+    frame.height = frame.old_height;
+  }
+  frame.maximized_horz = horz;
+  frame.maximized_vert = vert;
+  update_window_state(frame);
+  if (horz || vert) update_maximized_geometry(frame);
+  else resize_frame(frame);
 }
 
 void X11WindowManager::set_fullscreen(xcb_window_t client, bool enabled) {
   auto it = frames_.find(client);
   if (it == frames_.end() || it->second.fullscreen == enabled) return;
-  if (enabled && it->second.maximized) set_maximized(client, false);
+  if (enabled && (it->second.maximized_horz || it->second.maximized_vert))
+    set_maximized(client, false, false);
   auto& frame = it->second;
   if (enabled) {
     frame.old_x = frame.x; frame.old_y = frame.y;
@@ -684,14 +768,7 @@ void X11WindowManager::update_screen_size(std::uint16_t width, std::uint16_t hei
       frame.x = monitor.x; frame.y = monitor.y;
       frame.width = monitor.width; frame.height = monitor.height;
       resize_frame(frame);
-    } else if (frame.maximized) {
-      const auto monitor = monitor_for(frame);
-      const int top = monitor.y == 0 ? panel_height : monitor.y;
-      frame.x = monitor.x; frame.y = top;
-      frame.width = std::max<int>(min_width, monitor.width - 2 * border);
-      frame.height = std::max<int>(min_height, monitor.height - (top - monitor.y) - title_height - border);
-      resize_frame(frame);
-    }
+    } else if (frame.maximized_horz || frame.maximized_vert) update_maximized_geometry(frame);
   }
 }
 
@@ -703,7 +780,29 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
     if (shell_.owns(e->window)) break;
     if (!frames_.contains(e->window)) manage(e->window);
     if (frames_.contains(e->window)) map(e->window);
-    else xcb_map_window(connection_, e->window);
+    else {
+      xcb_map_window(connection_, e->window);
+      if (auto dock = docks_.find(e->window); dock != docks_.end()) {
+        dock->second.mapped = true;
+        update_geometry_properties();
+        for (auto& [client, frame] : frames_) {
+          (void)client;
+          if (frame.maximized_horz || frame.maximized_vert) update_maximized_geometry(frame);
+        }
+      }
+    }
+    break;
+  }
+  case XCB_MAP_NOTIFY: {
+    auto* e = reinterpret_cast<xcb_map_notify_event_t*>(event);
+    if (auto dock = docks_.find(e->window); dock != docks_.end() && !dock->second.mapped) {
+      dock->second.mapped = true;
+      update_geometry_properties();
+      for (auto& [client, frame] : frames_) {
+        (void)client;
+        if (frame.maximized_horz || frame.maximized_vert) update_maximized_geometry(frame);
+      }
+    }
     break;
   }
   case XCB_CONFIGURE_REQUEST: {
@@ -722,13 +821,14 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
       break;
     }
     auto& f = it->second;
-    if (!f.maximized && !f.fullscreen) {
-      if (e->value_mask & XCB_CONFIG_WINDOW_X) f.x = e->x;
-      if (e->value_mask & XCB_CONFIG_WINDOW_Y) f.y = e->y;
-      if (e->value_mask & XCB_CONFIG_WINDOW_WIDTH) f.width = e->width;
-      if (e->value_mask & XCB_CONFIG_WINDOW_HEIGHT) f.height = e->height;
+    if (!f.fullscreen) {
+      if (!f.maximized_horz && (e->value_mask & XCB_CONFIG_WINDOW_X)) f.x = e->x;
+      if (!f.maximized_vert && (e->value_mask & XCB_CONFIG_WINDOW_Y)) f.y = e->y;
+      if (!f.maximized_horz && (e->value_mask & XCB_CONFIG_WINDOW_WIDTH)) f.width = e->width;
+      if (!f.maximized_vert && (e->value_mask & XCB_CONFIG_WINDOW_HEIGHT)) f.height = e->height;
       constrain_size(f, f.width, f.height);
-      resize_frame(f);
+      if (f.maximized_horz || f.maximized_vert) update_maximized_geometry(f);
+      else resize_frame(f);
     }
     xcb_configure_notify_event_t notify{};
     notify.response_type = XCB_CONFIGURE_NOTIFY;
@@ -741,6 +841,14 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
   }
   case XCB_UNMAP_NOTIFY: {
     auto* e = reinterpret_cast<xcb_unmap_notify_event_t*>(event);
+    if (auto dock = docks_.find(e->window); dock != docks_.end() && dock->second.mapped) {
+      dock->second.mapped = false;
+      update_geometry_properties();
+      for (auto& [client, frame] : frames_) {
+        (void)client;
+        if (frame.maximized_horz || frame.maximized_vert) update_maximized_geometry(frame);
+      }
+    }
     if (auto it = frames_.find(e->window); it != frames_.end()) {
       if (it->second.ignore_unmap > 0) --it->second.ignore_unmap;
       else if (it->second.mapped) unmanage(e->window, false);
@@ -749,6 +857,13 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
   }
   case XCB_DESTROY_NOTIFY: {
     auto* e = reinterpret_cast<xcb_destroy_notify_event_t*>(event);
+    if (docks_.erase(e->window)) {
+      update_geometry_properties();
+      for (auto& [client, frame] : frames_) {
+        (void)client;
+        if (frame.maximized_horz || frame.maximized_vert) update_maximized_geometry(frame);
+      }
+    }
     if (frames_.contains(e->window)) unmanage(e->window, true);
     break;
   }
@@ -761,15 +876,20 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
   case XCB_PROPERTY_NOTIFY: {
     auto* e = reinterpret_cast<xcb_property_notify_event_t*>(event);
     last_event_time_ = e->time;
+    if (docks_.contains(e->window) &&
+        (e->atom == atom("_NET_WM_STRUT_PARTIAL") || e->atom == atom("_NET_WM_STRUT")))
+      refresh_dock(e->window);
     if (auto it = frames_.find(e->window); it != frames_.end()) {
       if (e->atom == atom("_NET_WM_NAME") || e->atom == XCB_ATOM_WM_NAME) {
         update_title(it->second); draw_frame(it->second); update_tasks();
       } else if (e->atom == XCB_ATOM_WM_NORMAL_HINTS || e->atom == XCB_ATOM_WM_HINTS ||
                  e->atom == atom("WM_PROTOCOLS") || e->atom == XCB_ATOM_WM_TRANSIENT_FOR) {
         update_icccm_hints(it->second);
-        if (!it->second.maximized && !it->second.fullscreen) {
+        if (!it->second.fullscreen) {
           constrain_size(it->second, it->second.width, it->second.height);
-          resize_frame(it->second);
+          if (it->second.maximized_horz || it->second.maximized_vert)
+            update_maximized_geometry(it->second);
+          else resize_frame(it->second);
         }
       }
     }
@@ -796,6 +916,7 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
       else close(client);
       break;
     }
+    if (f.fullscreen || f.maximized_horz || f.maximized_vert) break;
     drag_mode_ = y < title_height ? DragMode::move : DragMode::resize;
     drag_client_ = client;
     drag_root_x_ = e->root_x; drag_root_y_ = e->root_y;
@@ -855,11 +976,13 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
       const auto first = e->data.data32[1], second = e->data.data32[2];
       if (first == atom("_NET_WM_STATE_FULLSCREEN") || second == atom("_NET_WM_STATE_FULLSCREEN"))
         set_fullscreen(e->window, next(it->second.fullscreen));
-      if (first == atom("_NET_WM_STATE_MAXIMIZED_VERT") ||
-          first == atom("_NET_WM_STATE_MAXIMIZED_HORZ") ||
-          second == atom("_NET_WM_STATE_MAXIMIZED_VERT") ||
-          second == atom("_NET_WM_STATE_MAXIMIZED_HORZ"))
-        set_maximized(e->window, next(it->second.maximized));
+      const bool change_vert = first == atom("_NET_WM_STATE_MAXIMIZED_VERT") ||
+                               second == atom("_NET_WM_STATE_MAXIMIZED_VERT");
+      const bool change_horz = first == atom("_NET_WM_STATE_MAXIMIZED_HORZ") ||
+                               second == atom("_NET_WM_STATE_MAXIMIZED_HORZ");
+      if (change_vert || change_horz)
+        set_maximized(e->window, change_horz ? next(it->second.maximized_horz) : it->second.maximized_horz,
+                      change_vert ? next(it->second.maximized_vert) : it->second.maximized_vert);
       if (first == atom("_NET_WM_STATE_SKIP_TASKBAR") || second == atom("_NET_WM_STATE_SKIP_TASKBAR")) {
         it->second.skip_taskbar = next(it->second.skip_taskbar);
         update_window_state(it->second);
