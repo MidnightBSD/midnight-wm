@@ -285,6 +285,22 @@ class Settings {
       gtk_widget_set_sensitive(GTK_WIDGET(data), !gtk_toggle_button_get_active(toggle));
     }), value);
   }
+  static gboolean fit_wallpaper_chooser(gpointer data) {
+    auto* widget = GTK_WIDGET(data);
+    if (!gtk_widget_get_visible(widget)) return G_SOURCE_REMOVE;
+    auto* parent = gtk_window_get_transient_for(GTK_WINDOW(widget));
+    auto* parent_window = parent ? gtk_widget_get_window(GTK_WIDGET(parent)) : nullptr;
+    auto* display = gtk_widget_get_display(widget);
+    auto* monitor = parent_window ? gdk_display_get_monitor_at_window(display, parent_window)
+                                  : gdk_display_get_primary_monitor(display);
+    if (monitor) {
+      GdkRectangle area{};
+      gdk_monitor_get_workarea(monitor, &area);
+      gtk_window_resize(GTK_WINDOW(widget), std::min(760, std::max(1, area.width - 40)),
+                        std::min(480, std::max(1, area.height - 80)));
+    }
+    return G_SOURCE_REMOVE;
+  }
   void wallpaper(GtkWidget* grid) {
     auto* box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
     auto* value = gtk_entry_new();
@@ -293,7 +309,7 @@ class Settings {
     gtk_widget_set_tooltip_text(value, "Full path or installed wallpaper filename. PNG, JPEG, GIF (first frame), SVG.");
     gtk_box_pack_start(GTK_BOX(box), value, FALSE, FALSE, 0);
     auto* buttons = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
-    auto* browse = gtk_button_new_with_label("Choose image…");
+    auto* browse = gtk_button_new_with_mnemonic("Choose _image…");
     auto* clear = gtk_button_new_with_label("Clear");
     gtk_box_pack_start(GTK_BOX(buttons), browse, TRUE, TRUE, 0);
     gtk_box_pack_start(GTK_BOX(buttons), clear, FALSE, FALSE, 0);
@@ -308,6 +324,12 @@ class Settings {
     g_signal_connect(browse, "clicked", G_CALLBACK(+[](GtkButton* button, gpointer data) {
       auto* dialog = gtk_file_chooser_dialog_new("Choose desktop background", GTK_WINDOW(gtk_widget_get_toplevel(GTK_WIDGET(button))),
           GTK_FILE_CHOOSER_ACTION_OPEN, "_Cancel", GTK_RESPONSE_CANCEL, "_Select", GTK_RESPONSE_ACCEPT, nullptr);
+      // The chooser restores its own preferred size while mapping, overriding
+      // an earlier default-size request. Resize after that initialization.
+      g_signal_connect(dialog, "map", G_CALLBACK(+[](GtkWidget* mapped, gpointer) {
+        g_idle_add_full(G_PRIORITY_DEFAULT_IDLE, fit_wallpaper_chooser,
+                        g_object_ref(mapped), g_object_unref);
+      }), nullptr);
       gtk_file_chooser_set_local_only(GTK_FILE_CHOOSER(dialog), TRUE);
       const char* current = gtk_entry_get_text(GTK_ENTRY(data));
       if (g_path_is_absolute(current) && g_file_test(current, G_FILE_TEST_IS_REGULAR))

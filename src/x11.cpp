@@ -449,6 +449,16 @@ void X11WindowManager::manage(xcb_window_t window) {
   if (auto parent = frames_.find(frame.transient_for); parent != frames_.end()) {
     frame.x = parent->second.x + (int(parent->second.width) - int(frame.width)) / 2;
     frame.y = parent->second.y + (int(parent->second.height) - int(frame.height)) / 2;
+    // Center on the parent, then keep the decorated dialog on that monitor.
+    // A chooser can be wider than a parent positioned against a screen edge.
+    const auto monitor = monitor_for(parent->second);
+    const int inset = decorated(frame) ? border_pixels() : 0;
+    const int title = decorated(frame) ? title_height_pixels() : 0;
+    const int top = monitor.y + (monitor.primary ? shell_.panel_height() : 0);
+    frame.x = std::clamp(frame.x, monitor.x,
+        std::max(monitor.x, monitor.x + monitor.width - int(frame.width) - 2 * inset));
+    frame.y = std::clamp(frame.y, top,
+        std::max(top, monitor.y + monitor.height - int(frame.height) - title - inset));
   }
   auto state_cookie = xcb_get_property(connection_, 0, window, atom("_NET_WM_STATE"), XCB_ATOM_ATOM, 0, 32);
   Reply<xcb_get_property_reply_t> initial_states(xcb_get_property_reply(connection_, state_cookie, nullptr), std::free);
@@ -467,7 +477,8 @@ void X11WindowManager::manage(xcb_window_t window) {
   frame.mapped = attr->map_state != XCB_MAP_STATE_UNMAPPED;
   const std::uint32_t mask = XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_BUTTON_PRESS |
       XCB_EVENT_MASK_BUTTON_RELEASE | XCB_EVENT_MASK_POINTER_MOTION |
-      XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_STRUCTURE_NOTIFY;
+      XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT |
+      XCB_EVENT_MASK_STRUCTURE_NOTIFY;
   const std::uint32_t values[] = {screen_->white_pixel, mask};
   const int inset = decorated(frame) ? border_pixels() : 0;
   const int top_inset = decorated(frame) ? title_height_pixels() : 0;

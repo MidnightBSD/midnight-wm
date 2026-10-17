@@ -57,6 +57,45 @@ def frame_extents(window):
     return tuple(map(int, match.groups())) if match else None
 
 
+def window_position(window):
+    info = run("xwininfo", "-id", window)
+    return tuple(int(re.search(rf"Absolute upper-left {axis}:\s+(-?\d+)", info).group(1))
+                 for axis in ("X", "Y"))
+
+
+def visible_window(title):
+    result = subprocess.run(["xdotool", "search", "--onlyvisible", "--name", f"^{title}$"],
+                            capture_output=True, text=True, timeout=5)
+    return result.stdout.splitlines()[0] if result.returncode == 0 and result.stdout.strip() else None
+
+
+def check_wallpaper_chooser(settings, output, name):
+    run("xdotool", "windowactivate", "--sync", settings)
+    run("xdotool", "key", "--clearmodifiers", "alt+i")
+    chooser = until(lambda: visible_window("Choose desktop background"), "wallpaper chooser did not open")
+    extents = until(lambda: frame_extents(chooser), "wallpaper chooser was not decorated")
+    (output / f"{name}-hints.txt").write_text(run("xprop", "-id", chooser, "WM_NORMAL_HINTS"))
+    # Allow GTK to complete its initial folder load and resulting size requests.
+    time.sleep(0.5)
+    x, y = window_position(chooser)
+    width, height = geometry(chooser)
+    left, right, top, bottom = extents
+    bounds = (x - left, y - top, x + width + right, y + height + bottom)
+    tree = run("xwininfo", "-id", chooser, "-tree")
+    frame = re.search(r"Parent window id:\s+(0x[0-9a-f]+)", tree).group(1)
+    frame_x, frame_y = window_position(frame)
+    frame_w, frame_h = geometry(frame)
+    assert (frame_w, frame_h) == (width + left + right, height + top + bottom), \
+        "chooser frame did not follow the client resize"
+    assert (frame_x, frame_y) == (bounds[0], bounds[1]), "chooser frame and client positions differ"
+    run("import", "-window", "root", str(output / f"{name}.png"))
+    assert bounds[0] >= 0 and bounds[1] >= 30 and bounds[2] <= 1280 and bounds[3] <= 720, \
+        f"wallpaper chooser extends outside usable screen: {bounds}"
+    run("xdotool", "windowactivate", "--sync", chooser)
+    run("xdotool", "key", "--clearmodifiers", "Escape")
+    until(lambda: visible_window("Choose desktop background") is None, "wallpaper chooser did not close")
+
+
 def atomic_write(path, text):
     temporary = path.with_suffix(".new")
     temporary.write_text(text)
@@ -85,6 +124,11 @@ def session(args):
             until(lambda: frame_extents(settings) == (5, 5, 28, 5),
                   "Settings did not receive initial frame extents")
             run("import", "-window", "root", str(output / "settings.png"))
+            check_wallpaper_chooser(settings, output, "wallpaper-chooser")
+            original_x, original_y = window_position(settings)
+            run("xdotool", "windowmove", "--sync", settings, "800", "480")
+            check_wallpaper_chooser(settings, output, "wallpaper-chooser-edge")
+            run("xdotool", "windowmove", "--sync", settings, str(original_x), str(original_y))
             # Exercise a visible editable field and the Apply button through mnemonics.
             apply_ui(settings)
             until(lambda: "Smoke test" in config.read_text(), "Settings Apply did not save panel label")
@@ -127,7 +171,8 @@ def session(args):
             until(lambda: geometry(panel) == (1280, 30), "reload did not recover after malformed config")
             assert wm.poll() is None, "reload restarted or exited the original WM process"
             (output / "windows.txt").write_text(window_tree())
-            print("Settings menu launch, Apply, preservation, live color/scale, and malformed-config recovery passed.")
+            print("Settings menu launch, wallpaper chooser bounds, Apply, preservation, live color/scale, "
+                  "and malformed-config recovery passed.")
         finally:
             wm.terminate()
             try:
@@ -138,9 +183,7 @@ def session(args):
 
 
 def settings_window():
-    result = subprocess.run(["xdotool", "search", "--onlyvisible", "--name", "^Midnight Workspace Settings$"],
-                            capture_output=True, text=True, timeout=5)
-    return result.stdout.splitlines()[0] if result.returncode == 0 and result.stdout.strip() else None
+    return visible_window("Midnight Workspace Settings")
 
 
 def apply_ui(window):
