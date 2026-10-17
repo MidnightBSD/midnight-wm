@@ -394,6 +394,9 @@ void watcher_disappeared(GDBusConnection*, const gchar* name, gpointer data) {
 
 void watcher_signal(GDBusConnection*, const gchar*, const gchar*,
                     const gchar* interface, const gchar* signal, GVariant* params, gpointer data) {
+  // Subscribed signal bodies are not type-checked; the sender may be any
+  // process that owns the external watcher name.
+  if (!g_variant_is_of_type(params, G_VARIANT_TYPE("(s)"))) return;
   auto* self = static_cast<StatusNotifier::Impl*>(data);
   unsigned index = g_strcmp0(interface, watcher_ifaces[1]) == 0 ? 1 : 0;
   const char* key = nullptr;
@@ -411,6 +414,7 @@ void watcher_signal(GDBusConnection*, const gchar*, const gchar*,
 
 void name_owner_changed(GDBusConnection*, const gchar*, const gchar*,
                         const gchar*, const gchar*, GVariant* params, gpointer data) {
+  if (!g_variant_is_of_type(params, G_VARIANT_TYPE("(sss)"))) return;
   auto* self = static_cast<StatusNotifier::Impl*>(data);
   const char *name{}, *old_owner{}, *new_owner{};
   g_variant_get(params, "(&s&s&s)", &name, &old_owner, &new_owner);
