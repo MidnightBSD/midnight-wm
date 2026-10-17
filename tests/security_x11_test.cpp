@@ -109,10 +109,10 @@ int main() {
     }
     const auto selection = atom("XdndSelection");
     const auto uri_list = atom("text/uri-list");
-    auto request_all = [&](int count, const char* prefix) {
+    auto request_all = [&](int count, const char* prefix, xcb_atom_t target) {
       for (int i = 0; i < count; ++i) {
         const auto property = atom((prefix + std::to_string(i)).c_str());
-        xcb_convert_selection(connection, client, selection, uri_list, property, XCB_CURRENT_TIME);
+        xcb_convert_selection(connection, client, selection, target, property, XCB_CURRENT_TIME);
       }
       xcb_flush(connection);
       int accepted = 0, rejected = 0;
@@ -132,16 +132,20 @@ int main() {
       }
       return std::pair{accepted, rejected};
     };
-    if (const auto [accepted, rejected] = request_all(17, "SECURITY_DND_"); accepted != 16 || rejected != 1) {
+    if (const auto [accepted, rejected] = request_all(17, "SECURITY_DND_", uri_list); accepted != 16 || rejected != 1) {
       std::cerr << "XDND INCR limit: accepted=" << accepted << " rejected=" << rejected << '\n';
       return 1;
     }
-    if (const auto [accepted, rejected] = request_all(1, "SECURITY_DND_"); accepted != 0 || rejected != 1) {
+    if (const auto [accepted, rejected] = request_all(1, "SECURITY_DND_", uri_list); accepted != 0 || rejected != 1) {
       std::cerr << "duplicate XDND requestor/property was not rejected\n";
       return 1;
     }
+    if (const auto [accepted, rejected] = request_all(1, "SECURITY_DND_", atom("TARGETS")); accepted != 0 || rejected != 1) {
+      std::cerr << "TARGETS reused an active XDND transfer property\n";
+      return 1;
+    }
     dnd.tick(std::chrono::steady_clock::now() + std::chrono::seconds(31));
-    if (const auto [accepted, rejected] = request_all(1, "SECURITY_DND_RECOVERED_"); accepted != 1) {
+    if (const auto [accepted, rejected] = request_all(1, "SECURITY_DND_RECOVERED_", uri_list); accepted != 1) {
       std::cerr << "expired XDND slots were not reclaimed\n";
       return 1;
     }
