@@ -921,9 +921,10 @@ struct Shell::Impl {
       const int y = start_y + (static_cast<int>(i / cols) - scroll_rows) * icon_height;
       if (selected == static_cast<int>(i))
         fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
-             x, y, 75, 74);
+             x, y, 78, 74);
       icon(cr, items[i], x + 14, y + 3, object_icon_surface(items[i].object.icon));
-      text(cr, items[i].object.title, x + 2, y + 50, 76, 10,
+      const int label_offset = on_desktop ? 2 : 18;
+      text(cr, items[i].object.title, x + label_offset, y + 50, 78 - label_offset, 10,
            selected == static_cast<int>(i) || on_desktop);
     }
   }
