@@ -39,6 +39,12 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
 - `src/model.*` and `src/store.*` own display independent object and file
   behavior. Keep XCB types and event handling out of these files so a future
   Wayland backend can reuse them.
+- `src/desktop_launcher.*` reads application desktop entries and only launches
+  user-owned executable files directly on the configured Desktop. Recheck trust
+  at launch time. `src/thumbnail.*` reads and writes the shared freedesktop
+  thumbnail cache for images; keep thumbnail URI and freshness metadata valid.
+- `src/notifications.*` implements the session D-Bus notification service and
+  draws passive X11 popups only when no other daemon owns the service name.
 - `data/` contains the Xsession entry, example configuration, and MidnightBSD
   launcher logo sourced from `MidnightBSD/www/art/logo`.
 - `packaging/mports/x11-wm/midnight-wm/` contains an experimental mport.

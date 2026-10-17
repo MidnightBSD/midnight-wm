@@ -2,8 +2,10 @@
 
 #include "audio.hpp"
 #include "config.hpp"
+#include "desktop_launcher.hpp"
 #include "model.hpp"
 #include "store.hpp"
+#include "thumbnail.hpp"
 
 #include <cairo/cairo-xcb.h>
 #include <gio/gio.h>
@@ -56,6 +58,9 @@ constexpr int icon_chooser_rows = 4;
 constexpr int icon_chooser_cell_width = 112;
 constexpr int icon_chooser_cell_height = 74;
 constexpr int icon_chooser_page_size = icon_chooser_columns * icon_chooser_rows;
+constexpr int open_with_width = 460;
+constexpr int open_with_height = 390;
+constexpr int open_with_rows = 10;
 
 using Item = ShellItem;
 
@@ -187,6 +192,17 @@ struct IconChooser {
   std::size_t page{};
 };
 
+struct OpenWithDialog {
+  xcb_window_t window{};
+  xcb_window_t owner{};
+  std::filesystem::path path;
+  std::string content_type;
+  std::vector<GAppInfo*> apps;
+  GAppInfo* default_app{};
+  std::size_t scroll{};
+  std::size_t selected{};
+};
+
 struct AppCategory {
   std::string label;
   std::string icon;
@@ -238,7 +254,7 @@ struct TransferCompletion {
 enum class MenuAction { open_home, open_desktop, open_trash, new_folder, paste, show_programs,
                         show_category, next_categories, previous_categories,
                         launch, next_apps, previous_apps,
-                        open_item, copy, cut, create_shadow, create_template, properties, trash,
+                        open_item, open_with, copy, cut, create_shadow, create_template, properties, trash,
                         restore, delete_permanently, close_folder, exit_session, refresh_folder,
                         sort_by_name, sort_by_type, activate_task, next_tasks, previous_tasks };
 struct MenuEntry { std::string label; MenuAction action; std::size_t index{}; xcb_window_t window{}; };
@@ -430,6 +446,7 @@ struct Shell::Impl {
   std::string notice_text;
   std::optional<Properties> properties;
   std::optional<IconChooser> icon_chooser;
+  std::optional<OpenWithDialog> open_with_dialog;
   std::uint16_t width{}, height{};
   std::unordered_map<xcb_window_t, Folder> folders;
   std::unordered_set<std::string> hidden_shortcuts;
@@ -444,6 +461,9 @@ struct Shell::Impl {
   std::unordered_map<std::string, IconTheme> icon_themes;
   std::unordered_map<std::string, std::filesystem::path> icon_files;
   std::unordered_map<std::string, cairo_surface_t*> icon_surfaces;
+  std::unordered_map<std::string, std::string> file_content_types;
+  std::unordered_map<std::string, cairo_surface_t*> file_icon_cache;
+  ThumbnailCache thumbnail_cache;
   cairo_surface_t* logo_surface{};
   std::string icon_theme{selected_icon_theme()};
   std::vector<MenuEntry> menu_entries;
@@ -501,6 +521,11 @@ struct Shell::Impl {
     if (exit_dialog) xcb_destroy_window(connection, exit_dialog);
     if (notice) xcb_destroy_window(connection, notice);
     if (icon_chooser) xcb_destroy_window(connection, icon_chooser->window);
+    if (open_with_dialog) {
+      for (auto* app : open_with_dialog->apps) g_object_unref(app);
+      if (open_with_dialog->default_app) g_object_unref(open_with_dialog->default_app);
+      xcb_destroy_window(connection, open_with_dialog->window);
+    }
     if (properties) xcb_destroy_window(connection, properties->window);
     if (panel) xcb_destroy_window(connection, panel);
     if (desktop) xcb_destroy_window(connection, desktop);
@@ -675,17 +700,20 @@ struct Shell::Impl {
     return {};
   }
 
-  cairo_surface_t* app_icon(GAppInfo* app) {
-    GIcon* icon = g_app_info_get_icon(app);
+  cairo_surface_t* gio_icon_surface(GIcon* icon, int size) {
     if (!icon) return nullptr;
     char* key_text = g_icon_to_string(icon);
-    const std::string key = key_text ? key_text : "";
+    const std::string key = "gio:" + std::to_string(size) + ":" + (key_text ? key_text : "");
     g_free(key_text);
     if (auto it = icon_surfaces.find(key); it != icon_surfaces.end()) return it->second;
     const auto path = icon_path(icon);
-    auto* surface = path.empty() ? nullptr : image_surface(path, launcher_icon_size);
+    auto* surface = path.empty() ? nullptr : image_surface(path, size);
     icon_surfaces.emplace(key, surface);
     return surface;
+  }
+
+  cairo_surface_t* app_icon(GAppInfo* app) {
+    return gio_icon_surface(g_app_info_get_icon(app), launcher_icon_size);
   }
 
   cairo_surface_t* themed_icon_surface(const std::string& name) {
@@ -705,6 +733,62 @@ struct Shell::Impl {
       std::filesystem::path(name) : themed_icon_path(name);
     auto* surface = path.empty() ? nullptr : image_surface(path, 40);
     icon_surfaces.emplace(key, surface);
+    return surface;
+  }
+
+  std::string content_type_for_file(const std::filesystem::path& path) {
+    const auto key = path.string();
+    if (auto it = file_content_types.find(key); it != file_content_types.end()) return it->second;
+    auto* file = g_file_new_for_path(path.c_str());
+    auto* info = g_file_query_info(file, G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE,
+                                   G_FILE_QUERY_INFO_NONE, nullptr, nullptr);
+    std::string type;
+    if (info) {
+      if (const char* value = g_file_info_get_content_type(info)) type = value;
+      g_object_unref(info);
+    }
+    g_object_unref(file);
+    if (type.empty()) {
+      gboolean uncertain = FALSE;
+      char* guessed = g_content_type_guess(key.c_str(), nullptr, 0, &uncertain);
+      if (guessed) { type = guessed; g_free(guessed); }
+    }
+    return file_content_types.emplace(key, std::move(type)).first->second;
+  }
+
+  std::optional<DesktopLauncherInfo> trusted_launcher(const Item& item) const {
+    if (!item.physical || item.path.extension() != ".desktop") return std::nullopt;
+    auto info = desktop_launcher_info(item.path, Store::desktop_path());
+    if (!info || !info->trusted) return std::nullopt;
+    return *info;
+  }
+
+  cairo_surface_t* thumbnail_surface(const std::filesystem::path& path) {
+    const auto thumbnail = thumbnail_cache.thumbnail_for(path);
+    if (!thumbnail) return nullptr;
+    std::error_code error;
+    const auto modified = std::filesystem::last_write_time(*thumbnail, error);
+    if (error) return nullptr;
+    const auto key = "thumbnail:" + thumbnail->string() + ":" +
+                     std::to_string(static_cast<long long>(modified.time_since_epoch().count()));
+    if (auto it = icon_surfaces.find(key); it != icon_surfaces.end()) return it->second;
+    auto* surface = image_surface(*thumbnail, 40);
+    icon_surfaces.emplace(key, surface);
+    return surface;
+  }
+
+  cairo_surface_t* item_icon_surface(const Item& item, const DesktopLauncherInfo* launcher = nullptr) {
+    if (!item.object.icon.empty()) return object_icon_surface(item.object.icon);
+    if (launcher && !launcher->icon.empty()) return object_icon_surface(launcher->icon);
+    if (!item.physical || item.path.empty()) return nullptr;
+    if (auto* surface = thumbnail_surface(item.path)) return surface;
+    const auto key = item.path.string();
+    if (auto it = file_icon_cache.find(key); it != file_icon_cache.end()) return it->second;
+    const auto type = content_type_for_file(item.path);
+    GIcon* icon = type.empty() ? nullptr : g_content_type_get_icon(type.c_str());
+    auto* surface = gio_icon_surface(icon, 40);
+    if (icon) g_object_unref(icon);
+    file_icon_cache.emplace(key, surface);
     return surface;
   }
 
@@ -830,6 +914,8 @@ struct Shell::Impl {
   }
 
   void refresh() {
+    file_content_types.clear();
+    file_icon_cache.clear();
     desktop_items = list_items(Store::desktop_path(), true);
     for (auto& [window, folder] : folders) {
       folder.items = list_items(folder.path, false);
@@ -1041,9 +1127,12 @@ struct Shell::Impl {
       if (selected == static_cast<int>(i))
         fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
              x, y, 78, 74);
-      icon(cr, items[i], x + 14, y + 3, object_icon_surface(items[i].object.icon));
+      const auto launcher = trusted_launcher(items[i]);
+      icon(cr, items[i], x + 14, y + 3,
+           item_icon_surface(items[i], launcher ? &*launcher : nullptr));
       const int label_offset = on_desktop ? 2 : 18;
-      text(cr, items[i].object.title, x + label_offset, y + 50, 78 - label_offset, 10,
+      text(cr, launcher ? launcher->name : items[i].object.title,
+           x + label_offset, y + 50, 78 - label_offset, 10,
            selected == static_cast<int>(i) || on_desktop);
     }
   }
@@ -1155,6 +1244,134 @@ struct Shell::Impl {
     notice = create_window(x, y, 420, 100);
     xcb_map_window(connection, notice);
     draw_notice();
+  }
+
+  bool can_open_with(const Item& item) const {
+    std::error_code error;
+    return !item.trashed && !item.path.empty() &&
+      std::filesystem::is_regular_file(item.path, error);
+  }
+
+  void close_open_with_dialog() {
+    if (!open_with_dialog) return;
+    const auto owner = open_with_dialog->owner;
+    for (auto* app : open_with_dialog->apps) g_object_unref(app);
+    if (open_with_dialog->default_app) g_object_unref(open_with_dialog->default_app);
+    xcb_destroy_window(connection, open_with_dialog->window);
+    open_with_dialog.reset();
+    if (owner == desktop || folders.contains(owner))
+      xcb_set_input_focus(connection, XCB_INPUT_FOCUS_POINTER_ROOT, owner, XCB_CURRENT_TIME);
+  }
+
+  void draw_open_with_dialog() {
+    if (!open_with_dialog) return;
+    const auto& dialog = *open_with_dialog;
+    paint(dialog.window, open_with_width, open_with_height, [&](cairo_t* cr) {
+      fill(cr, .75, .75, .75, 0, 0, open_with_width, open_with_height);
+      bevel(cr, 0, 0, open_with_width, open_with_height);
+      fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
+           4, 4, open_with_width - 8, 26);
+      text(cr, "Open With", 12, 7, open_with_width - 24, 12, true, true);
+      text(cr, basename(dialog.path), 12, 36, open_with_width - 24, 11);
+      fill(cr, .96, .96, .92, 10, 56, open_with_width - 20, 282);
+      bevel(cr, 10, 56, open_with_width - 20, 282, true);
+      for (std::size_t row = 0; row < open_with_rows && row + dialog.scroll < dialog.apps.size(); ++row) {
+        const auto index = row + dialog.scroll;
+        auto* app = dialog.apps[index];
+        const int y = 57 + static_cast<int>(row) * 28;
+        const bool selected = index == dialog.selected;
+        if (selected)
+          fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
+               12, y, open_with_width - 24, 27);
+        if (auto* surface = app_icon(app)) {
+          cairo_set_source_surface(cr, surface, 17, y + 4);
+          cairo_paint(cr);
+        }
+        const bool is_default = dialog.default_app && g_app_info_equal(app, dialog.default_app);
+        const std::string label = std::string(g_app_info_get_display_name(app)) +
+          (is_default ? " (default)" : "");
+        text(cr, label, 42, y + 5, open_with_width - 58, 11, selected);
+      }
+      if (dialog.apps.size() > open_with_rows)
+        text(cr, std::to_string(dialog.scroll + 1) + "–" +
+                 std::to_string(std::min(dialog.apps.size(), dialog.scroll + open_with_rows)) +
+                 " of " + std::to_string(dialog.apps.size()), 355, 339, 90, 10);
+      for (const auto [x, w, label] : {std::tuple{10, 100, "Open"},
+                                      std::tuple{118, 190, "Set Default & Open"},
+                                      std::tuple{316, 132, "Cancel"}}) {
+        bevel(cr, x, 355, w, 26);
+        text(cr, label, x + 8, 359, w - 12, 11);
+      }
+    });
+  }
+
+  void show_open_with_dialog(const Item& item) {
+    if (!can_open_with(item)) return;
+    close_open_with_dialog();
+    OpenWithDialog dialog;
+    dialog.owner = menu_owner;
+    dialog.path = item.path;
+    dialog.content_type = content_type_for_file(item.path);
+    if (dialog.content_type.empty()) { show_notice("Could not determine file type"); return; }
+    dialog.default_app = g_app_info_get_default_for_type(dialog.content_type.c_str(), FALSE);
+    const auto add_app = [&](GAppInfo* app) {
+      if (!app || (!g_app_info_supports_files(app) && !g_app_info_supports_uris(app))) return;
+      if (std::ranges::any_of(dialog.apps, [app](GAppInfo* existing) {
+            return g_app_info_equal(existing, app);
+          })) return;
+      dialog.apps.push_back(G_APP_INFO(g_object_ref(app)));
+    };
+    add_app(dialog.default_app);
+    GList* recommended = g_app_info_get_recommended_for_type(dialog.content_type.c_str());
+    for (GList* node = recommended; node; node = node->next) add_app(G_APP_INFO(node->data));
+    g_list_free_full(recommended, g_object_unref);
+    const auto preferred_count = dialog.apps.size();
+    GList* all = g_app_info_get_all();
+    for (GList* node = all; node; node = node->next) {
+      auto* app = G_APP_INFO(node->data);
+      if (g_app_info_should_show(app)) add_app(app);
+    }
+    g_list_free_full(all, g_object_unref);
+    std::ranges::sort(dialog.apps.begin() + static_cast<std::ptrdiff_t>(preferred_count),
+                      dialog.apps.end(), [](GAppInfo* a, GAppInfo* b) {
+      return g_utf8_collate(g_app_info_get_display_name(a),
+                            g_app_info_get_display_name(b)) < 0;
+    });
+    if (dialog.apps.empty()) {
+      if (dialog.default_app) g_object_unref(dialog.default_app);
+      show_notice("No application can open this file");
+      return;
+    }
+    dialog.window = create_window(std::max(0, (static_cast<int>(width) - open_with_width) / 2),
+      std::max(panel_height, (static_cast<int>(height) - open_with_height) / 2),
+      open_with_width, open_with_height);
+    open_with_dialog = std::move(dialog);
+    xcb_map_window(connection, open_with_dialog->window);
+    xcb_set_input_focus(connection, XCB_INPUT_FOCUS_POINTER_ROOT,
+                        open_with_dialog->window, XCB_CURRENT_TIME);
+    draw_open_with_dialog();
+  }
+
+  void accept_open_with(bool set_default) {
+    if (!open_with_dialog || open_with_dialog->selected >= open_with_dialog->apps.size()) return;
+    auto& dialog = *open_with_dialog;
+    auto* app = dialog.apps[dialog.selected];
+    GError* error = nullptr;
+    if (set_default && !g_app_info_set_as_default_for_type(app, dialog.content_type.c_str(), &error)) {
+      show_notice(std::string("Could not set default: ") + (error ? error->message : "unknown error"));
+      if (error) g_error_free(error);
+      return;
+    }
+    auto* file = g_file_new_for_path(dialog.path.c_str());
+    GList* files = g_list_append(nullptr, file);
+    const gboolean launched = g_app_info_launch(app, files, nullptr, &error);
+    g_list_free(files);
+    g_object_unref(file);
+    close_open_with_dialog();
+    if (!launched) {
+      show_notice(std::string("Open failed: ") + (error ? error->message : "unknown error"));
+    }
+    if (error) g_error_free(error);
   }
 
   void show_properties(const Item& item) {
@@ -1543,9 +1760,11 @@ struct Shell::Impl {
       entries = {{"Restore", MenuAction::restore}, {"Delete permanently", MenuAction::delete_permanently},
                  {"Properties", MenuAction::properties}};
     } else if (item) {
-      entries = {{"Open", MenuAction::open_item}, {"Copy", MenuAction::copy}, {"Cut", MenuAction::cut},
+      entries = {{"Open", MenuAction::open_item}};
+      if (can_open_with(*item)) entries.push_back({"Open With…", MenuAction::open_with});
+      entries.insert(entries.end(), {{"Copy", MenuAction::copy}, {"Cut", MenuAction::cut},
                  {"Create shadow", MenuAction::create_shadow}, {"Create template", MenuAction::create_template},
-                 {"Properties", MenuAction::properties}, {"Move to Trash", MenuAction::trash}};
+                 {"Properties", MenuAction::properties}, {"Move to Trash", MenuAction::trash}});
     } else if (!(folders.contains(window) && folders.at(window).trash)) {
       entries = {{"New folder", MenuAction::new_folder}, {"Paste", MenuAction::paste}};
     }
@@ -1559,6 +1778,8 @@ struct Shell::Impl {
     std::vector<MenuEntry> entries;
     if (tab == 0) {
       if (selected_item) entries.push_back({"Open", MenuAction::open_item});
+      if (selected_item && can_open_with(*selected_item))
+        entries.push_back({"Open With…", MenuAction::open_with});
       if (!folder.trash) entries.push_back({"New folder", MenuAction::new_folder});
       if (selected_item) {
         entries.push_back({"Properties", MenuAction::properties});
@@ -1626,6 +1847,11 @@ struct Shell::Impl {
     }
     std::error_code ec;
     if (std::filesystem::is_directory(path, ec)) { open_folder(path); return; }
+    if (path.extension() == ".desktop") {
+      if (auto launched = launch_desktop_entry(path, Store::desktop_path()); !launched)
+        show_notice("Launcher: " + launched.error());
+      return;
+    }
     const auto uri = file_uri(path);
     GError* error = nullptr;
     g_app_info_launch_default_for_uri(uri.c_str(), nullptr, &error);
@@ -1687,6 +1913,7 @@ struct Shell::Impl {
       case MenuAction::next_tasks: show_task_overflow(task_page + 1); break;
       case MenuAction::previous_tasks: show_task_overflow(task_page ? task_page - 1 : 0); break;
       case MenuAction::open_item: if (selected_item) open_item(*selected_item); break;
+      case MenuAction::open_with: if (selected_item) show_open_with_dialog(*selected_item); break;
       case MenuAction::copy:
       case MenuAction::cut:
         if (selected_item) {
@@ -1759,6 +1986,28 @@ struct Shell::Impl {
   }
 
   void button(const xcb_button_press_event_t* event) {
+    if (open_with_dialog && event->event == open_with_dialog->window) {
+      auto& dialog = *open_with_dialog;
+      if (event->detail == 4 || event->detail == 5) {
+        const auto max_scroll = dialog.apps.size() > open_with_rows ?
+          dialog.apps.size() - open_with_rows : 0;
+        if (event->detail == 4 && dialog.scroll) --dialog.scroll;
+        else if (event->detail == 5 && dialog.scroll < max_scroll) ++dialog.scroll;
+        draw_open_with_dialog();
+      } else if (event->detail == 1) {
+        if (event->event_y >= 57 && event->event_y < 337 &&
+            event->event_x >= 12 && event->event_x < open_with_width - 12) {
+          const auto index = dialog.scroll + static_cast<std::size_t>((event->event_y - 57) / 28);
+          if (index < dialog.apps.size()) { dialog.selected = index; draw_open_with_dialog(); }
+        } else if (event->event_y >= 355 && event->event_y < 381) {
+          if (event->event_x >= 10 && event->event_x < 110) accept_open_with(false);
+          else if (event->event_x >= 118 && event->event_x < 308) accept_open_with(true);
+          else if (event->event_x >= 316 && event->event_x < 448) close_open_with_dialog();
+        }
+      }
+      return;
+    }
+    if (open_with_dialog) return;
     if (icon_chooser && event->event == icon_chooser->window) {
       auto& chooser = *icon_chooser;
       const auto pages = (chooser.visible.size() + icon_chooser_page_size - 1) /
@@ -1987,6 +2236,25 @@ struct Shell::Impl {
   }
 
   void key(const xcb_key_press_event_t* event) {
+    if (open_with_dialog && event->event == open_with_dialog->window) {
+      auto& dialog = *open_with_dialog;
+      const auto sym = key_symbols ? xcb_key_symbols_get_keysym(key_symbols, event->detail, 0) : 0;
+      if (sym == XK_Escape) { close_open_with_dialog(); return; }
+      if (sym == XK_Return) { accept_open_with(false); return; }
+      if (sym == XK_Up && dialog.selected) --dialog.selected;
+      else if (sym == XK_Down && dialog.selected + 1 < dialog.apps.size()) ++dialog.selected;
+      else if (sym == XK_Page_Up)
+        dialog.selected = dialog.selected > open_with_rows ? dialog.selected - open_with_rows : 0;
+      else if (sym == XK_Page_Down)
+        dialog.selected = std::min(dialog.apps.size() - 1, dialog.selected + open_with_rows);
+      else return;
+      if (dialog.selected < dialog.scroll) dialog.scroll = dialog.selected;
+      else if (dialog.selected >= dialog.scroll + open_with_rows)
+        dialog.scroll = dialog.selected - open_with_rows + 1;
+      draw_open_with_dialog();
+      return;
+    }
+    if (open_with_dialog) return;
     if (icon_chooser && event->event == icon_chooser->window) {
       auto& chooser = *icon_chooser;
       const auto sym = key_symbols ? xcb_key_symbols_get_keysym(key_symbols, event->detail,
@@ -2196,6 +2464,7 @@ bool Shell::owns(xcb_window_t window) const {
                     window == p.submenu || window == p.app_menu || window == p.notice ||
                     window == p.exit_dialog ||
                     (p.icon_chooser && window == p.icon_chooser->window) ||
+                    (p.open_with_dialog && window == p.open_with_dialog->window) ||
                     (p.properties && window == p.properties->window) || p.folders.contains(window));
 }
 
@@ -2230,6 +2499,7 @@ bool Shell::handle(xcb_generic_event_t* event) {
     else if (window == p.notice) p.draw_notice();
     else if (window == p.exit_dialog) p.draw_exit_dialog();
     else if (p.icon_chooser && window == p.icon_chooser->window) p.draw_icon_chooser();
+    else if (p.open_with_dialog && window == p.open_with_dialog->window) p.draw_open_with_dialog();
     else if (p.properties && window == p.properties->window) p.draw_properties();
     else if (auto it = p.folders.find(window); it != p.folders.end()) p.draw_folder(it->second);
   } else if (type == XCB_BUTTON_PRESS) p.button(reinterpret_cast<xcb_button_press_event_t*>(event));

@@ -29,6 +29,9 @@ middle, and right clicks plus mouse wheel actions. A session D-Bus is needed for
 StatusNotifier items; the legacy XEmbed tray also works without it.
 StatusNotifier context menus supplied through DBusMenu open in the Warp-style
 popup, including submenus, disabled items, separators, and toggle marks.
+When no other notification daemon owns `org.freedesktop.Notifications`, Midnight
+Workspace provides passive notification popups. They expire automatically or
+can be dismissed with a click. An existing notification daemon keeps control.
 The lock button asks a
 running `xscreensaver` daemon to lock the screen with `xscreensaver-command -lock`;
 if the daemon is unavailable, the desktop shows a notice. Start `xscreensaver`
@@ -54,7 +57,13 @@ if a master volume control is unavailable. It shows `N/A` when no usable mixer
 is available.
 
 Double-click a desktop or folder object to open it. Right-click to see its
-actions. Folder windows support keyboard copy, cut, and paste. The shell uses
+actions. Files use their shared MIME type for themed icons. **Open With…** lets
+you choose an application and optionally save it as the default for that file
+type. Images use the shared `$XDG_CACHE_HOME/thumbnails/normal` preview cache.
+An application `.desktop` file placed directly on the Desktop can launch when
+it is owned by the current user and marked executable. Other `.desktop` files
+cannot launch by double-clicking. Folder windows support keyboard copy, cut,
+and paste. The shell uses
 the standard X11 `CLIPBOARD` selection, and file copy/paste uses
 `text/uri-list` plus `x-special/gnome-copied-files` for other file managers.
 Folder windows have vertical scrollbars: use the arrows, click the track to
