@@ -39,6 +39,7 @@ The list has pages when needed, and selecting a window raises it. Open
 **Programs** in the launcher to browse installed X11
 applications with their desktop entry icons. The launcher stays open while you
 browse Programs pages and closes when you select an item or click outside.
+The launcher also opens Trash directly, just above **Exit X11 session…**.
 Launcher icons follow the selected freedesktop icon theme, including inherited
 themes and the `hicolor` fallback.
 Use the speaker buttons marked `−` and `+`, or the mouse wheel over the volume
@@ -66,6 +67,10 @@ run. Physical files appear from the user's XDG Desktop directory. Shell object
 metadata is stored in `$XDG_DATA_HOME/midnight-wm/workspace.db` (normally under
 `~/.local/share`). Files and folders remain in the filesystem. Deleting a file
 uses the freedesktop Trash mechanism.
+In an object's Properties dialog, double-click Name or Target to select its
+text. Use **Choose...** beside Icon to browse previews from the selected icon
+theme, search by name, and choose an icon. **Default** restores the built-in
+folder or file icon. Existing image paths continue to display.
 
 Drag files between folder windows, the desktop, and other XDND-aware file
 managers. Clipboard and drag operations support file URIs; text selection uses

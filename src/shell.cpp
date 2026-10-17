@@ -19,11 +19,14 @@
 #include <cstring>
 #include <ctime>
 #include <filesystem>
+#include <iterator>
 #include <limits>
 #include <memory>
+#include <numeric>
 #include <numbers>
 #include <optional>
 #include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -45,6 +48,13 @@ constexpr int icon_height = 90;
 constexpr int folder_header = 55;
 constexpr int scrollbar_width = 18;
 constexpr int launcher_icon_size = 18;
+constexpr int icon_chooser_width = 580;
+constexpr int icon_chooser_height = 454;
+constexpr int icon_chooser_columns = 5;
+constexpr int icon_chooser_rows = 4;
+constexpr int icon_chooser_cell_width = 112;
+constexpr int icon_chooser_cell_height = 74;
+constexpr int icon_chooser_page_size = icon_chooser_columns * icon_chooser_rows;
 
 using Item = ShellItem;
 
@@ -163,6 +173,15 @@ struct Properties {
   int last_click_field{-1};
 };
 
+struct IconChooser {
+  xcb_window_t window{};
+  std::vector<std::string> names;
+  std::vector<std::size_t> visible;
+  std::string search;
+  std::string selected;
+  std::size_t page{};
+};
+
 struct TransferWork {
   std::vector<std::filesystem::path> paths;
   std::filesystem::path destination;
@@ -174,7 +193,7 @@ struct TransferCompletion {
   std::function<void(std::expected<void, std::string>)> callback;
 };
 
-enum class MenuAction { open_home, open_desktop, new_folder, paste, show_programs,
+enum class MenuAction { open_home, open_desktop, open_trash, new_folder, paste, show_programs,
                         launch, next_apps, previous_apps,
                         open_item, copy, cut, create_shadow, create_template, properties, trash,
                         restore, delete_permanently, close_folder, exit_session, refresh_folder,
@@ -314,26 +333,11 @@ cairo_surface_t* image_surface(const std::filesystem::path& path, int size) {
   return surface;
 }
 
-void icon(cairo_t* cr, const Item& item, int x, int y) {
-  if (!item.object.icon.empty() && std::filesystem::path(item.object.icon).is_absolute()) {
-    auto* surface = cairo_image_surface_create_from_png(item.object.icon.c_str());
-    if (cairo_surface_status(surface) == CAIRO_STATUS_SUCCESS) {
-      const auto source_width = cairo_image_surface_get_width(surface);
-      const auto source_height = cairo_image_surface_get_height(surface);
-      if (source_width > 0 && source_height > 0) {
-        const auto scale = std::min(40.0 / source_width, 40.0 / source_height);
-        cairo_save(cr);
-        cairo_translate(cr, x + 4 + (40 - source_width * scale) / 2,
-                            y + 3 + (40 - source_height * scale) / 2);
-        cairo_scale(cr, scale, scale);
-        cairo_set_source_surface(cr, surface, 0, 0);
-        cairo_paint(cr);
-        cairo_restore(cr);
-        cairo_surface_destroy(surface);
-        return;
-      }
-    }
-    cairo_surface_destroy(surface);
+void icon(cairo_t* cr, const Item& item, int x, int y, cairo_surface_t* surface) {
+  if (surface) {
+    cairo_set_source_surface(cr, surface, x + 4, y + 3);
+    cairo_paint(cr);
+    return;
   }
   std::error_code ec;
   const bool folder = item.object.kind == ObjectKind::folder ||
@@ -382,6 +386,7 @@ struct Shell::Impl {
   xcb_window_t notice{};
   std::string notice_text;
   std::optional<Properties> properties;
+  std::optional<IconChooser> icon_chooser;
   std::uint16_t width{}, height{};
   std::unordered_map<xcb_window_t, Folder> folders;
   std::unordered_map<xcb_window_t, GFileMonitor*> monitors;
@@ -441,6 +446,7 @@ struct Shell::Impl {
     if (submenu) xcb_destroy_window(connection, submenu);
     if (exit_dialog) xcb_destroy_window(connection, exit_dialog);
     if (notice) xcb_destroy_window(connection, notice);
+    if (icon_chooser) xcb_destroy_window(connection, icon_chooser->window);
     if (properties) xcb_destroy_window(connection, properties->window);
     if (panel) xcb_destroy_window(connection, panel);
     if (desktop) xcb_destroy_window(connection, desktop);
@@ -608,6 +614,68 @@ struct Shell::Impl {
     auto* surface = path.empty() ? nullptr : image_surface(path, launcher_icon_size);
     icon_surfaces.emplace(key, surface);
     return surface;
+  }
+
+  cairo_surface_t* object_icon_surface(const std::string& name) {
+    if (name.empty()) return nullptr;
+    const std::string key = "object:" + name;
+    if (auto it = icon_surfaces.find(key); it != icon_surfaces.end()) return it->second;
+    const auto path = std::filesystem::path(name).is_absolute() ?
+      std::filesystem::path(name) : themed_icon_path(name);
+    auto* surface = path.empty() ? nullptr : image_surface(path, 40);
+    icon_surfaces.emplace(key, surface);
+    return surface;
+  }
+
+  void collect_theme_icon_names(const std::string& name,
+                                std::unordered_set<std::string>& visited,
+                                std::unordered_set<std::string>& names) {
+    if (!visited.insert(name).second) return;
+    const auto& theme = theme_metadata(name);
+    for (const auto& root : icon_roots) {
+      for (const auto& directory : theme.directories) {
+        std::error_code error;
+        for (std::filesystem::directory_iterator it(root / name / directory.relative, error), end;
+             !error && it != end; it.increment(error)) {
+          if (!it->is_regular_file(error)) { error.clear(); continue; }
+          const auto extension = it->path().extension();
+          if (extension == ".png" || extension == ".svg" || extension == ".xpm")
+            names.insert(it->path().stem().string());
+        }
+      }
+    }
+    for (const auto& inherited : theme.inherits)
+      collect_theme_icon_names(inherited, visited, names);
+  }
+
+  std::vector<std::string> available_icon_names() {
+    std::unordered_set<std::string> names;
+    std::unordered_set<std::string> visited;
+    collect_theme_icon_names(icon_theme, visited, names);
+    collect_theme_icon_names("hicolor", visited, names);
+    for (const auto& root : icon_roots) {
+      std::error_code error;
+      for (std::filesystem::directory_iterator it(root.parent_path() / "pixmaps", error), end;
+           !error && it != end; it.increment(error)) {
+        if (!it->is_regular_file(error)) { error.clear(); continue; }
+        const auto extension = it->path().extension();
+        if (extension == ".png" || extension == ".svg" || extension == ".xpm")
+          names.insert(it->path().stem().string());
+      }
+    }
+    std::vector<std::string> result;
+    constexpr std::array<std::string_view, 15> common{
+      "folder", "user-home", "folder-documents", "folder-download", "folder-pictures",
+      "folder-music", "folder-videos", "user-trash", "text-x-generic",
+      "application-x-executable", "applications-system", "applications-internet",
+      "preferences-system", "drive-harddisk", "computer"};
+    for (auto favorite : common)
+      if (names.erase(std::string(favorite))) result.emplace_back(favorite);
+    std::vector<std::string> remaining(names.begin(), names.end());
+    std::ranges::sort(remaining);
+    result.insert(result.end(), std::make_move_iterator(remaining.begin()),
+                  std::make_move_iterator(remaining.end()));
+    return result;
   }
 
   void load_logo() {
@@ -854,7 +922,7 @@ struct Shell::Impl {
       if (selected == static_cast<int>(i))
         fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
              x, y, 75, 74);
-      icon(cr, items[i], x + 14, y + 3);
+      icon(cr, items[i], x + 14, y + 3, object_icon_surface(items[i].object.icon));
       text(cr, items[i].object.title, x + 2, y + 50, 76, 10,
            selected == static_cast<int>(i) || on_desktop);
     }
@@ -923,6 +991,14 @@ struct Shell::Impl {
             cairo_set_source_surface(cr, surface, 8, y + 3);
             cairo_paint(cr);
           }
+        } else if (entry.action == MenuAction::open_trash) {
+          if (auto* surface = themed_icon_surface("user-trash")) {
+            cairo_set_source_surface(cr, surface, 8, y + 3);
+            cairo_paint(cr);
+          } else {
+            fill(cr, .25, .25, .29, 12, y + 8, 12, 13);
+            fill(cr, .66, .66, .68, 10, y + 6, 16, 3);
+          }
         } else if (entry.action == MenuAction::open_home || entry.action == MenuAction::open_desktop ||
                    entry.action == MenuAction::new_folder || entry.action == MenuAction::show_programs) {
           fill(cr, .96, .77, .31, 8, y + 9, 16, 11);
@@ -952,6 +1028,7 @@ struct Shell::Impl {
   }
 
   void show_properties(const Item& item) {
+    if (icon_chooser) close_icon_chooser();
     if (properties) xcb_destroy_window(connection, properties->window);
     Properties dialog;
     dialog.item = item;
@@ -979,6 +1056,21 @@ struct Shell::Impl {
         text(cr, std::string(labels[i]), 14, y + 5, 80, 11);
         fill(cr, 1, 1, 1, 92, y, 390, 29);
         bevel(cr, 92, y, 390, 29, true);
+        if (i == 1) {
+          if (auto* surface = object_icon_surface(properties->values[i])) {
+            cairo_save(cr);
+            cairo_translate(cr, 97, y + 3);
+            cairo_scale(cr, .55, .55);
+            cairo_set_source_surface(cr, surface, 0, 0);
+            cairo_paint(cr);
+            cairo_restore(cr);
+          }
+          text(cr, properties->values[i].empty() ? "Default icon" : properties->values[i],
+               125, y + 5, 260, 11);
+          bevel(cr, 393, y + 2, 85, 25);
+          text(cr, "Choose...", 401, y + 5, 76, 10);
+          continue;
+        }
         const bool selected = i == properties->field && properties->select_all &&
                               !properties->values[i].empty();
         if (selected) fill(cr, config.accent_color[0], config.accent_color[1],
@@ -991,6 +1083,103 @@ struct Shell::Impl {
       text(cr, "Save", 338, 188, 52, 11);
       text(cr, "Cancel", 416, 188, 55, 11);
     });
+  }
+
+  void filter_icon_choices() {
+    if (!icon_chooser) return;
+    auto& chooser = *icon_chooser;
+    chooser.visible.clear();
+    for (std::size_t i = 0; i < chooser.names.size(); ++i) {
+      char* lower = g_ascii_strdown(chooser.names[i].c_str(), -1);
+      const bool match = std::string_view(lower).find(chooser.search) != std::string_view::npos;
+      g_free(lower);
+      if (match) chooser.visible.push_back(i);
+    }
+    chooser.page = 0;
+    chooser.selected.clear();
+  }
+
+  void draw_icon_chooser() {
+    if (!icon_chooser) return;
+    const auto& chooser = *icon_chooser;
+    paint(chooser.window, icon_chooser_width, icon_chooser_height, [&](cairo_t* cr) {
+      fill(cr, .75, .75, .75, 0, 0, icon_chooser_width, icon_chooser_height);
+      bevel(cr, 0, 0, icon_chooser_width, icon_chooser_height);
+      fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
+           4, 4, icon_chooser_width - 8, 27);
+      text(cr, "Choose an icon", 13, 8, 520, 12, true, true);
+      text(cr, "Search", 12, 49, 58, 11);
+      fill(cr, 1, 1, 1, 72, 42, 496, 30);
+      bevel(cr, 72, 42, 496, 30, true);
+      text(cr, chooser.search + "|", 79, 48, 478, 11);
+      const auto start = chooser.page * icon_chooser_page_size;
+      const auto end = std::min(chooser.visible.size(), start + icon_chooser_page_size);
+      if (chooser.visible.empty())
+        text(cr, "No icons found", 225, 220, 200, 12);
+      for (auto i = start; i < end; ++i) {
+        const int cell = static_cast<int>(i - start);
+        const int x = 10 + (cell % icon_chooser_columns) * icon_chooser_cell_width;
+        const int y = 82 + (cell / icon_chooser_columns) * icon_chooser_cell_height;
+        const auto& name = chooser.names[chooser.visible[i]];
+        const bool selected = name == chooser.selected;
+        if (selected) fill(cr, config.accent_color[0], config.accent_color[1],
+                           config.accent_color[2], x, y, 108, 70);
+        else fill(cr, .88, .88, .88, x, y, 108, 70);
+        bevel(cr, x, y, 108, 70, selected);
+        if (auto* surface = object_icon_surface(name)) {
+          cairo_set_source_surface(cr, surface, x + 34, y + 5);
+          cairo_paint(cr);
+        }
+        text(cr, name, x + 5, y + 51, 99, 10, selected);
+      }
+      const auto pages = (chooser.visible.size() + icon_chooser_page_size - 1) /
+                         icon_chooser_page_size;
+      text(cr, "Page " + std::to_string(chooser.page + 1) + " / " +
+               std::to_string(std::max<std::size_t>(1, pages)), 208, 393, 160, 10);
+      for (const auto [x, width, label] : {
+             std::tuple{10, 70, "Previous"}, std::tuple{88, 70, "Next"},
+             std::tuple{262, 76, "Default"}, std::tuple{346, 102, "Choose"},
+             std::tuple{456, 110, "Cancel"}}) {
+        bevel(cr, x, 416, width, 27);
+        text(cr, label, x + 7, 421, width - 12, 11);
+      }
+    });
+  }
+
+  void close_icon_chooser() {
+    if (!icon_chooser) return;
+    xcb_destroy_window(connection, icon_chooser->window);
+    icon_chooser.reset();
+    if (properties)
+      xcb_set_input_focus(connection, XCB_INPUT_FOCUS_POINTER_ROOT,
+                          properties->window, XCB_CURRENT_TIME);
+  }
+
+  void show_icon_chooser() {
+    if (!properties) return;
+    if (icon_chooser) close_icon_chooser();
+    IconChooser chooser;
+    chooser.names = available_icon_names();
+    chooser.selected = properties->values[1];
+    chooser.visible.resize(chooser.names.size());
+    std::iota(chooser.visible.begin(), chooser.visible.end(), 0);
+    if (auto it = std::ranges::find(chooser.names, chooser.selected); it != chooser.names.end())
+      chooser.page = static_cast<std::size_t>(it - chooser.names.begin()) / icon_chooser_page_size;
+    chooser.window = create_window(std::max(0, (static_cast<int>(width) - icon_chooser_width) / 2),
+      std::max(panel_height, (static_cast<int>(height) - icon_chooser_height) / 2),
+      icon_chooser_width, icon_chooser_height);
+    icon_chooser = std::move(chooser);
+    xcb_map_window(connection, icon_chooser->window);
+    xcb_set_input_focus(connection, XCB_INPUT_FOCUS_POINTER_ROOT,
+                        icon_chooser->window, XCB_CURRENT_TIME);
+    draw_icon_chooser();
+  }
+
+  void accept_icon_choice(bool use_default = false) {
+    if (!properties || !icon_chooser || (!use_default && icon_chooser->selected.empty())) return;
+    properties->values[1] = use_default ? std::string{} : icon_chooser->selected;
+    close_icon_chooser();
+    draw_properties();
   }
 
   void save_properties() {
@@ -1115,6 +1304,7 @@ struct Shell::Impl {
                                    {"Programs ▶", MenuAction::show_programs},
                                    {"New folder on desktop", MenuAction::new_folder},
                                    {"Paste on desktop", MenuAction::paste},
+                                   {"Trash", MenuAction::open_trash},
                                    {"Exit X11 session…", MenuAction::exit_session}};
     show_menu(3, panel_height, desktop, std::move(entries));
   }
@@ -1272,6 +1462,7 @@ struct Shell::Impl {
     switch (entry.action) {
       case MenuAction::open_home: open_folder(g_get_home_dir()); break;
       case MenuAction::open_desktop: open_folder(Store::desktop_path()); break;
+      case MenuAction::open_trash: open_folder("trash:///"); break;
       case MenuAction::new_folder: {
         auto result = model.create_folder(destination);
         if (result) refresh(); else show_notice("Could not create folder: " + result.error());
@@ -1383,6 +1574,42 @@ struct Shell::Impl {
   }
 
   void button(const xcb_button_press_event_t* event) {
+    if (icon_chooser && event->event == icon_chooser->window) {
+      auto& chooser = *icon_chooser;
+      const auto pages = (chooser.visible.size() + icon_chooser_page_size - 1) /
+                         icon_chooser_page_size;
+      if (event->detail == 4 || event->detail == 5) {
+        if (event->detail == 4 && chooser.page) --chooser.page;
+        else if (event->detail == 5 && chooser.page + 1 < pages) ++chooser.page;
+        draw_icon_chooser();
+      } else if (event->detail == 1) {
+        const int x = event->event_x - 10;
+        const int y = event->event_y - 82;
+        if (x >= 0 && x < icon_chooser_columns * icon_chooser_cell_width && y >= 0 &&
+            y < icon_chooser_rows * icon_chooser_cell_height &&
+            x % icon_chooser_cell_width < 108 && y % icon_chooser_cell_height < 70) {
+          const auto index = chooser.page * icon_chooser_page_size +
+            static_cast<std::size_t>(y / icon_chooser_cell_height * icon_chooser_columns +
+                                     x / icon_chooser_cell_width);
+          if (index < chooser.visible.size()) {
+            chooser.selected = chooser.names[chooser.visible[index]];
+            draw_icon_chooser();
+          }
+        } else if (event->event_y >= 416 && event->event_y < 443) {
+          if (event->event_x >= 10 && event->event_x < 80 && chooser.page) {
+            --chooser.page;
+            draw_icon_chooser();
+          } else if (event->event_x >= 88 && event->event_x < 158 && chooser.page + 1 < pages) {
+            ++chooser.page;
+            draw_icon_chooser();
+          } else if (event->event_x >= 262 && event->event_x < 338) accept_icon_choice(true);
+          else if (event->event_x >= 346 && event->event_x < 448) accept_icon_choice();
+          else if (event->event_x >= 456 && event->event_x < 566) close_icon_chooser();
+        }
+      }
+      return;
+    }
+    if (icon_chooser) return;
     if (exit_dialog && event->event == exit_dialog) {
       if (event->detail == 1 && event->event_y >= 96 && event->event_y < 122) {
         if (event->event_x >= 265 && event->event_x < 355) confirm_exit();
@@ -1401,7 +1628,10 @@ struct Shell::Impl {
                  event->event_y >= 47 && event->event_y < 166) {
         const int field = (event->event_y - 47) / 45;
         const int field_y = 47 + field * 45;
-        if (event->event_y < field_y + 29 && !(properties->item.physical && field == 2)) {
+        if (field == 1 && event->event_y < field_y + 29) {
+          show_icon_chooser();
+        } else if (event->event_y < field_y + 29 &&
+                   !(properties->item.physical && field == 2)) {
           properties->select_all = properties->last_click_field == field &&
             event->time - properties->last_click_time < 400;
           properties->last_click_field = properties->select_all ? -1 : field;
@@ -1570,6 +1800,31 @@ struct Shell::Impl {
   }
 
   void key(const xcb_key_press_event_t* event) {
+    if (icon_chooser && event->event == icon_chooser->window) {
+      auto& chooser = *icon_chooser;
+      const auto sym = key_symbols ? xcb_key_symbols_get_keysym(key_symbols, event->detail,
+                                                       (event->state & XCB_MOD_MASK_SHIFT) ? 1 : 0) : 0;
+      const auto pages = (chooser.visible.size() + icon_chooser_page_size - 1) /
+                         icon_chooser_page_size;
+      if (sym == XK_Escape) { close_icon_chooser(); return; }
+      if (sym == XK_Return) { accept_icon_choice(); return; }
+      if (sym == XK_Page_Up || sym == XK_Left) {
+        if (chooser.page) --chooser.page;
+      } else if (sym == XK_Page_Down || sym == XK_Right) {
+        if (chooser.page + 1 < pages) ++chooser.page;
+      } else if (sym == XK_BackSpace) {
+        if (!chooser.search.empty()) {
+          chooser.search.pop_back();
+          filter_icon_choices();
+        }
+      } else if (!(event->state & XCB_MOD_MASK_CONTROL) && sym >= 0x20 && sym <= 0x7e) {
+        chooser.search += static_cast<char>(g_ascii_tolower(sym));
+        filter_icon_choices();
+      }
+      draw_icon_chooser();
+      return;
+    }
+    if (icon_chooser) return;
     if (exit_dialog && event->event == exit_dialog) {
       const auto sym = key_symbols ? xcb_key_symbols_get_keysym(key_symbols, event->detail, 0) : 0;
       if (sym == XK_Escape) close_exit_dialog();
@@ -1582,7 +1837,7 @@ struct Shell::Impl {
       if (sym == XK_Escape) { xcb_destroy_window(connection, properties->window); properties.reset(); return; }
       if (sym == XK_Return) { save_properties(); return; }
       if (sym == XK_Tab) {
-        properties->field = (properties->field + 1) % (properties->item.physical ? 2 : 3);
+        properties->field = properties->field == 0 && !properties->item.physical ? 2 : 0;
         properties->select_all = false;
       } else if ((event->state & XCB_MOD_MASK_CONTROL) && (sym == XK_a || sym == XK_A)) {
         properties->select_all = true;
@@ -1743,6 +1998,7 @@ bool Shell::owns(xcb_window_t window) const {
   return window && (window == p.desktop || window == p.panel || window == p.menu ||
                     window == p.submenu || window == p.notice ||
                     window == p.exit_dialog ||
+                    (p.icon_chooser && window == p.icon_chooser->window) ||
                     (p.properties && window == p.properties->window) || p.folders.contains(window));
 }
 
@@ -1768,6 +2024,7 @@ bool Shell::handle(xcb_generic_event_t* event) {
     else if (window == p.submenu) p.draw_submenu();
     else if (window == p.notice) p.draw_notice();
     else if (window == p.exit_dialog) p.draw_exit_dialog();
+    else if (p.icon_chooser && window == p.icon_chooser->window) p.draw_icon_chooser();
     else if (p.properties && window == p.properties->window) p.draw_properties();
     else if (auto it = p.folders.find(window); it != p.folders.end()) p.draw_folder(it->second);
   } else if (type == XCB_BUTTON_PRESS) p.button(reinterpret_cast<xcb_button_press_event_t*>(event));
