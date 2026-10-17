@@ -153,7 +153,7 @@ available for a later Wayland compositor backend. Wayland will require a new
 compositor implementation; XCB window IDs and events do not cross that boundary.
 
 The experimental MidnightBSD mport is in
-`packaging/mports/x11-wm/midnight-wm` and tracks the published 0.1.0 source
-archive. The source tree is now developing 0.1.1; `cpack --config
-build/CPackSourceConfig.cmake -G TGZ` generates a 0.1.1 source archive. The
-mport remains on 0.1.0 until a 0.1.1 release asset is available.
+`packaging/mports/x11-wm/midnight-wm` and tracks the published 0.1.1 source
+archive. The source tree is now developing 0.1.2; `cpack --config
+build/CPackSourceConfig.cmake -G TGZ` generates a 0.1.2 source archive. The
+mport remains on 0.1.1 until a 0.1.2 release asset is available.
