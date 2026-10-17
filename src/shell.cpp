@@ -384,6 +384,7 @@ struct Shell::Impl {
   std::unordered_map<xcb_window_t, GFileMonitor*> monitors;
   std::vector<Item> desktop_items;
   std::vector<Task> tasks;
+  int requested_tray_width{};
   std::vector<GAppInfo*> apps;
   std::vector<std::filesystem::path> icon_roots;
   std::unordered_map<std::string, IconTheme> icon_themes;
@@ -725,10 +726,10 @@ struct Shell::Impl {
            logo_surface ? 84 : 102, 11, false, true);
       bevel(cr, lock_button_x, 5, lock_button_width, 24);
       lock_icon(cr, lock_button_x + 4, 8);
-      const int clock_x = std::max(140, static_cast<int>(width) - 105);
-      const int volume_x = clock_x - volume_group_width - volume_clock_gap;
-      const bool show_volume = volume_x >= 245;
-      if (transfers_in_progress) text(cr, "Working…", (show_volume ? volume_x : clock_x) - 85, 8, 80, 11);
+      const int clock_x = this->clock_x();
+      const int volume_x = this->volume_x();
+      const bool show_volume = this->show_volume();
+      if (transfers_in_progress) text(cr, "Working…", (show_volume ? volume_x : tray_x()) - 85, 8, 80, 11);
       for (std::size_t i = 0; i < layout.visible; ++i) {
         const auto& task = all_tasks[i];
         const int x = task_start_x + static_cast<int>(i) * task_step;
@@ -770,10 +771,22 @@ struct Shell::Impl {
     return result;
   }
 
+  int clock_x() const { return std::max(140, static_cast<int>(width) - 105); }
+
+  int tray_width() const {
+    // Leave room for the task overflow button even when every task is hidden.
+    return std::clamp(requested_tray_width, 0,
+                      std::max(0, clock_x() - task_start_x - task_overflow_width - 4));
+  }
+
+  int tray_x() const { return clock_x() - tray_width(); }
+
+  int volume_x() const { return tray_x() - volume_group_width - volume_clock_gap; }
+
+  bool show_volume() const { return volume_x() >= 245; }
+
   TaskLayout task_layout(std::size_t count) const {
-    const int clock_x = std::max(140, static_cast<int>(width) - 105);
-    const int volume_x = clock_x - volume_group_width - volume_clock_gap;
-    const int limit = (volume_x >= 245 ? volume_x : clock_x) -
+    const int limit = (show_volume() ? volume_x() : tray_x()) -
                       (transfers_in_progress ? 85 : 0);
     const auto capacity = [](int right) -> std::size_t {
       return right < task_start_x + task_button_width ? 0 :
@@ -1388,9 +1401,8 @@ struct Shell::Impl {
       return;
     }
     if (event->event == panel) {
-      const int clock_x = std::max(140, static_cast<int>(width) - 105);
-      const int volume_x = clock_x - volume_group_width - volume_clock_gap;
-      if (volume_x >= 245 && event->event_x >= volume_x &&
+      const int volume_x = this->volume_x();
+      if (show_volume() && event->event_x >= volume_x &&
           event->event_x < volume_x + volume_group_width) {
         std::expected<VolumeState, std::string> changed = std::unexpected("No volume action");
         const int relative_x = event->event_x - volume_x;
@@ -1757,6 +1769,24 @@ void Shell::tick() {
 void Shell::set_tasks(std::vector<Task> tasks) {
   impl_->tasks = std::move(tasks);
   if (impl_->panel) { impl_->raise_panel(); impl_->draw_panel(); }
+}
+
+xcb_window_t Shell::panel_window() const { return impl_->panel; }
+
+void Shell::set_tray_width(int width) {
+  auto& p = *impl_;
+  const int requested = std::max(0, width);
+  if (p.requested_tray_width == requested) return;
+  p.requested_tray_width = requested;
+  if (p.panel) p.draw_panel();
+}
+
+int Shell::tray_width() const { return impl_->tray_width(); }
+
+int Shell::tray_x() const { return impl_->tray_x(); }
+
+const std::array<double, 3>& Shell::panel_color() const {
+  return impl_->config.panel_color;
 }
 
 const std::array<double, 3>& Shell::accent_color() const {

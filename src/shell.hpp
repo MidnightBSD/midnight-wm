@@ -32,6 +32,11 @@ public:
   void tick();
   void set_tasks(std::vector<Task> tasks);
   void set_screen_size(std::uint16_t width, std::uint16_t height);
+  [[nodiscard]] xcb_window_t panel_window() const;
+  void set_tray_width(int width);
+  [[nodiscard]] int tray_width() const;
+  [[nodiscard]] int tray_x() const;
+  [[nodiscard]] const std::array<double, 3>& panel_color() const;
   [[nodiscard]] const std::array<double, 3>& accent_color() const;
   void set_exit_handler(std::function<void()> handler);
   [[nodiscard]] bool owns(xcb_window_t window) const;
