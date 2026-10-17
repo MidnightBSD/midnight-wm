@@ -3,6 +3,7 @@
 #include <xcb/xcb.h>
 
 #include <array>
+#include <cairo/cairo.h>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -37,6 +38,7 @@ public:
   [[nodiscard]] int tray_width() const;
   [[nodiscard]] int tray_x() const;
   [[nodiscard]] const std::array<double, 3>& panel_color() const;
+  [[nodiscard]] cairo_surface_t* themed_icon_surface(const std::string& name);
   [[nodiscard]] const std::array<double, 3>& accent_color() const;
   void set_exit_handler(std::function<void()> handler);
   [[nodiscard]] bool owns(xcb_window_t window) const;

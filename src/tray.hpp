@@ -21,6 +21,9 @@ public:
   [[nodiscard]] bool initialize();
   [[nodiscard]] bool handle(xcb_generic_event_t* event);
   void tick();
+  void set_external_width(int width);
+  [[nodiscard]] int external_x() const;
+  [[nodiscard]] int external_width() const;
 
 private:
   struct Icon { bool mapped{true}; };
@@ -47,5 +50,8 @@ private:
   std::vector<xcb_window_t> order_;
   int host_x_{};
   int host_width_{};
+  int external_requested_width_{};
+  int layout_x_{};
+  int layout_width_{};
 };
 } // namespace midnight

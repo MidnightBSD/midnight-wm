@@ -598,6 +598,15 @@ struct Shell::Impl {
     return surface;
   }
 
+  cairo_surface_t* themed_icon_surface(const std::string& name) {
+    const std::string key = "theme:" + name;
+    if (auto it = icon_surfaces.find(key); it != icon_surfaces.end()) return it->second;
+    const auto path = themed_icon_path(name);
+    auto* surface = path.empty() ? nullptr : image_surface(path, launcher_icon_size);
+    icon_surfaces.emplace(key, surface);
+    return surface;
+  }
+
   void load_logo() {
     const std::array<std::filesystem::path, 4> candidates{
       std::filesystem::path(MIDNIGHT_WM_DATA_DIR) / "MidnightBSDLogo.svg",
@@ -1787,6 +1796,10 @@ int Shell::tray_x() const { return impl_->tray_x(); }
 
 const std::array<double, 3>& Shell::panel_color() const {
   return impl_->config.panel_color;
+}
+
+cairo_surface_t* Shell::themed_icon_surface(const std::string& name) {
+  return impl_->themed_icon_surface(name);
 }
 
 const std::array<double, 3>& Shell::accent_color() const {

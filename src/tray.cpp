@@ -142,13 +142,14 @@ void X11SystemTray::remove(xcb_window_t window, bool destroyed) {
 }
 
 void X11SystemTray::layout() {
-  if (!host_) return;
   const auto count = std::ranges::count_if(order_, [this](xcb_window_t window) {
     return icons_.at(window).mapped;
   });
-  shell_.set_tray_width(count ? tray_padding + int(count) * icon_step : 0);
-  const int width = shell_.tray_width();
-  const int x = shell_.tray_x();
+  shell_.set_tray_width(external_requested_width_ +
+                        (count ? tray_padding + int(count) * icon_step : 0));
+  const int external = external_width();
+  const int width = shell_.tray_width() - external;
+  const int x = shell_.tray_x() + external;
   const int slots = width > tray_padding ? (width - tray_padding) / icon_step : 0;
   int position = 0;
   for (auto window : order_) {
@@ -163,14 +164,16 @@ void X11SystemTray::layout() {
       ++position;
     } else xcb_unmap_window(connection_, window);
   }
-  if (width) {
+  if (host_ && width) {
     const std::uint32_t values[] = {std::uint32_t(x), tray_y, std::uint32_t(width), icon_size};
     xcb_configure_window(connection_, host_, XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y |
                          XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, values);
     xcb_map_window(connection_, host_);
-  } else xcb_unmap_window(connection_, host_);
+  } else if (host_) xcb_unmap_window(connection_, host_);
   host_x_ = x;
   host_width_ = width;
+  layout_x_ = shell_.tray_x();
+  layout_width_ = shell_.tray_width();
   if (width) paint();
 }
 
@@ -203,7 +206,20 @@ void X11SystemTray::paint() {
 }
 
 void X11SystemTray::tick() {
-  if (host_ && (host_x_ != shell_.tray_x() || host_width_ != shell_.tray_width())) layout();
+  if (layout_x_ != shell_.tray_x() || layout_width_ != shell_.tray_width()) layout();
+}
+
+void X11SystemTray::set_external_width(int width) {
+  width = std::max(0, width);
+  if (external_requested_width_ == width) return;
+  external_requested_width_ = width;
+  layout();
+}
+
+int X11SystemTray::external_x() const { return shell_.tray_x(); }
+
+int X11SystemTray::external_width() const {
+  return std::min(external_requested_width_, shell_.tray_width());
 }
 
 bool X11SystemTray::handle(xcb_generic_event_t* event) {
@@ -273,7 +289,7 @@ void X11SystemTray::release() {
   }
   icons_.clear();
   order_.clear();
-  shell_.set_tray_width(0);
+  shell_.set_tray_width(external_requested_width_);
   if (host_) { xcb_destroy_window(connection_, host_); host_ = XCB_WINDOW_NONE; }
   if (owner_) { xcb_destroy_window(connection_, owner_); owner_ = XCB_WINDOW_NONE; }
   xcb_flush(connection_);

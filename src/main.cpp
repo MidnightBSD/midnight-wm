@@ -2,6 +2,8 @@
 #include "clipboard.hpp"
 #include "dnd.hpp"
 #include "shell.hpp"
+#include "status_notifier.hpp"
+#include "status_panel.hpp"
 #include "store.hpp"
 #include "tray.hpp"
 #include "x11.hpp"
@@ -68,7 +70,9 @@ int main(int argc, char** argv) {
       midnight::Shell shell(connection, screen, store);
       midnight::X11Clipboard clipboard(connection, screen->root);
       midnight::X11WindowManager wm(connection, screen, shell);
+      midnight::StatusNotifier notifier;
       midnight::X11SystemTray tray(connection, screen, screen_number, shell);
+      midnight::StatusNotifierPanel status_panel(connection, screen, shell, tray, notifier);
       shell.set_exit_handler([] { running = false; });
       if (!dnd.initialize()) std::cerr << "XDND integration unavailable\n";
       if (!clipboard.initialize()) std::cerr << "XFixes clipboard integration unavailable\n";
@@ -91,18 +95,21 @@ int main(int argc, char** argv) {
       if (!wm.initialize() || !shell.initialize()) result = 1;
       else {
         if (!tray.initialize()) std::cerr << "X11 system tray unavailable\n";
+        if (!status_panel.initialize()) std::cerr << "Status notifier panel unavailable\n";
+        if (!notifier.initialize()) std::cerr << "Status notifier D-Bus unavailable\n";
         midnight::launch_autostart();
 
         pollfd display{.fd = xcb_get_file_descriptor(connection), .events = POLLIN, .revents = 0};
         while (running && !xcb_connection_has_error(connection)) {
           while (auto* event = xcb_poll_for_event(connection)) {
             if (!clipboard.handle(event) && !dnd.handle(event) && !shell.handle(event) &&
-                !tray.handle(event)) wm.handle(event);
+                !tray.handle(event) && !status_panel.handle(event)) wm.handle(event);
             std::free(event);
           }
           while (g_main_context_pending(nullptr)) g_main_context_iteration(nullptr, false);
           shell.tick();
           tray.tick();
+          status_panel.tick();
           dnd.tick();
           xcb_flush(connection);
           if (poll(&display, 1, 100) < 0 && errno != EINTR) break;

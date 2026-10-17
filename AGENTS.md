@@ -20,6 +20,8 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   through its callback after the file operation finishes.
 - `src/tray.*` owns the X11 system tray selection and embeds legacy XEmbed
   notification icons in the panel.
+- `src/status_notifier.*` provides the D-Bus StatusNotifier watcher and host;
+  `src/status_panel.*` draws those items in the X11 panel and sends input actions.
 - `src/audio.*` controls the default OSS mixer and has no X11 dependency.
 - `src/model.*` and `src/store.*` own display independent object and file
   behavior. Keep XCB types and event handling out of these files so a future
