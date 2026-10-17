@@ -158,6 +158,9 @@ private:
   std::uint16_t screen_height_{};
   std::vector<DisplayMonitor> monitors_;
   std::uint8_t randr_event_base_{};
+  // Test-only: accept synthetic root ConfigureNotify sizes for Xvfb, which
+  // cannot change its RandR mode. Set MIDNIGHT_WM_TEST_SYNTHETIC_RESIZE=1.
+  bool accept_synthetic_root_size_{};
   DragMode drag_mode_{DragMode::none};
   xcb_window_t drag_client_{};
   int drag_root_x_{};

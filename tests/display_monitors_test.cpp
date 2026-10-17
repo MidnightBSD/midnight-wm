@@ -19,10 +19,12 @@ int main() {
   using midnight::DisplayMonitor;
   using midnight::choose_display_monitor;
 
+  const DisplayMonitor empty{0, 0, 0, 0, true};
+  bool valid = check(choose_display_monitor({empty}, 640, 360), empty,
+                     "zero-size monitor does not trap");
   const DisplayMonitor left{0, 0, 1920, 1080, true};
   const DisplayMonitor right{1920, 0, 3840, 2160, false};
   const std::vector<DisplayMonitor> side_by_side{left, right};
-  bool valid = true;
   valid &= check(choose_display_monitor(side_by_side, 100, 100), left, "left point");
   valid &= check(choose_display_monitor(side_by_side, 4500, 1500), right, "right point");
   valid &= check(choose_display_monitor(side_by_side, 1919, 100), left, "left boundary");

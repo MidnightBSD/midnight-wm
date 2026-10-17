@@ -66,6 +66,9 @@ def run_size(binary, output, width, height, live_resize, config_file=None):
                     "MIDNIGHT_CHECK_ITEM_URI": (root / "folder" / "item-00.txt").as_uri(),
                     "MIDNIGHT_CHECK_RESIZE": "1" if live_resize else "0",
                     "MIDNIGHT_CHECK_RESIZE_EVENT": str(binary.parent / "screen_resize_event"),
+                    # The window manager ignores synthetic root resizes unless
+                    # this test-only switch is set.
+                    "MIDNIGHT_WM_TEST_SYNTHETIC_RESIZE": "1" if live_resize else "0",
                 })
                 session_script = r'''
 "$MIDNIGHT_CHECK_BINARY" >"$MIDNIGHT_CHECK_OUTPUT/$MIDNIGHT_CHECK_NAME-wm.log" 2>&1 &

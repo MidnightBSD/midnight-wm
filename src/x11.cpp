@@ -23,6 +23,7 @@
 #include <limits>
 #include <memory>
 #include <set>
+#include <string_view>
 #include <vector>
 
 namespace midnight {
@@ -57,7 +58,10 @@ template <class T> using Reply = std::unique_ptr<T, decltype(&std::free)>;
 X11WindowManager::X11WindowManager(xcb_connection_t* connection, xcb_screen_t* screen, Shell& shell)
   : connection_(connection), screen_(screen), shell_(shell),
     screen_width_(screen->width_in_pixels), screen_height_(screen->height_in_pixels),
-    monitors_(query_display_monitors(connection, screen)) {}
+    monitors_(query_display_monitors(connection, screen)) {
+  const char* synthetic = std::getenv("MIDNIGHT_WM_TEST_SYNTHETIC_RESIZE");
+  accept_synthetic_root_size_ = synthetic && std::string_view(synthetic) == "1";
+}
 
 int X11WindowManager::border_pixels() const { return scaled_pixel(shell_.ui_scale(), 5); }
 int X11WindowManager::title_height_pixels() const { return scaled_pixel(shell_.ui_scale(), 28); }
@@ -1684,9 +1688,13 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
   }
   case XCB_CONFIGURE_NOTIFY: {
     auto* e = reinterpret_cast<xcb_configure_notify_event_t*>(event);
-    if (e->window == screen_->root)
-      update_screen_size(e->width, e->height);
-    else if (frame_to_client_.contains(e->window) && e->event == screen_->root)
+    // Any client can send a synthetic root ConfigureNotify; only the server
+    // reports real root geometry. An empty screen is never valid.
+    if (e->window == screen_->root) {
+      const bool synthetic = event->response_type & 0x80;
+      if ((!synthetic || accept_synthetic_root_size_) && e->width && e->height)
+        update_screen_size(e->width, e->height);
+    } else if (frame_to_client_.contains(e->window) && e->event == screen_->root)
       update_stacking();
     break;
   }

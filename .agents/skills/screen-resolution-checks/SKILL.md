@@ -13,7 +13,9 @@ geometry, saves screenshots and window trees, then stops the session. It also
 captures a populated folder, launcher menu, and Properties dialog. It attempts
 a live 4K-to-720p RandR resize. Xvfb typically exposes only one mode;
 in that case the included `screen_resize_event` helper sends a synthetic root
-ConfigureNotify and verifies the window manager's internal reflow.
+ConfigureNotify and verifies the window manager's internal reflow. The window
+manager ignores synthetic root resizes unless `MIDNIGHT_WM_TEST_SYNTHETIC_RESIZE=1`
+is set, which the script does only for the live-resize session.
 
 Review the saved screenshots at 1280×720, 1920×1080, 2560×1440, 3440×1440,
 and 3840×2160. Check that panel controls and task overflow remain usable;
