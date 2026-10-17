@@ -158,6 +158,9 @@ struct Properties {
   xcb_window_t owner{};
   std::array<std::string, 3> values;
   int field{};
+  bool select_all{};
+  xcb_timestamp_t last_click_time{};
+  int last_click_field{-1};
 };
 
 struct TransferWork {
@@ -976,7 +979,12 @@ struct Shell::Impl {
         text(cr, std::string(labels[i]), 14, y + 5, 80, 11);
         fill(cr, 1, 1, 1, 92, y, 390, 29);
         bevel(cr, 92, y, 390, 29, true);
-        text(cr, properties->values[i] + (i == properties->field ? "|" : ""), 99, y + 4, 375, 11);
+        const bool selected = i == properties->field && properties->select_all &&
+                              !properties->values[i].empty();
+        if (selected) fill(cr, config.accent_color[0], config.accent_color[1],
+                           config.accent_color[2], 98, y + 3, 379, 23);
+        text(cr, properties->values[i] + (i == properties->field && !selected ? "|" : ""),
+             99, y + 4, 375, 11, selected);
       }
       bevel(cr, 316, 184, 75, 27);
       bevel(cr, 400, 184, 75, 27);
@@ -1389,10 +1397,18 @@ struct Shell::Impl {
           xcb_destroy_window(connection, properties->window);
           properties.reset();
         }
-      } else if (event->event_y >= 47 && event->event_y < 166) {
+      } else if (event->detail == 1 && event->event_x >= 92 && event->event_x < 482 &&
+                 event->event_y >= 47 && event->event_y < 166) {
         const int field = (event->event_y - 47) / 45;
-        if (!(properties->item.physical && field == 2)) properties->field = field;
-        draw_properties();
+        const int field_y = 47 + field * 45;
+        if (event->event_y < field_y + 29 && !(properties->item.physical && field == 2)) {
+          properties->select_all = properties->last_click_field == field &&
+            event->time - properties->last_click_time < 400;
+          properties->last_click_field = properties->select_all ? -1 : field;
+          properties->last_click_time = event->time;
+          properties->field = field;
+          draw_properties();
+        }
       }
       return;
     }
@@ -1567,11 +1583,19 @@ struct Shell::Impl {
       if (sym == XK_Return) { save_properties(); return; }
       if (sym == XK_Tab) {
         properties->field = (properties->field + 1) % (properties->item.physical ? 2 : 3);
-      } else if (sym == XK_BackSpace) {
+        properties->select_all = false;
+      } else if ((event->state & XCB_MOD_MASK_CONTROL) && (sym == XK_a || sym == XK_A)) {
+        properties->select_all = true;
+      } else if (sym == XK_BackSpace || sym == XK_Delete) {
         auto& value = properties->values[properties->field];
-        if (!value.empty()) value.pop_back();
+        if (properties->select_all) value.clear();
+        else if (!value.empty()) value.pop_back();
+        properties->select_all = false;
       } else if (!(event->state & XCB_MOD_MASK_CONTROL) && sym >= 0x20 && sym <= 0x7e) {
-        properties->values[properties->field] += static_cast<char>(sym);
+        auto& value = properties->values[properties->field];
+        if (properties->select_all) value.clear();
+        value += static_cast<char>(sym);
+        properties->select_all = false;
       }
       draw_properties();
       return;
