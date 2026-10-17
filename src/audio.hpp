@@ -17,6 +17,7 @@ class VolumeControl {
 public:
   [[nodiscard]] std::expected<VolumeState, std::string> read();
   [[nodiscard]] std::expected<VolumeState, std::string> adjust(int change);
+  [[nodiscard]] std::expected<VolumeState, std::string> set_percent(int percent);
   [[nodiscard]] std::expected<VolumeState, std::string> toggle_mute();
 
 private:

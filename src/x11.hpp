@@ -5,6 +5,7 @@
 #include "display_monitors.hpp"
 
 #include <cstdint>
+#include <chrono>
 #include <array>
 #include <map>
 #include <string>
@@ -23,6 +24,12 @@ public:
 
   bool initialize();
   void handle(xcb_generic_event_t* event);
+  void tick();
+  void set_current_desktop(std::uint32_t desktop);
+  void set_showing_desktop(bool showing);
+  [[nodiscard]] std::uint32_t current_desktop() const { return current_desktop_; }
+  [[nodiscard]] bool showing_desktop() const { return showing_desktop_; }
+  [[nodiscard]] bool resize_pending() const;
   void update_screen_size(std::uint16_t width, std::uint16_t height);
   void refresh_theme();
   void set_startup_notification(StartupNotification* startup) { startup_ = startup; }
@@ -46,6 +53,22 @@ private:
     bool fullscreen{};
     bool mapped{};
     bool minimized{};
+    std::uint32_t desktop{};
+    bool visible{};
+    bool supports_ping{};
+    bool unresponsive{};
+    xcb_timestamp_t ping_time{};
+    xcb_timestamp_t previous_ping_time{};
+    std::chrono::steady_clock::time_point ping_deadline{};
+    std::chrono::steady_clock::time_point next_ping{};
+    std::uint32_t sync_counter{};
+    std::uint64_t sync_value{};
+    unsigned sync_query{};
+    std::uint16_t sync_width{};
+    std::uint16_t sync_height{};
+    bool sync_waiting{};
+    bool sync_deferred{};
+    std::chrono::steady_clock::time_point sync_deadline{};
     bool accepts_input{true};
     bool takes_focus{};
     bool skip_taskbar{};
@@ -65,6 +88,11 @@ private:
   enum class DragMode { none, move, resize, keyboard_move, keyboard_resize };
   xcb_atom_t atom(const std::string& name);
   void set_root_properties();
+  void refresh_visibility();
+  void set_window_desktop(Frame& frame, std::uint32_t desktop);
+  void initialize_sync(Frame& frame);
+  void send_protocol(xcb_window_t client, xcb_atom_t protocol, std::uint32_t value1,
+                     std::uint32_t value2 = 0, std::uint32_t value3 = 0);
   void update_geometry_properties();
   void refresh_dock(xcb_window_t window);
   void update_maximized_geometry(Frame& frame);
@@ -80,6 +108,7 @@ private:
   void focus(xcb_window_t client, xcb_timestamp_t time = XCB_CURRENT_TIME);
   void update_icccm_hints(Frame& frame);
   void constrain_size(const Frame& frame, std::uint16_t& width, std::uint16_t& height) const;
+  void fit_dialog(Frame& frame);
   void update_window_state(const Frame& frame);
   bool decorated(const Frame& frame) const;
   void set_maximized(xcb_window_t client, bool horz, bool vert);
@@ -119,6 +148,11 @@ private:
   xcb_window_t support_window_{};
   xcb_cursor_t root_cursor_{};
   xcb_window_t active_{};
+  static constexpr std::uint32_t desktop_count_ = 4;
+  static constexpr std::uint32_t all_desktops_ = 0xffffffffU;
+  std::uint32_t current_desktop_{};
+  bool showing_desktop_{};
+  bool sync_available_{};
   xcb_timestamp_t last_event_time_{};
   std::uint16_t screen_width_{};
   std::uint16_t screen_height_{};

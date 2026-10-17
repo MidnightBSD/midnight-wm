@@ -2,6 +2,8 @@ bin/midnight-wm
 bin/midnightbsd-settings
 share/applications/midnightbsd-settings.desktop
 share/xsessions/midnight-wm.desktop
+share/xdg-desktop-portal/portals/midnight.portal
+share/xdg-desktop-portal/midnightworkspace-portals.conf
 share/midnight-wm/config.ini
 share/midnight-wm/MidnightBSDLogo.svg
 share/midnight-wm/MidnightBSDLogo22x22.png

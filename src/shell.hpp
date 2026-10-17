@@ -36,6 +36,7 @@ public:
   void tick();
   [[nodiscard]] bool menu_animation_active() const;
   void set_tasks(std::vector<Task> tasks);
+  void set_workspace(std::uint32_t desktop, bool showing_desktop);
   void set_screen_size(std::uint16_t width, std::uint16_t height);
   void refresh_display_layout();
   void apply_config(ThemeConfig config);

@@ -9,6 +9,8 @@
 #include <xcb/xcb_icccm.h>
 #include <xcb/xcb_keysyms.h>
 #include <xcb/randr.h>
+#include <xcb/sync.h>
+#include <xcb/xcbext.h>
 #include <X11/keysym.h>
 
 #include <algorithm>
@@ -62,6 +64,8 @@ int X11WindowManager::title_height_pixels() const { return scaled_pixel(shell_.u
 
 X11WindowManager::~X11WindowManager() {
   for (auto& [client, frame] : frames_) {
+    if (frame.sync_query) xcb_discard_reply(connection_, frame.sync_query);
+    if (frame.unresponsive) xcb_delete_property(connection_, client, atom("_NET_WM_VISIBLE_NAME"));
     xcb_reparent_window(connection_, client, screen_->root, frame.x, frame.y);
     xcb_change_save_set(connection_, XCB_SET_MODE_DELETE, client);
     xcb_destroy_window(connection_, frame.frame);
@@ -70,6 +74,7 @@ X11WindowManager::~X11WindowManager() {
     xcb_destroy_window(connection_, support_window_);
     xcb_delete_property(connection_, screen_->root, atom("_NET_SUPPORTING_WM_CHECK"));
     xcb_delete_property(connection_, screen_->root, atom("_NET_ACTIVE_WINDOW"));
+    xcb_delete_property(connection_, screen_->root, atom("_MIDNIGHT_WM_TIMESTAMP"));
     xcb_delete_property(connection_, screen_->root, atom("_NET_CLIENT_LIST"));
     xcb_delete_property(connection_, screen_->root, atom("_NET_CLIENT_LIST_STACKING"));
   }
@@ -155,12 +160,14 @@ void X11WindowManager::update_icccm_hints(Frame& frame) {
                                    &hints, nullptr) && (hints.flags & XCB_ICCCM_WM_HINT_INPUT))
     frame.accepts_input = hints.input != 0;
   frame.takes_focus = false;
+  frame.supports_ping = false;
   auto cookie = xcb_get_property(connection_, 0, frame.client, atom("WM_PROTOCOLS"), XCB_ATOM_ATOM, 0, 32);
   Reply<xcb_get_property_reply_t> protocols(xcb_get_property_reply(connection_, cookie, nullptr), std::free);
   if (protocols && protocols->type == XCB_ATOM_ATOM) {
     auto* values = static_cast<xcb_atom_t*>(xcb_get_property_value(protocols.get()));
     for (int i = 0; i < xcb_get_property_value_length(protocols.get()) / 4; ++i)
       if (values[i] == atom("WM_TAKE_FOCUS")) frame.takes_focus = true;
+      else if (values[i] == atom("_NET_WM_PING")) frame.supports_ping = true;
   }
   frame.transient_for = XCB_WINDOW_NONE;
   xcb_icccm_get_wm_transient_for_reply(connection_,
@@ -216,6 +223,34 @@ void X11WindowManager::constrain_size(const Frame& frame, std::uint16_t& width,
   height = std::clamp(h, minimum_h, maximum_h);
 }
 
+void X11WindowManager::fit_dialog(Frame& frame) {
+  if (frame.role != WindowRole::dialog || frame.fullscreen ||
+      frame.maximized_horz || frame.maximized_vert) return;
+  const auto parent = frames_.find(frame.transient_for);
+  const auto monitor = parent != frames_.end() ? monitor_for(parent->second) :
+      choose_display_monitor(monitors_, frame.x, frame.y);
+  const auto area = workarea_for(monitor);
+  const int inset = decorated(frame) ? border_pixels() : 0;
+  const int title = decorated(frame) ? title_height_pixels() : 0;
+  const int maximum_w = std::max(1, area.width - 2 * inset);
+  const int maximum_h = std::max(1, area.height - title - inset);
+  // Keep feasible application size/aspect/increment hints. A minimum larger
+  // than the available monitor must yield so the dialog's buttons stay usable.
+  Frame bounded;
+  bounded.size_hints = frame.size_hints;
+  auto& hints = bounded.size_hints;
+  hints.max_width = (hints.flags & XCB_ICCCM_SIZE_HINT_P_MAX_SIZE) && hints.max_width > 0
+      ? std::min(hints.max_width, maximum_w) : maximum_w;
+  hints.max_height = (hints.flags & XCB_ICCCM_SIZE_HINT_P_MAX_SIZE) && hints.max_height > 0
+      ? std::min(hints.max_height, maximum_h) : maximum_h;
+  hints.flags |= XCB_ICCCM_SIZE_HINT_P_MAX_SIZE;
+  constrain_size(bounded, frame.width, frame.height);
+  frame.x = std::clamp(frame.x, area.x,
+      std::max(area.x, area.x + area.width - int(frame.width) - 2 * inset));
+  frame.y = std::clamp(frame.y, area.y,
+      std::max(area.y, area.y + area.height - int(frame.height) - title - inset));
+}
+
 void X11WindowManager::update_window_state(const Frame& frame) {
   std::vector<xcb_atom_t> states;
   if (frame.modal) states.push_back(atom("_NET_WM_STATE_MODAL"));
@@ -269,6 +304,12 @@ bool X11WindowManager::initialize() {
         XCB_RANDR_NOTIFY_MASK_SCREEN_CHANGE | XCB_RANDR_NOTIFY_MASK_CRTC_CHANGE |
         XCB_RANDR_NOTIFY_MASK_OUTPUT_CHANGE | XCB_RANDR_NOTIFY_MASK_RESOURCE_CHANGE);
   }
+  const auto* extension = xcb_get_extension_data(connection_, &xcb_sync_id);
+  if (extension && extension->present) {
+    Reply<xcb_sync_initialize_reply_t> reply(xcb_sync_initialize_reply(connection_,
+        xcb_sync_initialize(connection_, 3, 1), nullptr), std::free);
+    sync_available_ = bool(reply);
+  }
   set_root_properties();
   install_key_grabs();
   scan_existing();
@@ -294,27 +335,205 @@ void X11WindowManager::set_root_properties() {
   std::vector<xcb_atom_t> supported;
   for (const auto* key : {"_NET_SUPPORTED", "_NET_SUPPORTING_WM_CHECK", "_NET_CLIENT_LIST",
                           "_NET_CLIENT_LIST_STACKING",
-                          "_NET_ACTIVE_WINDOW", "_NET_CLOSE_WINDOW", "_NET_WM_NAME",
+                          "_NET_ACTIVE_WINDOW", "_NET_CLOSE_WINDOW", "_NET_WM_NAME", "_NET_WM_VISIBLE_NAME",
                           "_NET_WM_STATE", "_NET_WM_STATE_FULLSCREEN",
                           "_NET_WM_STATE_MAXIMIZED_VERT", "_NET_WM_STATE_MAXIMIZED_HORZ",
                           "_NET_WM_STATE_HIDDEN", "_NET_WM_STATE_SKIP_TASKBAR", "_NET_WM_STATE_MODAL",
                           "_NET_FRAME_EXTENTS", "_NET_REQUEST_FRAME_EXTENTS",
                           "_NET_MOVERESIZE_WINDOW", "_NET_WM_MOVERESIZE",
                           "_NET_NUMBER_OF_DESKTOPS", "_NET_CURRENT_DESKTOP", "_NET_WORKAREA",
+                          "_NET_WM_DESKTOP", "_NET_SHOWING_DESKTOP", "_NET_DESKTOP_NAMES",
+                          "_NET_DESKTOP_VIEWPORT", "_NET_WM_PING",
                           "_NET_DESKTOP_GEOMETRY", "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_DOCK",
                           "_NET_WM_WINDOW_TYPE_DIALOG", "_NET_WM_WINDOW_TYPE_UTILITY",
                           "_NET_WM_WINDOW_TYPE_TOOLBAR", "_NET_WM_WINDOW_TYPE_MENU",
                           "_NET_WM_WINDOW_TYPE_SPLASH",
                           "_NET_WM_STRUT", "_NET_WM_STRUT_PARTIAL"})
     supported.push_back(atom(key));
+  if (sync_available_) {
+    supported.push_back(atom("_NET_WM_SYNC_REQUEST"));
+    supported.push_back(atom("_NET_WM_SYNC_REQUEST_COUNTER"));
+  }
   xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, screen_->root, atom("_NET_SUPPORTED"),
                       XCB_ATOM_ATOM, 32, supported.size(), supported.data());
-  const std::uint32_t one = 1, zero = 0;
+  const std::uint32_t zero = 0;
   xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, screen_->root, atom("_NET_NUMBER_OF_DESKTOPS"),
-                      XCB_ATOM_CARDINAL, 32, 1, &one);
+                      XCB_ATOM_CARDINAL, 32, 1, &desktop_count_);
   xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, screen_->root, atom("_NET_CURRENT_DESKTOP"),
                       XCB_ATOM_CARDINAL, 32, 1, &zero);
+  xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, screen_->root, atom("_NET_SHOWING_DESKTOP"),
+                      XCB_ATOM_CARDINAL, 32, 1, &zero);
+  constexpr char names[] = "Workspace 1\0Workspace 2\0Workspace 3\0Workspace 4\0";
+  xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, screen_->root, atom("_NET_DESKTOP_NAMES"),
+                      atom("UTF8_STRING"), 8, sizeof(names) - 1, names);
+  const std::array<std::uint32_t, desktop_count_ * 2> viewports{};
+  xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, screen_->root, atom("_NET_DESKTOP_VIEWPORT"),
+                      XCB_ATOM_CARDINAL, 32, viewports.size(), viewports.data());
   update_geometry_properties();
+}
+
+void X11WindowManager::refresh_visibility() {
+  shell_.set_workspace(current_desktop_, showing_desktop_);
+  for (auto& [client, frame] : frames_) {
+    const bool visible = frame.mapped && !showing_desktop_ &&
+        (frame.desktop == current_desktop_ || frame.desktop == all_desktops_);
+    if (visible == frame.visible) continue;
+    frame.visible = visible;
+    if (visible) xcb_map_window(connection_, frame.frame);
+    else xcb_unmap_window(connection_, frame.frame);
+    (void)client;
+  }
+  if (auto it = frames_.find(active_); it != frames_.end() && !it->second.visible) {
+    draw_frame(it->second);
+    active_ = XCB_WINDOW_NONE;
+    xcb_set_input_focus(connection_, XCB_INPUT_FOCUS_POINTER_ROOT, screen_->root, XCB_CURRENT_TIME);
+    xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, screen_->root, atom("_NET_ACTIVE_WINDOW"),
+                        XCB_ATOM_WINDOW, 32, 1, &active_);
+  }
+  if (!active_ && !showing_desktop_) cycle_focus();
+  restack_layers();
+  update_stacking();
+  update_tasks();
+  xcb_flush(connection_);
+}
+
+void X11WindowManager::set_current_desktop(std::uint32_t desktop) {
+  if (desktop >= desktop_count_ || desktop == current_desktop_) return;
+  end_drag(false);
+  current_desktop_ = desktop;
+  xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, screen_->root, atom("_NET_CURRENT_DESKTOP"),
+                      XCB_ATOM_CARDINAL, 32, 1, &current_desktop_);
+  refresh_visibility();
+}
+
+void X11WindowManager::set_showing_desktop(bool showing) {
+  if (showing == showing_desktop_) return;
+  end_drag(false);
+  showing_desktop_ = showing;
+  const std::uint32_t value = showing;
+  xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, screen_->root, atom("_NET_SHOWING_DESKTOP"),
+                      XCB_ATOM_CARDINAL, 32, 1, &value);
+  refresh_visibility();
+}
+
+void X11WindowManager::set_window_desktop(Frame& frame, std::uint32_t desktop) {
+  if (desktop >= desktop_count_ && desktop != all_desktops_) return;
+  // Move transient descendants together, including malformed cyclic families safely.
+  std::set<xcb_window_t> moved{frame.client};
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (const auto& [client, candidate] : frames_)
+      if (moved.contains(candidate.transient_for) && moved.insert(client).second) changed = true;
+  }
+  for (const auto client : moved) {
+    frames_.at(client).desktop = desktop;
+    xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, client, atom("_NET_WM_DESKTOP"),
+                        XCB_ATOM_CARDINAL, 32, 1, &desktop);
+  }
+  refresh_visibility();
+}
+
+void X11WindowManager::send_protocol(xcb_window_t client, xcb_atom_t protocol,
+                                    std::uint32_t value1, std::uint32_t value2, std::uint32_t value3) {
+  xcb_client_message_event_t event{};
+  event.response_type = XCB_CLIENT_MESSAGE;
+  event.format = 32;
+  event.window = client;
+  event.type = atom("WM_PROTOCOLS");
+  event.data.data32[0] = protocol;
+  event.data.data32[1] = value1;
+  event.data.data32[2] = value2;
+  event.data.data32[3] = value3;
+  xcb_send_event(connection_, 0, client, XCB_EVENT_MASK_NO_EVENT, reinterpret_cast<const char*>(&event));
+}
+
+void X11WindowManager::initialize_sync(Frame& frame) {
+  if (!sync_available_) return;
+  Reply<xcb_get_property_reply_t> protocols(xcb_get_property_reply(connection_,
+      xcb_get_property(connection_, 0, frame.client, atom("WM_PROTOCOLS"), XCB_ATOM_ATOM, 0, 64), nullptr), std::free);
+  if (!protocols || protocols->format != 32) return;
+  const auto* values = static_cast<xcb_atom_t*>(xcb_get_property_value(protocols.get()));
+  const auto count = xcb_get_property_value_length(protocols.get()) / 4;
+  if (std::find(values, values + count, atom("_NET_WM_SYNC_REQUEST")) == values + count) return;
+  Reply<xcb_get_property_reply_t> counter(xcb_get_property_reply(connection_,
+      xcb_get_property(connection_, 0, frame.client, atom("_NET_WM_SYNC_REQUEST_COUNTER"),
+                       XCB_ATOM_CARDINAL, 0, 1), nullptr), std::free);
+  if (!counter || counter->format != 32 || xcb_get_property_value_length(counter.get()) != 4) return;
+  const auto id = *static_cast<std::uint32_t*>(xcb_get_property_value(counter.get()));
+  if (!id) return;
+  // The initial counter value is undefined; EWMH requires resetting it on management.
+  if (auto* error = xcb_request_check(connection_, xcb_sync_set_counter_checked(connection_, id, {0, 0}))) {
+    std::free(error);
+    return;
+  }
+  frame.sync_counter = id;
+}
+
+bool X11WindowManager::resize_pending() const {
+  return std::any_of(frames_.begin(), frames_.end(), [](const auto& pair) { return pair.second.sync_waiting; });
+}
+
+void X11WindowManager::tick() {
+  const auto now = std::chrono::steady_clock::now();
+  bool timestamp_requested = false;
+  for (auto& [client, frame] : frames_) {
+    if (frame.sync_waiting) {
+      bool ready = false;
+      if (frame.sync_query) {
+        void* raw = nullptr;
+        xcb_generic_error_t* error = nullptr;
+        if (xcb_poll_for_reply(connection_, frame.sync_query, &raw, &error)) {
+          frame.sync_query = 0;
+          Reply<xcb_sync_query_counter_reply_t> reply(static_cast<xcb_sync_query_counter_reply_t*>(raw), std::free);
+          if (error || !reply) frame.sync_counter = 0;
+          else ready = ((std::uint64_t(std::uint32_t(reply->counter_value.hi)) << 32) |
+                         reply->counter_value.lo) >= frame.sync_value;
+          std::free(error);
+        }
+      }
+      if (now >= frame.sync_deadline) frame.sync_counter = 0; // Broken clients must never freeze resizing.
+      if (ready || !frame.sync_counter) {
+        frame.sync_waiting = false;
+        if (frame.sync_query) xcb_discard_reply(connection_, frame.sync_query);
+        frame.sync_query = 0;
+        if (frame.sync_deferred) {
+          frame.sync_deferred = false;
+          resize_frame(frame);
+          send_configure_notify(frame);
+        }
+      } else if (!frame.sync_query) {
+        frame.sync_query = xcb_sync_query_counter(connection_, frame.sync_counter).sequence;
+      }
+    }
+    if (!frame.supports_ping || !frame.mapped) continue;
+    if (frame.ping_time && now >= frame.ping_deadline && !frame.unresponsive) {
+      frame.unresponsive = true;
+      const auto visible_name = frame.title + " (Not responding)";
+      xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, client, atom("_NET_WM_VISIBLE_NAME"),
+                          atom("UTF8_STRING"), 8, visible_name.size(), visible_name.data());
+      draw_frame(frame);
+      update_tasks();
+    }
+    if (now >= frame.next_ping && !frame.ping_time) {
+      // An idle server may not have supplied a newer timestamp since the last ping.
+      // Ask for PropertyNotify rather than fabricating time or reusing a ping identity.
+      if (last_event_time_ == XCB_CURRENT_TIME || last_event_time_ == frame.previous_ping_time) {
+        if (!timestamp_requested) {
+          xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, screen_->root, atom("_MIDNIGHT_WM_TIMESTAMP"),
+                              XCB_ATOM_CARDINAL, 32, 1, &client);
+          timestamp_requested = true;
+        }
+        continue;
+      }
+      frame.ping_time = last_event_time_;
+      frame.previous_ping_time = frame.ping_time;
+      frame.ping_deadline = now + std::chrono::seconds(5);
+      frame.next_ping = now + std::chrono::seconds(10);
+      send_protocol(client, atom("_NET_WM_PING"), frame.ping_time, client);
+    }
+  }
+  xcb_flush(connection_);
 }
 
 void X11WindowManager::update_geometry_properties() {
@@ -327,8 +546,11 @@ void X11WindowManager::update_geometry_properties() {
                                    std::uint32_t(area.width), std::uint32_t(area.height)};
   xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, screen_->root, atom("_NET_DESKTOP_GEOMETRY"),
                       XCB_ATOM_CARDINAL, 32, 2, geometry);
+  std::vector<std::uint32_t> areas;
+  for (std::uint32_t i = 0; i < desktop_count_; ++i)
+    areas.insert(areas.end(), std::begin(workarea), std::end(workarea));
   xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, screen_->root, atom("_NET_WORKAREA"),
-                      XCB_ATOM_CARDINAL, 32, 4, workarea);
+                      XCB_ATOM_CARDINAL, 32, areas.size(), areas.data());
 }
 
 X11WindowManager::Monitor X11WindowManager::workarea_for(const Monitor& monitor) const {
@@ -432,12 +654,21 @@ void X11WindowManager::manage(xcb_window_t window) {
   if (!geometry) return;
   Frame frame;
   frame.client = window;
+  frame.desktop = current_desktop_;
+  const auto desktop_cookie = xcb_get_property(connection_, 0, window, atom("_NET_WM_DESKTOP"),
+                                               XCB_ATOM_CARDINAL, 0, 1);
+  Reply<xcb_get_property_reply_t> desktop_reply(xcb_get_property_reply(connection_, desktop_cookie, nullptr), std::free);
+  if (desktop_reply && desktop_reply->format == 32 && xcb_get_property_value_length(desktop_reply.get()) == 4) {
+    const auto requested = *static_cast<std::uint32_t*>(xcb_get_property_value(desktop_reply.get()));
+    if (requested < desktop_count_ || requested == all_desktops_) frame.desktop = requested;
+  }
   frame.frame = xcb_generate_id(connection_);
   frame.x = geometry->x;
   frame.y = std::max<int>(geometry->y, shell_.panel_height());
   frame.width = geometry->width;
   frame.height = geometry->height;
   update_icccm_hints(frame);
+  initialize_sync(frame);
   if (role_type == atom("_NET_WM_WINDOW_TYPE_SPLASH")) frame.role = WindowRole::splash;
   else if (role_type == atom("_NET_WM_WINDOW_TYPE_DIALOG") ||
            (role_type == XCB_ATOM_NONE && frame.transient_for)) frame.role = WindowRole::dialog;
@@ -447,19 +678,11 @@ void X11WindowManager::manage(xcb_window_t window) {
   if (frame.role == WindowRole::splash || frame.transient_for) frame.skip_taskbar = true;
   constrain_size(frame, frame.width, frame.height);
   if (auto parent = frames_.find(frame.transient_for); parent != frames_.end()) {
+    frame.desktop = parent->second.desktop;
     frame.x = parent->second.x + (int(parent->second.width) - int(frame.width)) / 2;
     frame.y = parent->second.y + (int(parent->second.height) - int(frame.height)) / 2;
-    // Center on the parent, then keep the decorated dialog on that monitor.
-    // A chooser can be wider than a parent positioned against a screen edge.
-    const auto monitor = monitor_for(parent->second);
-    const int inset = decorated(frame) ? border_pixels() : 0;
-    const int title = decorated(frame) ? title_height_pixels() : 0;
-    const int top = monitor.y + (monitor.primary ? shell_.panel_height() : 0);
-    frame.x = std::clamp(frame.x, monitor.x,
-        std::max(monitor.x, monitor.x + monitor.width - int(frame.width) - 2 * inset));
-    frame.y = std::clamp(frame.y, top,
-        std::max(top, monitor.y + monitor.height - int(frame.height) - title - inset));
   }
+  fit_dialog(frame);
   auto state_cookie = xcb_get_property(connection_, 0, window, atom("_NET_WM_STATE"), XCB_ATOM_ATOM, 0, 32);
   Reply<xcb_get_property_reply_t> initial_states(xcb_get_property_reply(connection_, state_cookie, nullptr), std::free);
   bool initial_horz = false, initial_vert = false, initial_fullscreen = false;
@@ -488,6 +711,11 @@ void X11WindowManager::manage(xcb_window_t window) {
                     screen_->root_visual, XCB_CW_BACK_PIXEL | XCB_CW_EVENT_MASK, values);
   xcb_change_save_set(connection_, XCB_SET_MODE_INSERT, window);
   xcb_reparent_window(connection_, window, frame.frame, inset, top_inset);
+  if (frame.role == WindowRole::dialog &&
+      (frame.width != geometry->width || frame.height != geometry->height)) {
+    const std::uint32_t size[] = {frame.width, frame.height};
+    xcb_configure_window(connection_, window, XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, size);
+  }
   const std::uint32_t client_events = XCB_EVENT_MASK_PROPERTY_CHANGE | XCB_EVENT_MASK_STRUCTURE_NOTIFY;
   xcb_change_window_attributes(connection_, window, XCB_CW_EVENT_MASK, &client_events);
   const std::uint32_t extents[] = {std::uint32_t(inset), std::uint32_t(inset),
@@ -513,12 +741,15 @@ void X11WindowManager::unmanage(xcb_window_t client, bool destroyed) {
   if (it == frames_.end()) return;
   if (drag_client_ == client) end_drag(false);
   auto frame = it->second;
+  if (frame.sync_query) xcb_discard_reply(connection_, frame.sync_query);
   if (!destroyed) {
     xcb_reparent_window(connection_, client, screen_->root,
                         frame.x + (decorated(frame) ? border_pixels() : 0),
                         frame.y + (decorated(frame) ? title_height_pixels() : 0));
     xcb_change_save_set(connection_, XCB_SET_MODE_DELETE, client);
     xcb_delete_property(connection_, client, atom("WM_STATE"));
+    if (frame.unresponsive) xcb_delete_property(connection_, client, atom("_NET_WM_VISIBLE_NAME"));
+    xcb_delete_property(connection_, client, atom("_NET_WM_DESKTOP"));
     xcb_delete_property(connection_, client, atom("_NET_WM_STATE"));
     xcb_delete_property(connection_, client, atom("_NET_FRAME_EXTENTS"));
   }
@@ -542,16 +773,23 @@ void X11WindowManager::unmanage(xcb_window_t client, bool destroyed) {
 void X11WindowManager::map(xcb_window_t client) {
   auto it = frames_.find(client);
   if (it == frames_.end()) return;
+  if (showing_desktop_ && (it->second.desktop == current_desktop_ || it->second.desktop == all_desktops_))
+    set_showing_desktop(false);
   it->second.mapped = true;
   it->second.minimized = false;
-  xcb_map_window(connection_, it->second.frame);
+  it->second.visible = !showing_desktop_ &&
+      (it->second.desktop == current_desktop_ || it->second.desktop == all_desktops_);
+  if (it->second.visible) xcb_map_window(connection_, it->second.frame);
   xcb_map_window(connection_, client);
   constexpr std::uint32_t normal[] = {XCB_ICCCM_WM_STATE_NORMAL, XCB_WINDOW_NONE};
   xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, client, atom("WM_STATE"), atom("WM_STATE"), 32, 2, normal);
   update_window_state(it->second);
   if (startup_) startup_->window_mapped(client);
-  if (it->second.role != WindowRole::splash) focus(client);
+  if (it->second.role != WindowRole::splash && it->second.visible) focus(client);
   else { restack_layers(); update_stacking(); }
+  xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, client, atom("_NET_WM_DESKTOP"),
+                      XCB_ATOM_CARDINAL, 32, 1, &it->second.desktop);
+  update_tasks();
 }
 
 void X11WindowManager::focus(xcb_window_t client, xcb_timestamp_t time) {
@@ -560,13 +798,13 @@ void X11WindowManager::focus(xcb_window_t client, xcb_timestamp_t time) {
   while (checked.insert(client).second) {
     auto child = std::find_if(client_order_.rbegin(), client_order_.rend(), [&](xcb_window_t candidate) {
       const auto& frame = frames_.at(candidate);
-      return frame.mapped && frame.modal && frame.transient_for == client;
+      return frame.visible && frame.modal && frame.transient_for == client;
     });
     if (child == client_order_.rend()) break;
     client = *child;
   }
   auto it = frames_.find(client);
-  if (it == frames_.end() || !it->second.mapped) return;
+  if (it == frames_.end() || !it->second.visible) return;
   auto old = active_;
   active_ = client;
   if (it->second.accepts_input)
@@ -641,7 +879,8 @@ void X11WindowManager::restack_layers() {
 void X11WindowManager::update_tasks() {
   std::vector<Task> tasks;
   for (auto& [client, frame] : frames_)
-    if (!frame.skip_taskbar) tasks.push_back({client, frame.title, client == active_});
+    if (!frame.skip_taskbar && (frame.desktop == current_desktop_ || frame.desktop == all_desktops_))
+      tasks.push_back({client, frame.title + (frame.unresponsive ? " (Not responding)" : ""), client == active_});
   shell_.set_tasks(std::move(tasks));
 }
 
@@ -656,6 +895,11 @@ void X11WindowManager::update_title(Frame& frame) {
   frame.title = read(atom("_NET_WM_NAME"), atom("UTF8_STRING"));
   if (frame.title.empty()) frame.title = read(XCB_ATOM_WM_NAME, XCB_GET_PROPERTY_TYPE_ANY);
   if (frame.title.empty()) frame.title = "Untitled";
+  if (frame.unresponsive) {
+    const auto visible_name = frame.title + " (Not responding)";
+    xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, frame.client, atom("_NET_WM_VISIBLE_NAME"),
+                        atom("UTF8_STRING"), 8, visible_name.size(), visible_name.data());
+  }
 }
 
 void X11WindowManager::draw_frame(Frame& frame) {
@@ -665,8 +909,8 @@ void X11WindowManager::draw_frame(Frame& frame) {
   const int border = border_pixels();
   const int title_height = title_height_pixels();
   const double scale = shell_.ui_scale();
-  const int width = frame.width + 2 * border;
-  const int height = frame.height + title_height + border;
+  const int width = (frame.sync_waiting ? frame.sync_width : frame.width) + 2 * border;
+  const int height = (frame.sync_waiting ? frame.sync_height : frame.height) + title_height + border;
   auto* surface = cairo_xcb_surface_create(connection_, frame.frame, visual, width, height);
   auto* cr = cairo_create(surface);
   const auto& theme = shell_.theme();
@@ -688,7 +932,7 @@ void X11WindowManager::draw_frame(Frame& frame) {
       selected ? accent[1] : accent[1] * .65 + .18,
       selected ? accent[2] : accent[2] * .65 + .18);
   cairo_set_source_rgb(cr, 1, 1, 1);
-  label(cr, frame.title, border + scaled_pixel(scale, 9), border + scaled_pixel(scale, 4),
+  label(cr, frame.title + (frame.unresponsive ? " (Not responding)" : ""), border + scaled_pixel(scale, 9), border + scaled_pixel(scale, 4),
         std::max(1, width - scaled_pixel(scale, 124)), scale, theme, true);
   const int button_y = scaled_pixel(scale, 7);
   for (int i = 0; i < 3; ++i) {
@@ -711,6 +955,23 @@ void X11WindowManager::draw_frame(Frame& frame) {
 }
 
 void X11WindowManager::resize_frame(Frame& frame) {
+  fit_dialog(frame);
+  if (frame.sync_waiting) {
+    frame.sync_deferred = true;
+    return;
+  }
+  const bool interactive_resize = drag_client_ == frame.client &&
+      (drag_mode_ == DragMode::resize || drag_mode_ == DragMode::keyboard_resize);
+  if (interactive_resize && frame.sync_counter) {
+    ++frame.sync_value;
+    frame.sync_waiting = true;
+    frame.sync_width = frame.width;
+    frame.sync_height = frame.height;
+    frame.sync_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    send_protocol(frame.client, atom("_NET_WM_SYNC_REQUEST"), last_event_time_,
+                  std::uint32_t(frame.sync_value), std::uint32_t(frame.sync_value >> 32));
+    frame.sync_query = xcb_sync_query_counter(connection_, frame.sync_counter).sequence;
+  }
   const bool has_decoration = decorated(frame);
   const std::uint32_t position[] = {static_cast<std::uint32_t>(frame.x), static_cast<std::uint32_t>(frame.y),
                                     static_cast<std::uint32_t>(frame.width + (has_decoration ? 2 * border_pixels() : 0)),
@@ -726,6 +987,7 @@ void X11WindowManager::resize_frame(Frame& frame) {
 }
 
 void X11WindowManager::send_configure_notify(const Frame& frame) {
+  if (frame.sync_deferred) return;
   xcb_configure_notify_event_t notify{};
   notify.response_type = XCB_CONFIGURE_NOTIFY;
   notify.event = frame.client;
@@ -933,6 +1195,7 @@ void X11WindowManager::minimize(xcb_window_t client) {
   if (it == frames_.end()) return;
   xcb_unmap_window(connection_, it->second.frame);
   it->second.mapped = false;
+  it->second.visible = false;
   it->second.minimized = true;
   constexpr std::uint32_t iconic[] = {XCB_ICCCM_WM_STATE_ICONIC, XCB_WINDOW_NONE};
   xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, client, atom("WM_STATE"), atom("WM_STATE"), 32, 2, iconic);
@@ -945,7 +1208,13 @@ void X11WindowManager::minimize(xcb_window_t client) {
   update_tasks();
 }
 
-void X11WindowManager::restore(xcb_window_t client) { map(client); }
+void X11WindowManager::restore(xcb_window_t client) {
+  auto it = frames_.find(client);
+  if (it == frames_.end()) return;
+  if (it->second.desktop != all_desktops_) set_current_desktop(it->second.desktop);
+  set_showing_desktop(false);
+  map(client);
+}
 
 xcb_window_t X11WindowManager::client_for(xcb_window_t window) const {
   if (frames_.contains(window)) return window;
@@ -967,6 +1236,9 @@ void X11WindowManager::install_key_grabs() {
                      XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC);
     std::free(codes);
   };
+  grab(XK_Left, XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1);
+  grab(XK_Right, XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1);
+  grab(XK_d, XCB_MOD_MASK_4);
   grab(XK_Tab, XCB_MOD_MASK_1);
   grab(XK_F4, XCB_MOD_MASK_1);
   xcb_key_symbols_free(symbols);
@@ -977,7 +1249,7 @@ void X11WindowManager::cycle_focus() {
   auto it = frames_.upper_bound(active_);
   if (it == frames_.end()) it = frames_.begin();
   auto first = it;
-  while (!it->second.mapped) {
+  while (!it->second.visible) {
     if (++it == frames_.end()) it = frames_.begin();
     if (it == first) return;
   }
@@ -1272,6 +1544,14 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
       send_configure_notify(f);
       break;
     }
+    if (key == XK_d && (e->state & XCB_MOD_MASK_4)) {
+      set_showing_desktop(!showing_desktop_); break;
+    }
+    if ((e->state & (XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1)) ==
+        (XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1) && (key == XK_Left || key == XK_Right)) {
+      set_current_desktop((current_desktop_ + (key == XK_Right ? 1 : desktop_count_ - 1)) % desktop_count_);
+      break;
+    }
     if (!(e->state & XCB_MOD_MASK_1)) break;
     if (key == XK_Tab) cycle_focus();
     else if (key == XK_F4 && active_) close(active_);
@@ -1279,7 +1559,26 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
   }
   case XCB_CLIENT_MESSAGE: {
     auto* e = reinterpret_cast<xcb_client_message_event_t*>(event);
-    if (e->type == atom("_NET_REQUEST_FRAME_EXTENTS")) {
+    if (e->format != 32) break;
+    if (e->type == atom("WM_CHANGE_STATE") && e->data.data32[0] == XCB_ICCCM_WM_STATE_ICONIC)
+      minimize(e->window);
+    else if (e->type == atom("_NET_CURRENT_DESKTOP")) set_current_desktop(e->data.data32[0]);
+    else if (e->type == atom("_NET_SHOWING_DESKTOP") && e->data.data32[0] <= 1)
+      set_showing_desktop(e->data.data32[0] != 0);
+    else if (e->type == atom("_NET_WM_DESKTOP")) {
+      if (auto it = frames_.find(e->window); it != frames_.end())
+        set_window_desktop(it->second, e->data.data32[0]);
+    } else if (e->type == atom("WM_PROTOCOLS") && e->window == screen_->root &&
+               e->data.data32[0] == atom("_NET_WM_PING")) {
+      if (auto it = frames_.find(e->data.data32[2]); it != frames_.end() &&
+          it->second.ping_time && it->second.ping_time == e->data.data32[1]) {
+        it->second.ping_time = 0;
+        it->second.unresponsive = false;
+        xcb_delete_property(connection_, it->first, atom("_NET_WM_VISIBLE_NAME"));
+        draw_frame(it->second);
+        update_tasks();
+      }
+    } else if (e->type == atom("_NET_REQUEST_FRAME_EXTENTS")) {
       const std::uint32_t extents[] = {static_cast<std::uint32_t>(border_pixels()),
                                       static_cast<std::uint32_t>(border_pixels()),
                                       static_cast<std::uint32_t>(title_height_pixels()),

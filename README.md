@@ -56,8 +56,10 @@ StatusNotifier items; the legacy XEmbed tray also works without it.
 StatusNotifier context menus supplied through DBusMenu open in the Warp-style
 popup, including submenus, disabled items, separators, and toggle marks.
 When no other notification daemon owns `org.freedesktop.Notifications`, Midnight
-Workspace provides passive notification popups. They expire automatically or
-can be dismissed with a click. An existing notification daemon keeps control.
+Workspace provides notification popups with application action buttons, images,
+and urgency handling. Critical notifications remain until dismissed; resident
+notifications can remain after an action. An existing notification daemon keeps
+control.
 The lock button asks a
 running `xscreensaver` daemon to lock the screen with `xscreensaver-command -lock`;
 if the daemon is unavailable, the desktop shows a notice. Start `xscreensaver`
@@ -85,13 +87,43 @@ Launching an application that supports startup notification shows “Starting…
 until its window appears or the launch times out. The XSETTINGS owner publishes
 the GTK icon theme, font, DPI, and double-click values to X11 clients, while
 leaving an existing settings owner in control.
-Use the speaker buttons marked `−` and `+`, or the mouse wheel over the volume
-control, to change output volume in 5% steps. The crossed speaker button sets
-both master mixer channels to zero and restores their previous levels when
-pressed again during the same session. The control uses MidnightBSD's default
-OSS `/dev/mixer` device, falling back to its PCM control
-if a master volume control is unavailable. It shows `N/A` when no usable mixer
-is available.
+Click the single speaker icon in the top panel to open the audio popup directly
+below it; click again, click outside, or press Escape to close it. Drag the volume
+slider and use **Mute** below it to mute or restore the previous stereo levels.
+The mouse wheel changes volume in 5% steps. With the popup open, Left/Right
+adjust volume and Space or M toggles mute. The control uses MidnightBSD's default
+OSS `/dev/mixer`, falling back to PCM when master volume is unavailable.
+The popup reports when no usable mixer is available.
+
+Running MPRIS media players appear below the volume controls, with track and
+artist information and previous, play/pause, and next controls. Click the player
+name to cycle between multiple players. Unsupported actions are disabled, and
+player discovery and commands use asynchronous D-Bus calls.
+
+Right-click an application in **Programs** to see the additional actions from its
+`.desktop` entry, such as a new window. Trusted executable desktop launchers also
+expose their actions in the desktop context menu; their ownership and executable
+permission are checked again before launching.
+
+**Workspaces** in the Midnight menu switches between four desktops. Ctrl+Alt+Left
+and Ctrl+Alt+Right also switch workspaces. **Show desktop** or Super+D hides
+application and folder windows temporarily; activating a task restores them.
+Applications can use standard EWMH workspace and Show Desktop requests. Clients
+supporting `_NET_WM_PING` are marked unresponsive after a timeout, and clients
+supporting `_NET_WM_SYNC_REQUEST` can acknowledge interactive resize updates.
+Resize timeouts allow interaction to continue when an application stops responding.
+
+Optional portal integration uses `deskutils/xdg-desktop-portal` and
+`x11/xdg-desktop-portal-gtk`. The installed MidnightWorkspace portal configuration
+selects GTK for file/application choosers and Midnight's Settings backend for
+live dark-mode and accent-color preferences. User portal configuration takes
+precedence. This adds chooser and appearance integration; screen sharing and
+remote desktop require additional backend work.
+
+When no other service owns `org.freedesktop.ScreenSaver`, Midnight handles
+`Inhibit`/`UnInhibit` requests to suppress idle blanking and coordinates with
+xscreensaver. Inhibitors are removed when their application disconnects. Explicit
+screen locking remains available while inhibited.
 
 Double-click a desktop or folder object to open it. Right-click to see its
 actions. Files use their shared MIME type for themed icons. **Open With…** lets
@@ -120,6 +152,8 @@ matching folder under the home directory when unset. Music, Videos, and Public
 Share are available as optional shortcuts. An XDG directory set to the home
 directory is hidden, as that setting disables the special directory. Physical
 files appear from the user's XDG Desktop directory. Shell object
+Icons fill downward from the upper left, then continue in the next column.
+Overflow scrolls by columns using the wheel or Page Up/Page Down/Home/End. Object
 metadata is stored in `$XDG_DATA_HOME/midnight-wm/workspace.db` (normally under
 `~/.local/share`). Files and folders remain in the filesystem. Deleting a file
 uses the freedesktop Trash mechanism.
@@ -204,7 +238,7 @@ available for a later Wayland compositor backend. Wayland will require a new
 compositor implementation; XCB window IDs and events do not cross that boundary.
 
 The experimental MidnightBSD mport is in
-`packaging/mports/x11-wm/midnight-wm` and tracks the published 0.1.1 source
-archive. The source tree is now developing 0.1.2; `cpack --config
-build/CPackSourceConfig.cmake -G TGZ` generates a 0.1.2 source archive. The
-mport remains on 0.1.1 until a 0.1.2 release asset is available.
+`packaging/mports/x11-wm/midnight-wm/` and tracks the published 0.1.2 source
+archive. Unreleased source changes may require additional installed files or
+dependencies reflected in the bundled port. Generate source distributions with
+`cpack --config build/CPackSourceConfig.cmake -G TGZ`.

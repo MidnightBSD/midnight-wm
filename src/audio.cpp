@@ -91,6 +91,15 @@ std::expected<VolumeState, std::string> VolumeControl::adjust(int change) {
   return read();
 }
 
+std::expected<VolumeState, std::string> VolumeControl::set_percent(int percent) {
+  auto levels = read_levels();
+  if (!levels) return std::unexpected(levels.error());
+  (void)state(*levels);
+  levels->left = levels->right = clamp_level(percent);
+  if (auto written = write_levels(*levels); !written) return std::unexpected(written.error());
+  return read();
+}
+
 std::expected<VolumeState, std::string> VolumeControl::toggle_mute() {
   auto levels = read_levels();
   if (!levels) return std::unexpected(levels.error());

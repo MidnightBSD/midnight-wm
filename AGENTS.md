@@ -21,7 +21,10 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   the root pointer cursor. RandR monitor changes must refresh layout even when
   the root size stays the same. Keep fullscreen and maximized windows on their
   named monitor where possible, and recover ordinary windows onto a visible
-  monitor when an output disappears.
+  monitor when an output disappears. Four EWMH workspaces and Show Desktop
+  also control built-in folder visibility through Shell::set_workspace.
+  Keep ping and synchronized resize waits nonblocking, bounded, and cancelled
+  when clients disappear; call wm.tick() from the main loop.
 - `src/display_monitors.hpp` queries RandR monitor rectangles and chooses a
   visible monitor for a point. The shell uses the primary monitor for its panel
   and desktop shortcuts while keeping the lavender background across the root.
@@ -87,15 +90,28 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
 - `src/dbus_menu.*` reads application menus over D-Bus;
   `src/dbus_menu_popup.*` draws their rows and submenus in X11.
 - `src/audio.*` controls the default OSS mixer and has no X11 dependency.
+  The panel has one speaker button toggling a popup below it, with a volume
+  slider, mute beneath it, and MPRIS controls. Keep popup bounds within the
+  primary monitor; release pointer/keyboard grabs on close and layout changes.
+- `src/media_player.*` discovers MPRIS players asynchronously and respects their
+  playback capabilities. Cancel outstanding calls safely when shutting down.
+- `src/desktop_services.*` provides the portal Settings backend and idle
+  inhibition. Preserve existing ScreenSaver service owners, associate inhibitor
+  cookies with their D-Bus callers, and remove them on disconnect. Never bypass
+  explicit screen locking. The portal configuration selects the GTK chooser
+  backend and respects user overrides.
 - `src/model.*` and `src/store.*` own display independent object and file
   behavior. Keep XCB types and event handling out of these files so a future
   Wayland backend can reuse them.
 - `src/desktop_launcher.*` reads application desktop entries and only launches
   user-owned executable files directly on the configured Desktop. Recheck trust
-  at launch time. `src/thumbnail.*` reads and writes the shared freedesktop
+  at launch time, including named desktop-entry actions. Installed Programs
+  actions use GDesktopAppInfo; never expand Exec with a shell. `src/thumbnail.*` reads and writes the shared freedesktop
   thumbnail cache for images; keep thumbnail URI and freshness metadata valid.
 - `src/notifications.*` implements the session D-Bus notification service and
-  draws passive X11 popups only when no other daemon owns the service name.
+  draws X11 popups only when no other daemon owns the service name. Preserve
+  action identifiers, close reasons, resident/urgency behavior, and validate raw
+  image dimensions/stride/payload before creating image buffers.
 - `src/file_manager1.*` serves D-Bus folder, item, and properties requests.
   `src/recent_files.*` reads and updates the shared XBEL recent-files history.
 - `src/startup_notification.*` tracks launches over the X11 startup protocol;
@@ -147,6 +163,13 @@ it uncovers wallpaper and a live-updated solid background while the WM is
 suspended, verifying that Xorg restores the complete cached desktop.
 For launcher menu changes, run `python3 tests/menu_smoke.py`; it checks
 category navigation, popup reuse, application launch, and dismissal during reveal.
+For compatibility changes, run `python3 tests/notifications_smoke.py`,
+`python3 tests/ewmh_smoke.py`, and `python3 tests/media_smoke.py` as applicable.
+The media test restores original OSS mixer levels after slider/mute checks.
+Desktop services protocol checks are registered with CTest.
+With xdg-desktop-portal-gtk installed, run `python3 tests/portal_smoke.py`
+to check live appearance settings and actual GTK Open/Save/Cancel requests
+through the portal frontend, including dialog bounds at 720p.
 Before pushing, use `.agents/skills/pre-push-review/SKILL.md` to run cppcheck
 and review the outgoing diff for basic security issues.
 

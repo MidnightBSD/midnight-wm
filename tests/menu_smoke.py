@@ -87,6 +87,21 @@ def session(args):
             until(lambda: not popups(), "launch did not close the menu chain")
             assert not list(Path(os.environ["HOME"]).glob("Utility-*.launched")), "stale category launched"
 
+            # Application actions from the desktop entry are available on right-click.
+            root, category = open_categories()
+            cx, cy, _, _ = popups()[category]
+            move(cx + 50, cy + 16)
+            until(lambda: len(popups()) == 3, "actions app submenu did not open")
+            until(lambda: any(rect[3] == 248 for rect in popups().values()), "actions reveal did not finish")
+            app = next(window for window in popups() if window not in (root, category))
+            ax, ay, _, _ = popups()[app]
+            run("xdotool", "mousemove", str(ax + 70), str(ay + 16), "click", "3")
+            until(lambda: len(popups()) == 1, "application context menu did not open")
+            x, y, _, _ = next(iter(popups().values()))
+            run("xdotool", "mousemove", str(x + 70), str(y + 40), "click", "1")
+            until((Path(os.environ["HOME"]) / "Utility-00.action").exists, "named desktop action did not launch")
+            until(lambda: not popups(), "action did not close menu")
+
             # Dismiss immediately after an application popup starts revealing. A pending
             # hover/reveal callback must not resurrect any of the destroyed windows.
             root, category = open_categories()
@@ -149,7 +164,9 @@ def main():
                 marker = root / "home" / f"{name}.launched"
                 (root / "data/applications" / f"{name}.desktop").write_text(
                     f"[Desktop Entry]\nType=Application\nName={name}\n"
-                    f'Exec={shutil.which("touch")} "{marker}"\nCategories={category};\n')
+                    f'Exec={shutil.which("touch")} "{marker}"\nCategories={category};\n'
+                    f'Actions=NewWindow;\n[Desktop Action NewWindow]\nName=New Window\n'
+                    f'Exec={shutil.which("touch")} "{root / "home" / (name + ".action")}"\n')
         read_fd, write_fd = os.pipe()
         with (args.output / "xvfb.log").open("w") as log:
             xvfb = subprocess.Popen(["Xvfb", "-displayfd", str(write_fd), "-screen", "0",

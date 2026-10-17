@@ -7,7 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(DEPS REQUIRED IMPORTED_TARGET
-  xcb xcb-icccm xcb-keysyms xcb-xfixes xcb-randr cairo-xcb pangocairo
+  xcb xcb-icccm xcb-keysyms xcb-xfixes xcb-randr xcb-sync xcb-screensaver cairo-xcb pangocairo
   gio-2.0 gio-unix-2.0 gdk-pixbuf-2.0 garcon-1 sqlite3)
 
 add_library(midnight_core src/store.cpp src/model.cpp src/config.cpp src/audio.cpp src/wallpaper.cpp
@@ -20,7 +20,7 @@ target_compile_options(midnight_core PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(midnight-wm src/main.cpp src/x11.cpp src/shell.cpp src/clipboard.cpp src/dnd.cpp
   src/tray.cpp src/status_notifier.cpp src/status_panel.cpp src/dbus_menu.cpp
   src/dbus_menu_popup.cpp src/autostart.cpp src/notifications.cpp src/xsettings.cpp
-  src/file_manager1.cpp src/keyring_session.cpp)
+  src/file_manager1.cpp src/keyring_session.cpp src/media_player.cpp src/desktop_services.cpp)
 target_link_libraries(midnight-wm PRIVATE midnight_core)
 target_compile_options(midnight-wm PRIVATE -Wall -Wextra -Wpedantic)
 
@@ -44,6 +44,8 @@ install(FILES data/midnightbsd-settings.desktop DESTINATION ${CMAKE_INSTALL_DATA
 install(FILES data/midnight-wm.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/xsessions)
 install(FILES data/config.ini data/MidnightBSDLogo.svg data/MidnightBSDLogo22x22.png
         DESTINATION ${CMAKE_INSTALL_DATADIR}/midnight-wm)
+install(FILES data/midnight.portal DESTINATION ${CMAKE_INSTALL_DATADIR}/xdg-desktop-portal/portals)
+install(FILES data/midnightworkspace-portals.conf DESTINATION ${CMAKE_INSTALL_DATADIR}/xdg-desktop-portal)
 install(FILES README.md LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/midnight-wm)
 
 enable_testing()
@@ -93,6 +95,10 @@ target_link_libraries(recent_files_test PRIVATE midnight_core)
 add_test(NAME recent_files_test COMMAND recent_files_test)
 find_program(DBUS_RUN_SESSION dbus-run-session)
 if(DBUS_RUN_SESSION)
+  add_executable(desktop_services_test tests/desktop_services_test.cpp src/desktop_services.cpp)
+  target_link_libraries(desktop_services_test PRIVATE midnight_core)
+  add_test(NAME desktop_services_test COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:desktop_services_test>)
+  add_test(NAME desktop_services_existing_test COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:desktop_services_test> existing)
   add_executable(file_manager1_test tests/file_manager1_test.cpp src/file_manager1.cpp)
   target_link_libraries(file_manager1_test PRIVATE midnight_core)
   add_test(NAME file_manager1_test COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:file_manager1_test>)

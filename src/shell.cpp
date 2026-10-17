@@ -1,6 +1,7 @@
 #include "shell.hpp"
 
 #include "audio.hpp"
+#include "media_player.hpp"
 #include "browser_launcher.hpp"
 #include "config.hpp"
 #include "desktop_launcher.hpp"
@@ -45,7 +46,9 @@
 
 namespace midnight {
 namespace {
-constexpr int volume_group_width = 102;
+constexpr int volume_group_width = 24;
+constexpr int audio_popup_width = 260;
+constexpr int audio_popup_height = 230;
 constexpr int volume_clock_gap = 4;
 constexpr int lock_button_x = 124;
 constexpr int lock_button_width = 24;
@@ -146,6 +149,7 @@ struct IconTheme {
 
 struct Folder {
   xcb_window_t window{};
+  std::uint32_t workspace{};
   std::filesystem::path path;
   int x{}, y{}, width{620}, height{430};
   int selected{-1};
@@ -267,13 +271,13 @@ struct TransferCompletion {
 };
 
 enum class MenuAction { noop, open_home, open_desktop, open_trash, new_folder, paste, show_programs,
-                        show_recent, open_recent, settings,
+                        show_recent, open_recent, settings, workspaces, switch_workspace, show_desktop,
                         show_category, next_categories, previous_categories,
-                        launch, next_apps, previous_apps,
+                        launch, launch_action, desktop_action, next_apps, previous_apps,
                         open_item, open_with, copy, cut, create_shadow, create_template, properties, trash,
                         restore, delete_permanently, close_folder, exit_session, refresh_folder,
                         sort_by_name, sort_by_type, activate_task, next_tasks, previous_tasks };
-struct MenuEntry { std::string label; MenuAction action; std::size_t index{}; xcb_window_t window{}; };
+struct MenuEntry { std::string label; MenuAction action; std::size_t index{}; xcb_window_t window{}; std::string action_id{}; };
 
 std::string basename(const std::filesystem::path& path) {
   auto name = path.filename().string();
@@ -342,7 +346,7 @@ void draw_text(cairo_t* cr, const std::string& value, int x, int y, int width,
   g_object_unref(layout);
 }
 
-enum class SoundIcon { quieter, louder, mute };
+enum class SoundIcon { quieter, louder, mute, speaker };
 
 void sound_icon(cairo_t* cr, int x, int y, SoundIcon kind, const ThemeConfig& theme) {
   cairo_save(cr);
@@ -363,6 +367,10 @@ void sound_icon(cairo_t* cr, int x, int y, SoundIcon kind, const ThemeConfig& th
     cairo_line_to(cr, x + 16, y + 12);
     cairo_move_to(cr, x + 16, y + 5);
     cairo_line_to(cr, x + 11, y + 12);
+  } else if (kind == SoundIcon::speaker) {
+    cairo_arc(cr, x + 8, y + 8, 5, -.9, .9);
+    cairo_stroke(cr);
+    cairo_arc(cr, x + 8, y + 8, 8, -.9, .9);
   } else {
     cairo_move_to(cr, x + 11, y + 8);
     cairo_line_to(cr, x + 16, y + 8);
@@ -517,7 +525,15 @@ struct Shell::Impl {
     else fill(cr, r, g, b, x, y, w, h);
   }
 
+  std::uint32_t workspace{};
+  bool showing_desktop{};
   VolumeControl volume;
+  MediaPlayers media;
+  std::vector<MediaPlayerState> media_players;
+  std::string selected_player;
+  xcb_window_t audio_popup{};
+  int audio_x{}, audio_y{};
+  bool volume_drag{};
   std::optional<VolumeState> volume_state;
   std::chrono::steady_clock::time_point last_volume_poll{};
   std::shared_ptr<bool> alive{std::make_shared<bool>(true)};
@@ -704,6 +720,7 @@ struct Shell::Impl {
     if (submenu) xcb_destroy_window(connection, submenu);
     if (app_menu) xcb_destroy_window(connection, app_menu);
     if (exit_dialog) xcb_destroy_window(connection, exit_dialog);
+    if (audio_popup) xcb_destroy_window(connection, audio_popup);
     if (notice) xcb_destroy_window(connection, notice);
     if (icon_chooser) xcb_destroy_window(connection, icon_chooser->window);
     if (open_with_dialog) {
@@ -1315,15 +1332,9 @@ struct Shell::Impl {
         text(cr, "▾", layout.overflow_x + 6, 6, 16, 15, false, true);
       }
       if (show_volume) {
-        bevel(cr, volume_x, 5, 18, 24);
-        sound_icon(cr, volume_x + 1, 9, SoundIcon::quieter, config);
-        bevel(cr, volume_x + 20, 5, 42, 24, true);
-        text(cr, volume_state ? std::to_string(volume_state->percent) + "%" : "N/A",
-             volume_x + 23, 8, 36, 11, false, true);
-        bevel(cr, volume_x + 64, 5, 18, 24);
-        sound_icon(cr, volume_x + 65, 9, SoundIcon::louder, config);
-        bevel(cr, volume_x + 84, 5, 18, 24, volume_state && volume_state->muted);
-        sound_icon(cr, volume_x + 85, 9, SoundIcon::mute, config);
+        bevel(cr, volume_x, 4, volume_group_width, 24, audio_popup != 0);
+        sound_icon(cr, volume_x + 3, 7,
+                   volume_state && volume_state->muted ? SoundIcon::mute : SoundIcon::speaker, config);
       }
       bevel(cr, clock_x, 5, 99, 24, true);
       text(cr, clock_text(config.clock_format), clock_x + 7, 8, 86, 11, false, true);
@@ -1333,7 +1344,8 @@ struct Shell::Impl {
   std::vector<Task> panel_tasks() const {
     auto result = tasks;
     std::vector<xcb_window_t> ids;
-    for (const auto& [window, folder] : folders) ids.push_back(window);
+    for (const auto& [window, folder] : folders)
+      if (folder.workspace == workspace) ids.push_back(window);
     std::ranges::sort(ids);
     for (const auto window : ids) {
       const auto& folder = folders.at(window);
@@ -1377,10 +1389,29 @@ struct Shell::Impl {
     return layout;
   }
 
+  void request_root(const char* name, std::uint32_t value) {
+    auto* reply = xcb_intern_atom_reply(connection, xcb_intern_atom(connection, 0, std::strlen(name), name), nullptr);
+    if (!reply) return;
+    xcb_client_message_event_t request{};
+    request.response_type = XCB_CLIENT_MESSAGE;
+    request.format = 32;
+    request.window = screen->root;
+    request.type = reply->atom;
+    request.data.data32[0] = value;
+    request.data.data32[1] = XCB_CURRENT_TIME;
+    std::free(reply);
+    xcb_send_event(connection, 0, screen->root,
+      XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY,
+      reinterpret_cast<const char*>(&request));
+    xcb_flush(connection);
+  }
+
   void activate_task_window(xcb_window_t window, xcb_timestamp_t time) {
     const auto all_tasks = panel_tasks();
     if (std::ranges::none_of(all_tasks, [window](const Task& task) { return task.window == window; })) return;
     if (folders.contains(window)) {
+      request_root("_NET_SHOWING_DESKTOP", 0);
+      xcb_map_window(connection, window);
       const std::uint32_t above[]{XCB_STACK_MODE_ABOVE};
       xcb_configure_window(connection, window, XCB_CONFIG_WINDOW_STACK_MODE, above);
       xcb_set_input_focus(connection, XCB_INPUT_FOCUS_POINTER_ROOT, window, time);
@@ -1514,15 +1545,16 @@ struct Shell::Impl {
     });
   }
 
-  void paint_menu(xcb_window_t window, int h, bool present, auto&& draw) {
+  void paint_menu(xcb_window_t window, int h, bool present, auto&& draw, int w = 0) {
+    if (!w) w = menu_width;
     if (!visual || !window) return;
     const auto pixmap = xcb_generate_id(connection);
     auto* error = xcb_request_check(connection, xcb_create_pixmap_checked(
       connection, screen->root_depth, pixmap, window,
-      scaled_pixel(scale, menu_width), scaled_pixel(scale, h)));
+      scaled_pixel(scale, w), scaled_pixel(scale, h)));
     if (error) { std::free(error); return; }
     auto* surface = cairo_xcb_surface_create(connection, pixmap, visual,
-      scaled_pixel(scale, menu_width), scaled_pixel(scale, h));
+      scaled_pixel(scale, w), scaled_pixel(scale, h));
     auto* cr = cairo_create(surface);
     cairo_set_source_rgb(cr, config.surface_color[0], config.surface_color[1], config.surface_color[2]);
     cairo_paint(cr);
@@ -1649,6 +1681,116 @@ struct Shell::Impl {
   void draw_menu() { draw_menu_window(menu, menu_entries, menu_hover); }
   void draw_submenu(bool present = true) { draw_menu_window(submenu, submenu_entries, submenu_hover, present); }
   void draw_app_menu(bool present = true) { draw_menu_window(app_menu, app_menu_entries, app_menu_hover, present); }
+
+  const MediaPlayerState* active_player() const {
+    const auto selected = std::ranges::find(media_players, selected_player, &MediaPlayerState::bus_name);
+    if (selected != media_players.end()) return &*selected;
+    const auto playing = std::ranges::find(media_players, std::string("Playing"), &MediaPlayerState::status);
+    return playing != media_players.end() ? &*playing : media_players.empty() ? nullptr : &media_players.front();
+  }
+
+  void draw_audio_popup() {
+    if (!audio_popup) return;
+    paint_menu(audio_popup, audio_popup_height, true, [&](cairo_t* cr) {
+      themed_fill(cr, config.surface_color, .79, .79, .79, 0, 0, audio_popup_width, audio_popup_height);
+      bevel(cr, 0, 0, audio_popup_width, audio_popup_height);
+      text(cr, volume_state ? "Volume  " + std::to_string(volume_state->percent) + "%" : "Volume unavailable",
+           18, 10, 225, 11);
+      bevel(cr, 20, 41, 220, 6, true);
+      if (volume_state) {
+        const int position = volume_state->percent * 220 / 100;
+        fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2], 20, 42, position, 4);
+        themed_fill(cr, config.button_color, .7, .7, .7, 16 + position, 34, 9, 20);
+        bevel(cr, 16 + position, 34, 9, 20);
+      }
+      bevel(cr, 18, 66, 224, 27, volume_state && volume_state->muted);
+      sound_icon(cr, 28, 70, volume_state && volume_state->muted ? SoundIcon::mute : SoundIcon::speaker, config);
+      text(cr, volume_state && volume_state->muted ? "Unmute" : "Mute", 56, 70, 170, 11);
+      bevel(cr, 12, 102, 236, 2, true);
+      const auto* player = active_player();
+      if (!player) { text(cr, "No media player running", 18, 120, 224, 11); return; }
+      const auto name = player->bus_name.substr(std::string_view("org.mpris.MediaPlayer2.").size());
+      text(cr, name + (media_players.size() > 1 ? "  ▾" : ""), 18, 109, 224, 10);
+      text(cr, player->title.empty() ? "No track information" : player->title, 18, 132, 224, 11);
+      text(cr, player->artist, 18, 154, 224, 10);
+      const std::array<bool, 3> enabled{player->can_previous,
+        player->status == "Playing" ? player->can_pause : player->can_play, player->can_next};
+      for (int i = 0; i < 3; ++i) {
+        bevel(cr, 18 + i * 76, 184, 70, 30);
+        const auto color = config.dark_mode ? config.text_color : std::array<double, 3>{.12, .12, .12};
+        cairo_set_source_rgba(cr, color[0], color[1], color[2], player->can_control && enabled[i] ? 1 : .3);
+        const int x = 45 + i * 76;
+        if (i == 1 && player->status == "Playing") {
+          cairo_rectangle(cr, x, 193, 4, 12);
+          cairo_rectangle(cr, x + 8, 193, 4, 12);
+        } else {
+          const bool previous = i == 0;
+          cairo_move_to(cr, x + (previous ? 12 : 0), 192);
+          cairo_line_to(cr, x + (previous ? 0 : 12), 199);
+          cairo_line_to(cr, x + (previous ? 12 : 0), 206);
+          cairo_close_path(cr);
+          if (i != 1) cairo_rectangle(cr, x + (previous ? -3 : 13), 192, 3, 14);
+        }
+        cairo_fill(cr);
+      }
+    }, audio_popup_width);
+  }
+
+  void close_audio_popup() {
+    if (!audio_popup) return;
+    xcb_ungrab_pointer(connection, XCB_CURRENT_TIME);
+    xcb_ungrab_keyboard(connection, XCB_CURRENT_TIME);
+    volume_drag = false;
+    destroy_menu_window(audio_popup);
+    draw_panel();
+  }
+
+  void toggle_audio_popup() {
+    if (audio_popup) { close_audio_popup(); return; }
+    close_menu();
+    const auto area = primary_area();
+    audio_x = std::clamp(area.x + volume_x() + volume_group_width - audio_popup_width,
+                         area.x, std::max(area.x, area.x + area.width - audio_popup_width));
+    audio_y = area.y + panel_height;
+    audio_popup = create_window(audio_x, audio_y, audio_popup_width, audio_popup_height);
+    draw_audio_popup();
+    xcb_map_window(connection, audio_popup);
+    xcb_grab_pointer(connection, 1, audio_popup,
+      XCB_EVENT_MASK_BUTTON_PRESS | XCB_EVENT_MASK_BUTTON_RELEASE | XCB_EVENT_MASK_POINTER_MOTION,
+      XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC, XCB_NONE, XCB_NONE, XCB_CURRENT_TIME);
+    xcb_grab_keyboard(connection, 0, audio_popup, XCB_CURRENT_TIME, XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC);
+    draw_panel();
+  }
+
+  void apply_volume(std::expected<VolumeState, std::string> state) {
+    if (state) volume_state = *state;
+    else { volume_state.reset(); g_warning("Volume: %s", state.error().c_str()); }
+    draw_panel();
+    draw_audio_popup();
+  }
+
+  void audio_button(const xcb_button_press_event_t* event) {
+    const int x = event->root_x - audio_x, y = event->root_y - audio_y;
+    if (x < 0 || y < 0 || x >= audio_popup_width || y >= audio_popup_height) { close_audio_popup(); return; }
+    if (event->detail == 4 || event->detail == 5) { apply_volume(volume.adjust(event->detail == 4 ? 5 : -5)); return; }
+    if (event->detail != 1) return;
+    if (y >= 30 && y < 58 && volume_state) {
+      volume_drag = true;
+      apply_volume(volume.set_percent(std::clamp((x - 20) * 100 / 220, 0, 100)));
+    } else if (y >= 66 && y < 93 && volume_state) apply_volume(volume.toggle_mute());
+    else if (y >= 106 && y < 130 && media_players.size() > 1) {
+      const auto* player = active_player();
+      const auto index = player ? static_cast<std::size_t>(player - media_players.data()) : 0;
+      selected_player = media_players[(index + 1) % media_players.size()].bus_name;
+      draw_audio_popup();
+    } else if (y >= 184 && y < 214 && x >= 18 && x < 240) {
+      if (const auto* player = active_player()) {
+        const int button = (x - 18) / 76;
+        media.command(player->bus_name, button == 0 ? "Previous" : button == 2 ? "Next" :
+                      player->status == "Playing" ? "Pause" : "Play");
+      }
+    }
+  }
 
   void show_notice(std::string message) {
     notice_text = std::move(message);
@@ -2115,6 +2257,8 @@ struct Shell::Impl {
                                    {"New folder on desktop", MenuAction::new_folder},
                                    {"Paste on desktop", MenuAction::paste},
                                    {"Settings…", MenuAction::settings},
+                                   {"Workspaces ▶", MenuAction::workspaces},
+                                   {"Show desktop", MenuAction::show_desktop},
                                    {"Trash", MenuAction::open_trash},
                                    {"Exit X11 session…", MenuAction::exit_session}};
     const auto area = primary_area();
@@ -2206,6 +2350,16 @@ struct Shell::Impl {
     show_menu(area.x + layout.overflow_x, area.y + panel_height, panel, std::move(entries));
   }
 
+  void show_application_actions(std::size_t app_index, int x, int y) {
+    if (app_index >= apps.size()) return;
+    std::vector<MenuEntry> entries{{"Open", MenuAction::launch, app_index}};
+    for (const auto& action : desktop_entry_actions(apps[app_index])) {
+      if (entries.size() >= static_cast<std::size_t>(std::max(1, (primary_area().height - panel_height - 8) / row_height))) break;
+      entries.push_back({action.name, MenuAction::launch_action, app_index, 0, action.id});
+    }
+    show_menu(x, y, panel, std::move(entries));
+  }
+
   void show_context(xcb_window_t window, int root_x, int root_y, const Item* item) {
     if (item) selected_item = *item;
     else selected_item.reset();
@@ -2215,6 +2369,14 @@ struct Shell::Impl {
                  {"Properties", MenuAction::properties}};
     } else if (item) {
       entries = {{"Open", MenuAction::open_item}};
+      if (auto launcher = trusted_launcher(*item); launcher) {
+        if (auto actions = desktop_launcher_actions(item->path, Store::desktop_path()); actions) {
+          for (const auto& action : *actions) {
+            if (entries.size() >= 8) break;
+            entries.push_back({action.name, MenuAction::desktop_action, 0, 0, action.id});
+          }
+        }
+      }
       if (can_open_with(*item)) entries.push_back({"Open With…", MenuAction::open_with});
       entries.insert(entries.end(), {{"Copy", MenuAction::copy}, {"Cut", MenuAction::cut},
                  {"Create shadow", MenuAction::create_shadow}, {"Create template", MenuAction::create_template},
@@ -2271,7 +2433,9 @@ struct Shell::Impl {
       show_notice("Folder unavailable: " + path.string());
       return false;
     }
+    request_root("_NET_SHOWING_DESKTOP", 0);
     Folder folder;
+    folder.workspace = workspace;
     folder.path = path;
     folder.trash = trash;
     const auto area = owner_area(menu_owner);
@@ -2343,12 +2507,23 @@ struct Shell::Impl {
   void execute(MenuEntry entry, int row = -1) {
     const auto destination = owner_path();
     if (entry.action != MenuAction::show_programs && entry.action != MenuAction::show_recent &&
+        entry.action != MenuAction::workspaces &&
         entry.action != MenuAction::next_apps &&
         entry.action != MenuAction::previous_apps && entry.action != MenuAction::show_category &&
         entry.action != MenuAction::next_categories &&
         entry.action != MenuAction::previous_categories) close_menu();
     switch (entry.action) {
       case MenuAction::noop: break;
+      case MenuAction::workspaces: {
+        std::vector<MenuEntry> entries;
+        for (std::size_t i = 0; i < 4; ++i)
+          entries.push_back({(i == workspace ? "✓ " : "") + std::string("Workspace ") + std::to_string(i + 1),
+                             MenuAction::switch_workspace, i});
+        show_submenu(std::move(entries), row);
+        break;
+      }
+      case MenuAction::switch_workspace: request_root("_NET_CURRENT_DESKTOP", entry.index); break;
+      case MenuAction::show_desktop: request_root("_NET_SHOWING_DESKTOP", showing_desktop ? 0 : 1); break;
       case MenuAction::settings: {
         GError* error = nullptr;
         auto* process = g_subprocess_new(G_SUBPROCESS_FLAGS_NONE, &error,
@@ -2393,6 +2568,20 @@ struct Shell::Impl {
         };
         if (clipboard_request) clipboard_request(std::move(paste));
         else if (!clipboard_path.empty()) paste({clipboard_path}, clipboard_cut);
+        break;
+      }
+      case MenuAction::launch_action: {
+        if (entry.index < apps.size()) {
+          if (auto result = launch_desktop_action(apps[entry.index], entry.action_id); !result)
+            show_notice("Launcher: " + result.error());
+        }
+        break;
+      }
+      case MenuAction::desktop_action: {
+        if (selected_item) {
+          if (auto result = launch_desktop_entry_action(selected_item->path, Store::desktop_path(), entry.action_id); !result)
+            show_notice("Launcher: " + result.error());
+        }
         break;
       }
       case MenuAction::launch: {
@@ -2491,6 +2680,9 @@ struct Shell::Impl {
   }
 
   void button(const xcb_button_press_event_t* event) {
+    if (event->event == audio_popup && audio_popup) { audio_button(event); return; }
+    if (audio_popup && !(event->event == panel && event->event_x >= volume_x() &&
+                        event->event_x < volume_x() + volume_group_width)) close_audio_popup();
     if (open_with_dialog && event->event == open_with_dialog->window) {
       auto& dialog = *open_with_dialog;
       if (event->detail == 4 || event->detail == 5) {
@@ -2592,7 +2784,10 @@ struct Shell::Impl {
       const auto& entries = event->event == menu ? menu_entries :
                             event->event == submenu ? submenu_entries : app_menu_entries;
       const int index = (event->event_y - 4) / row_height;
-      if (event->detail == 1 && event->event_y >= 4 && index >= 0 && static_cast<std::size_t>(index) < entries.size())
+      if (event->detail == 3 && event->event_y >= 4 && index >= 0 &&
+          static_cast<std::size_t>(index) < entries.size() && entries[index].action == MenuAction::launch)
+        show_application_actions(entries[index].index, event->root_x, event->root_y);
+      else if (event->detail == 1 && event->event_y >= 4 && index >= 0 && static_cast<std::size_t>(index) < entries.size())
         execute(entries[index], index);
       else close_menu();
       return;
@@ -2601,16 +2796,9 @@ struct Shell::Impl {
       const int volume_x = this->volume_x();
       if (show_volume() && event->event_x >= volume_x &&
           event->event_x < volume_x + volume_group_width) {
-        std::expected<VolumeState, std::string> changed = std::unexpected("No volume action");
-        const int relative_x = event->event_x - volume_x;
-        if (event->detail == 4 || (event->detail == 1 && relative_x >= 64 && relative_x < 82))
-          changed = volume.adjust(5);
-        else if (event->detail == 5 || (event->detail == 1 && relative_x < 18)) changed = volume.adjust(-5);
-        else if (event->detail == 3 || (event->detail == 1 && relative_x >= 84)) changed = volume.toggle_mute();
-        else return;
-        if (changed) volume_state = *changed;
-        else { volume_state.reset(); show_notice("Volume: " + changed.error()); }
-        draw_panel();
+        if (event->detail == 1) toggle_audio_popup();
+        else if (event->detail == 4 || event->detail == 5)
+          apply_volume(volume.adjust(event->detail == 4 ? 5 : -5));
         return;
       }
       if (event->detail == 1 && event->event_x < 122) { if (menu) close_menu(); else show_launcher(); }
@@ -2890,6 +3078,10 @@ struct Shell::Impl {
   }
 
   void motion(const xcb_motion_notify_event_t* event) {
+    if (audio_popup && volume_drag) {
+      apply_volume(volume.set_percent(std::clamp((event->root_x - audio_x - 20) * 100 / 220, 0, 100)));
+      return;
+    }
     if (event->event == menu || event->event == submenu || event->event == app_menu) {
       const auto& entries = event->event == menu ? menu_entries :
                             event->event == submenu ? submenu_entries : app_menu_entries;
@@ -2976,6 +3168,7 @@ bool Shell::initialize() {
   p.visual = visual_for(p.screen);
   if (!p.visual) return false;
   p.load_logo();
+  p.media.initialize();
   if (auto state = p.volume.read(); state) p.volume_state = *state;
   p.last_volume_poll = std::chrono::steady_clock::now();
   p.key_symbols = xcb_key_symbols_alloc(p.connection);
@@ -3017,7 +3210,7 @@ bool Shell::owns(xcb_window_t window) const {
   const auto& p = *impl_;
   return window && (window == p.desktop || window == p.panel || window == p.menu ||
                     window == p.submenu || window == p.app_menu || window == p.notice ||
-                    window == p.exit_dialog ||
+                    window == p.exit_dialog || window == p.audio_popup ||
                     (p.icon_chooser && window == p.icon_chooser->window) ||
                     (p.open_with_dialog && window == p.open_with_dialog->window) ||
                     (p.properties && window == p.properties->window) || p.folders.contains(window));
@@ -3052,6 +3245,7 @@ bool Shell::handle(xcb_generic_event_t* event) {
     p.draw_panel();
   } else if (type == XCB_EXPOSE) {
     if (window == p.panel) p.draw_panel();
+    else if (window == p.audio_popup) {}
     else if (window == p.desktop) {
       if (!p.desktop_pixmap) p.draw_desktop();
     }
@@ -3073,6 +3267,7 @@ bool Shell::handle(xcb_generic_event_t* event) {
     press.root_y = static_cast<std::int16_t>(std::lround(press.root_y / p.scale));
     p.button(&press);
   }
+  else if (type == XCB_BUTTON_RELEASE && p.volume_drag) p.volume_drag = false;
   else if (type == XCB_BUTTON_RELEASE && p.scroll_drag_window == window) {
     p.scroll_drag_window = 0;
     xcb_ungrab_pointer(p.connection, XCB_CURRENT_TIME);
@@ -3087,6 +3282,13 @@ bool Shell::handle(xcb_generic_event_t* event) {
     motion.root_x = static_cast<std::int16_t>(std::lround(motion.root_x / p.scale));
     motion.root_y = static_cast<std::int16_t>(std::lround(motion.root_y / p.scale));
     p.motion(&motion);
+  }
+  else if (type == XCB_KEY_PRESS && window == p.audio_popup) {
+    const auto* key = reinterpret_cast<xcb_key_press_event_t*>(event);
+    const auto sym = p.key_symbols ? xcb_key_symbols_get_keysym(p.key_symbols, key->detail, 0) : 0;
+    if (sym == XK_Escape) p.close_audio_popup();
+    else if (sym == XK_Left || sym == XK_Right) p.apply_volume(p.volume.adjust(sym == XK_Right ? 5 : -5));
+    else if (sym == XK_m || sym == XK_space) p.apply_volume(p.volume.toggle_mute());
   }
   else if (type == XCB_KEY_PRESS) p.key(reinterpret_cast<xcb_key_press_event_t*>(event));
   else if (type == XCB_DESTROY_NOTIFY) {
@@ -3104,11 +3306,13 @@ void Shell::tick() {
   if (now != p.last_clock) { p.last_clock = now; redraw = true; }
   const auto steady_now = std::chrono::steady_clock::now();
   p.advance_menus(steady_now);
+  auto players = p.media.players();
+  if (players != p.media_players) { p.media_players = std::move(players); p.draw_audio_popup(); }
   if (steady_now - p.last_volume_poll >= std::chrono::seconds(1)) {
     p.last_volume_poll = steady_now;
     auto current = p.volume.read();
     std::optional<VolumeState> state = current ? std::optional<VolumeState>(*current) : std::nullopt;
-    if (state != p.volume_state) { p.volume_state = state; redraw = true; }
+    if (state != p.volume_state) { p.volume_state = state; redraw = true; p.draw_audio_popup(); }
   }
   if (redraw) p.draw_panel();
 }
@@ -3116,6 +3320,32 @@ void Shell::tick() {
 bool Shell::menu_animation_active() const {
   return impl_->pending_category_row >= 0 || std::ranges::any_of(impl_->menu_surfaces,
     [](const auto& entry) { return entry.second.revealing; });
+}
+
+void Shell::set_workspace(std::uint32_t desktop, bool showing_desktop) {
+  auto& p = *impl_;
+  if (p.workspace == desktop && p.showing_desktop == showing_desktop) return;
+  p.workspace = desktop;
+  p.showing_desktop = showing_desktop;
+  p.close_menu();
+  p.close_audio_popup();
+  p.focused_folder = 0;
+  for (const auto& [window, folder] : p.folders) {
+    if (!showing_desktop && folder.workspace == desktop) xcb_map_window(p.connection, window);
+    else xcb_unmap_window(p.connection, window);
+  }
+  auto show_owned = [&](xcb_window_t window, xcb_window_t owner) {
+    const bool visible = !showing_desktop &&
+      (!p.folders.contains(owner) || p.folders.at(owner).workspace == desktop);
+    if (visible) xcb_map_window(p.connection, window);
+    else xcb_unmap_window(p.connection, window);
+  };
+  if (p.properties) {
+    show_owned(p.properties->window, p.properties->owner);
+    if (p.icon_chooser) show_owned(p.icon_chooser->window, p.properties->owner);
+  }
+  if (p.open_with_dialog) show_owned(p.open_with_dialog->window, p.open_with_dialog->owner);
+  p.draw_panel();
 }
 
 void Shell::set_tasks(std::vector<Task> tasks) {
@@ -3129,6 +3359,7 @@ void Shell::set_tray_width(int width) {
   auto& p = *impl_;
   const int requested = std::max(0, width);
   if (p.requested_tray_width == requested) return;
+  p.close_audio_popup();
   p.requested_tray_width = requested;
   if (p.panel) p.draw_panel();
 }
@@ -3201,6 +3432,7 @@ void Shell::set_screen_size(std::uint16_t width, std::uint16_t height) {
 void Shell::refresh_display_layout() {
   auto& p = *impl_;
   p.close_menu();
+  p.close_audio_popup();
   p.update_monitor_geometry();
   p.scale = display_scale(p.primary_monitor.height, p.config.ui_scale);
   p.width = std::max(1, static_cast<int>(p.physical_width / p.scale));

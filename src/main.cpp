@@ -4,6 +4,7 @@
 #include "dnd.hpp"
 #include "file_manager1.hpp"
 #include "keyring_session.hpp"
+#include "desktop_services.hpp"
 #include "dbus_menu.hpp"
 #include "dbus_menu_popup.hpp"
 #include "notifications.hpp"
@@ -241,6 +242,7 @@ int main(int argc, char** argv) {
             return shell.show_item_properties(path);
           });
       midnight::XSettings xsettings(connection, screen, screen_number);
+      midnight::DesktopServices desktop_services(connection, shell.theme());
       shell.set_exit_handler([] { running = false; });
       if (!dnd.initialize()) std::cerr << "XDND integration unavailable\n";
       if (!clipboard.initialize()) std::cerr << "XFixes clipboard integration unavailable\n";
@@ -269,6 +271,7 @@ int main(int argc, char** argv) {
         (void)notifications.initialize();
         if (!file_manager.initialize()) std::cerr << "FileManager1 D-Bus unavailable\n";
         (void)xsettings.initialize();
+        (void)desktop_services.initialize();
         midnight::launch_autostart();
         ConfigReload config_reload;
 
@@ -297,11 +300,14 @@ int main(int argc, char** argv) {
           if (auto config = config_reload.poll()) {
             shell.apply_config(std::move(*config));
             wm.refresh_theme();
+            desktop_services.refresh(shell.theme());
             tray.refresh();
             status_panel.refresh();
             notifications.refresh();
             menu_popup.refresh_geometry();
           }
+          wm.tick();
+          desktop_services.tick();
           shell.tick();
           tray.tick();
           status_panel.tick();
@@ -310,7 +316,7 @@ int main(int argc, char** argv) {
           startup.tick();
           xsettings.tick();
           xcb_flush(connection);
-          if (poll(&display, 1, shell.menu_animation_active() ? 16 : 100) < 0 && errno != EINTR) break;
+          if (poll(&display, 1, (shell.menu_animation_active() || wm.resize_pending()) ? 16 : 100) < 0 && errno != EINTR) break;
         }
         if (xcb_connection_has_error(connection)) result = 1;
       }
