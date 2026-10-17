@@ -13,8 +13,9 @@ LICENSE_FILE=	${WRKSRC}/LICENSE
 LIB_DEPENDS=	libxcb-icccm.so:x11/xcb-util-wm \
 		libxcb-keysyms.so:x11/xcb-util-keysyms \
 		libsqlite3.so:databases/sqlite3
+RUN_DEPENDS=	${LOCALBASE}/libexec/gvfsd-trash:filesystems/gvfs
 
-USES=		cmake compiler:c++23-lang gnome localbase pkgconfig xorg
+USES=		cmake:testing compiler:c++23-lang gnome localbase pkgconfig xorg
 USE_GNOME=	cairo glib20 pango gdkpixbuf
 USE_XORG=	xcb
 
