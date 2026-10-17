@@ -24,6 +24,7 @@ public:
   void update_screen_size(std::uint16_t width, std::uint16_t height);
 
 private:
+  enum class WindowRole { normal, dialog, utility, splash };
   struct Frame {
     xcb_window_t client{};
     xcb_window_t frame{};
@@ -44,6 +45,8 @@ private:
     bool accepts_input{true};
     bool takes_focus{};
     bool skip_taskbar{};
+    bool modal{};
+    WindowRole role{WindowRole::normal};
     xcb_window_t transient_for{};
     xcb_size_hints_t size_hints{};
     std::string title;
@@ -62,6 +65,8 @@ private:
   void update_maximized_geometry(Frame& frame);
   Monitor workarea_for(const Monitor& monitor) const;
   void update_client_list();
+  void update_stacking();
+  void restack_layers();
   void update_tasks();
   void scan_existing();
   void manage(xcb_window_t window);
@@ -71,6 +76,7 @@ private:
   void update_icccm_hints(Frame& frame);
   void constrain_size(const Frame& frame, std::uint16_t& width, std::uint16_t& height) const;
   void update_window_state(const Frame& frame);
+  bool decorated(const Frame& frame) const;
   void set_maximized(xcb_window_t client, bool horz, bool vert);
   void close(xcb_window_t client);
   void toggle_maximize(xcb_window_t client);
@@ -91,6 +97,7 @@ private:
   xcb_screen_t* screen_{};
   Shell& shell_;
   std::map<xcb_window_t, Frame> frames_;
+  std::vector<xcb_window_t> client_order_;
   std::map<xcb_window_t, Dock> docks_;
   std::map<xcb_window_t, xcb_window_t> frame_to_client_;
   std::map<std::string, xcb_atom_t> atoms_;
