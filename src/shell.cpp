@@ -7,6 +7,7 @@
 
 #include <cairo/cairo-xcb.h>
 #include <gio/gio.h>
+#include <gdk-pixbuf/gdk-pixbuf.h>
 #include <pango/pangocairo.h>
 #include <xcb/xcb_keysyms.h>
 #include <X11/keysym.h>
@@ -25,8 +26,8 @@
 
 namespace midnight {
 namespace {
-constexpr int panel_height = 34;
-constexpr int row_height = 30;
+constexpr int panel_height = 30;
+constexpr int row_height = 24;
 constexpr int icon_width = 90;
 constexpr int icon_height = 90;
 constexpr int folder_header = 55;
@@ -42,6 +43,7 @@ struct Folder {
   int scroll_rows{};
   std::vector<Item> items;
   bool trash{};
+  bool sort_by_type{};
 };
 
 struct FolderScroll {
@@ -89,9 +91,11 @@ struct TransferCompletion {
   std::function<void(std::expected<void, std::string>)> callback;
 };
 
-enum class MenuAction { open_home, open_desktop, new_folder, paste, launch, next_apps, previous_apps,
+enum class MenuAction { open_home, open_desktop, new_folder, paste, show_programs,
+                        launch, next_apps, previous_apps,
                         open_item, copy, cut, create_shadow, create_template, properties, trash,
-                        restore, delete_permanently, close_folder, exit_session };
+                        restore, delete_permanently, close_folder, exit_session, refresh_folder,
+                        sort_by_name, sort_by_type };
 struct MenuEntry { std::string label; MenuAction action; std::size_t index{}; };
 
 std::string basename(const std::filesystem::path& path) {
@@ -152,6 +156,33 @@ void text(cairo_t* cr, const std::string& value, int x, int y, int width,
   pango_cairo_show_layout(cr, layout);
   pango_font_description_free(font);
   g_object_unref(layout);
+}
+
+cairo_surface_t* image_surface(const std::filesystem::path& path, int size) {
+  GError* error = nullptr;
+  auto* pixbuf = gdk_pixbuf_new_from_file_at_scale(path.c_str(), size, size, TRUE, &error);
+  if (error) g_error_free(error);
+  if (!pixbuf) return nullptr;
+  const int w = gdk_pixbuf_get_width(pixbuf);
+  const int h = gdk_pixbuf_get_height(pixbuf);
+  auto* surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+  auto* pixels = gdk_pixbuf_get_pixels(pixbuf);
+  auto* output = cairo_image_surface_get_data(surface);
+  const int channels = gdk_pixbuf_get_n_channels(pixbuf);
+  const int source_stride = gdk_pixbuf_get_rowstride(pixbuf);
+  const int target_stride = cairo_image_surface_get_stride(surface);
+  for (int y = 0; y < h; ++y) {
+    auto* target = reinterpret_cast<std::uint32_t*>(output + y * target_stride);
+    for (int x = 0; x < w; ++x) {
+      const auto* pixel = pixels + y * source_stride + x * channels;
+      const std::uint32_t alpha = channels == 4 ? pixel[3] : 255;
+      target[x] = alpha << 24 | (pixel[0] * alpha / 255) << 16 |
+                  (pixel[1] * alpha / 255) << 8 | (pixel[2] * alpha / 255);
+    }
+  }
+  cairo_surface_mark_dirty(surface);
+  g_object_unref(pixbuf);
+  return surface;
 }
 
 void icon(cairo_t* cr, const Item& item, int x, int y) {
@@ -228,10 +259,16 @@ struct Shell::Impl {
   std::vector<Item> desktop_items;
   std::vector<Task> tasks;
   std::vector<GAppInfo*> apps;
+  std::unordered_map<std::string, std::filesystem::path> icon_files;
+  std::unordered_map<std::string, int> icon_scores;
+  std::unordered_map<std::string, cairo_surface_t*> icon_surfaces;
+  cairo_surface_t* logo_surface{};
+  bool icons_indexed{};
   std::vector<MenuEntry> menu_entries;
   std::size_t app_page{};
   xcb_window_t menu_owner{};
   int menu_x{}, menu_y{}, menu_width{250};
+  int menu_hover{-1};
   int selected_desktop{-1};
   std::optional<Item> selected_item;
   std::filesystem::path clipboard_path;
@@ -262,6 +299,8 @@ struct Shell::Impl {
     *alive = false;
     if (key_symbols) xcb_key_symbols_free(key_symbols);
     for (auto* app : apps) g_object_unref(app);
+    for (auto& [name, surface] : icon_surfaces) if (surface) cairo_surface_destroy(surface);
+    if (logo_surface) cairo_surface_destroy(logo_surface);
     for (auto& [window, monitor] : monitors) g_object_unref(monitor);
     for (auto& [window, folder] : folders) xcb_destroy_window(connection, window);
     if (menu) xcb_destroy_window(connection, menu);
@@ -308,6 +347,82 @@ struct Shell::Impl {
     });
   }
 
+  void index_icons() {
+    if (icons_indexed) return;
+    icons_indexed = true;
+    std::vector<std::filesystem::path> roots{std::filesystem::path(g_get_user_data_dir())};
+    for (const char* const* dir = g_get_system_data_dirs(); dir && *dir; ++dir)
+      roots.emplace_back(*dir);
+    for (const auto& root : roots) {
+      for (const auto& branch : {"icons", "pixmaps"}) {
+        std::error_code ec;
+        const auto base = root / branch;
+        if (!std::filesystem::is_directory(base, ec)) continue;
+        for (std::filesystem::recursive_directory_iterator it(base,
+               std::filesystem::directory_options::skip_permission_denied, ec), end;
+             it != end && !ec; it.increment(ec)) {
+          if (!it->is_regular_file(ec)) { ec.clear(); continue; }
+          const auto& path = it->path();
+          const auto extension = path.extension().string();
+          if (extension != ".png" && extension != ".svg" && extension != ".xpm") continue;
+          const auto name = path.stem().string();
+          const auto full = path.string();
+          int score = branch == std::string_view{"pixmaps"} ? 35 : 0;
+          if (full.find("/hicolor/") != std::string::npos) score += 40;
+          if (full.find("/24x24/") != std::string::npos) score += 25;
+          else if (full.find("/32x32/") != std::string::npos) score += 22;
+          else if (full.find("/scalable/") != std::string::npos) score += 20;
+          else if (full.find("/16x16/") != std::string::npos) score += 18;
+          if (extension == ".png") score += 3;
+          if (!icon_scores.contains(name) || score > icon_scores.at(name)) {
+            icon_scores[name] = score;
+            icon_files[name] = path;
+          }
+        }
+      }
+    }
+  }
+
+  std::filesystem::path icon_path(GIcon* icon) {
+    if (!icon) return {};
+    if (G_IS_EMBLEMED_ICON(icon)) return icon_path(g_emblemed_icon_get_icon(G_EMBLEMED_ICON(icon)));
+    if (G_IS_FILE_ICON(icon)) {
+      char* filename = g_file_get_path(g_file_icon_get_file(G_FILE_ICON(icon)));
+      std::filesystem::path path = filename ? filename : "";
+      g_free(filename);
+      return path;
+    }
+    if (!G_IS_THEMED_ICON(icon)) return {};
+    index_icons();
+    for (const char* const* name = g_themed_icon_get_names(G_THEMED_ICON(icon)); name && *name; ++name)
+      if (const auto it = icon_files.find(*name); it != icon_files.end()) return it->second;
+    return {};
+  }
+
+  cairo_surface_t* app_icon(GAppInfo* app) {
+    GIcon* icon = g_app_info_get_icon(app);
+    if (!icon) return nullptr;
+    char* key_text = g_icon_to_string(icon);
+    const std::string key = key_text ? key_text : "";
+    g_free(key_text);
+    if (auto it = icon_surfaces.find(key); it != icon_surfaces.end()) return it->second;
+    const auto path = icon_path(icon);
+    auto* surface = path.empty() ? nullptr : image_surface(path, 18);
+    icon_surfaces.emplace(key, surface);
+    return surface;
+  }
+
+  void load_logo() {
+    const std::array<std::filesystem::path, 4> candidates{
+      std::filesystem::path(MIDNIGHT_WM_DATA_DIR) / "MidnightBSDLogo.svg",
+      "data/MidnightBSDLogo.svg",
+      std::filesystem::path(MIDNIGHT_WM_DATA_DIR) / "MidnightBSDLogo22x22.png",
+      "data/MidnightBSDLogo22x22.png"
+    };
+    for (const auto& path : candidates)
+      if ((logo_surface = image_surface(path, 20))) break;
+  }
+
   void seed_objects() {
     const auto home = std::filesystem::path(g_get_home_dir());
     auto ensure = [&](std::string id, ObjectKind kind, std::string title, std::string target, int x, int y) {
@@ -323,10 +438,22 @@ struct Shell::Impl {
     return model.items(path, is_desktop);
   }
 
+  void sort_folder(Folder& folder) {
+    if (!folder.sort_by_type) return;
+    std::ranges::stable_sort(folder.items, [](const Item& a, const Item& b) {
+      const auto category = [](const Item& item) {
+        return item.object.kind == ObjectKind::folder ? 0 :
+               item.object.kind == ObjectKind::file ? 1 : 2;
+      };
+      return category(a) < category(b);
+    });
+  }
+
   void refresh() {
     desktop_items = list_items(Store::desktop_path(), true);
     for (auto& [window, folder] : folders) {
       folder.items = list_items(folder.path, false);
+      sort_folder(folder);
       draw_folder(folder);
     }
     draw_desktop();
@@ -401,9 +528,14 @@ struct Shell::Impl {
     paint(panel, width, panel_height, [&](cairo_t* cr) {
       fill(cr, config.panel_color[0], config.panel_color[1], config.panel_color[2], 0, 0, width, panel_height);
       fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2], 0, 0, width, 3);
-      fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2], 4, 5, 116, 24);
-      bevel(cr, 4, 5, 116, 24);
-      text(cr, config.panel_label, 13, 8, 102, 12, true, true);
+      fill(cr, .85, .85, .85, 4, 4, 116, 22);
+      bevel(cr, 4, 4, 116, 22);
+      if (logo_surface) {
+        cairo_set_source_surface(cr, logo_surface, 7, 5);
+        cairo_paint(cr);
+      }
+      text(cr, config.panel_label, logo_surface ? 31 : 13, 7,
+           logo_surface ? 84 : 102, 11, false, true);
       int x = 128;
       const int clock_x = std::max(140, static_cast<int>(width) - 105);
       const int volume_x = clock_x - 130;
@@ -485,7 +617,9 @@ struct Shell::Impl {
       fill(cr, .73, .73, .73, folder.width - 30, 7, 20, 19);
       bevel(cr, folder.width - 30, 7, 20, 19);
       text(cr, "×", folder.width - 25, 6, 17, 15);
-      text(cr, "File    Edit    View", 12, 34, folder.width - 24, 11);
+      text(cr, "File", 12, 34, 36, 11);
+      text(cr, "Edit", 56, 34, 36, 11);
+      text(cr, "View", 102, 34, 42, 11);
       fill(cr, .96, .96, .92, 5, folder_header, scroll.view_width, scroll.view_height);
       cairo_save(cr);
       cairo_rectangle(cr, 5, folder_header, scroll.view_width, scroll.view_height);
@@ -511,11 +645,32 @@ struct Shell::Impl {
     if (!menu) return;
     const int h = static_cast<int>(menu_entries.size()) * row_height + 8;
     paint(menu, menu_width, h, [&](cairo_t* cr) {
-      fill(cr, .73, .73, .73, 0, 0, menu_width, h);
+      fill(cr, .79, .79, .79, 0, 0, menu_width, h);
       bevel(cr, 0, 0, menu_width, h);
+      fill(cr, .70, .70, .70, 4, 4, 25, h - 8);
+      fill(cr, .45, .45, .45, 29, 4, 1, h - 8);
       for (std::size_t i = 0; i < menu_entries.size(); ++i) {
-        if (i % 2 == 0) fill(cr, .78, .78, .78, 4, 4 + static_cast<int>(i) * row_height, menu_width - 8, row_height);
-        text(cr, menu_entries[i].label, 14, 9 + static_cast<int>(i) * row_height, menu_width - 24, 11);
+        const int y = 4 + static_cast<int>(i) * row_height;
+        const bool selected = static_cast<int>(i) == menu_hover;
+        if (selected) fill(cr, config.accent_color[0], config.accent_color[1],
+                           config.accent_color[2], 4, y, menu_width - 8, row_height);
+        const auto& entry = menu_entries[i];
+        if (entry.action == MenuAction::launch && entry.index < apps.size()) {
+          if (auto* surface = app_icon(apps[entry.index])) {
+            cairo_set_source_surface(cr, surface, 8, y + 3);
+            cairo_paint(cr);
+          }
+        } else if (entry.action == MenuAction::open_home || entry.action == MenuAction::open_desktop ||
+                   entry.action == MenuAction::new_folder || entry.action == MenuAction::show_programs) {
+          fill(cr, .96, .77, .31, 8, y + 9, 16, 11);
+          fill(cr, .99, .88, .51, 8, y + 6, 9, 4);
+          bevel(cr, 8, y + 9, 16, 11);
+        } else if (entry.action == MenuAction::exit_session) {
+          fill(cr, .94, .94, .89, 9, y + 5, 14, 14);
+          bevel(cr, 9, y + 5, 14, 14);
+          text(cr, "×", 12, y + 4, 10, 12);
+        }
+        text(cr, entry.label, 35, y + 4, menu_width - 42, 11, selected);
       }
     });
   }
@@ -641,6 +796,7 @@ struct Shell::Impl {
     xcb_destroy_window(connection, menu);
     menu = 0;
     menu_entries.clear();
+    menu_hover = -1;
     xcb_flush(connection);
   }
 
@@ -658,19 +814,26 @@ struct Shell::Impl {
     draw_menu();
   }
 
-  void show_launcher(std::size_t page = 0) {
-    reload_apps();
+  void show_launcher() {
     std::vector<MenuEntry> entries{{"Home", MenuAction::open_home}, {"Desktop", MenuAction::open_desktop},
-                                   {"New folder on desktop", MenuAction::new_folder}, {"Paste on desktop", MenuAction::paste}};
-    const auto page_size = static_cast<std::size_t>(std::max<int>(1, (height - 220) / row_height));
+                                   {"Programs ▶", MenuAction::show_programs},
+                                   {"New folder on desktop", MenuAction::new_folder},
+                                   {"Paste on desktop", MenuAction::paste},
+                                   {"Exit X11 session…", MenuAction::exit_session}};
+    show_menu(3, panel_height, desktop, std::move(entries));
+  }
+
+  void show_programs(std::size_t page = 0) {
+    reload_apps();
+    std::vector<MenuEntry> entries;
+    const auto page_size = static_cast<std::size_t>(std::clamp<int>((height - 130) / row_height, 1, 18));
     app_page = std::min(page, apps.empty() ? 0 : (apps.size() - 1) / page_size);
     if (app_page) entries.push_back({"◀ Previous applications", MenuAction::previous_apps});
     const auto start = app_page * page_size;
     for (std::size_t i = start; i < std::min(apps.size(), start + page_size); ++i)
       entries.push_back({g_app_info_get_display_name(apps[i]), MenuAction::launch, i});
     if (start + page_size < apps.size()) entries.push_back({"More applications ▶", MenuAction::next_apps});
-    entries.push_back({"Exit X11 session…", MenuAction::exit_session});
-    show_menu(3, panel_height, desktop, std::move(entries));
+    show_menu(menu_width - 2, panel_height + 2 * row_height, desktop, std::move(entries));
   }
 
   void show_context(xcb_window_t window, int root_x, int root_y, const Item* item) {
@@ -688,6 +851,37 @@ struct Shell::Impl {
       entries = {{"New folder", MenuAction::new_folder}, {"Paste", MenuAction::paste}};
     }
     show_menu(root_x, root_y, window, std::move(entries));
+  }
+
+  void show_folder_menu(Folder& folder, int tab) {
+    selected_item = folder.selected >= 0 &&
+      static_cast<std::size_t>(folder.selected) < folder.items.size()
+      ? std::optional<Item>(folder.items[folder.selected]) : std::nullopt;
+    std::vector<MenuEntry> entries;
+    if (tab == 0) {
+      if (selected_item) entries.push_back({"Open", MenuAction::open_item});
+      if (!folder.trash) entries.push_back({"New folder", MenuAction::new_folder});
+      if (selected_item) {
+        entries.push_back({"Properties", MenuAction::properties});
+        if (folder.trash) {
+          entries.push_back({"Restore", MenuAction::restore});
+          entries.push_back({"Delete permanently", MenuAction::delete_permanently});
+        } else entries.push_back({"Move to Trash", MenuAction::trash});
+      }
+      entries.push_back({"Close", MenuAction::close_folder});
+    } else if (tab == 1) {
+      if (selected_item && !folder.trash) {
+        entries.push_back({"Copy", MenuAction::copy});
+        entries.push_back({"Cut", MenuAction::cut});
+      }
+      if (!folder.trash) entries.push_back({"Paste", MenuAction::paste});
+    } else {
+      entries = {{"Refresh", MenuAction::refresh_folder},
+                 {folder.sort_by_type ? "Sort by Name" : "✓ Sort by Name", MenuAction::sort_by_name},
+                 {folder.sort_by_type ? "✓ Sort by Type" : "Sort by Type", MenuAction::sort_by_type}};
+    }
+    show_menu(folder.x + (tab == 0 ? 8 : tab == 1 ? 52 : 98), folder.y + folder_header,
+              folder.window, std::move(entries));
   }
 
   std::filesystem::path owner_path() const {
@@ -779,8 +973,9 @@ struct Shell::Impl {
         }
         break;
       }
-      case MenuAction::next_apps: show_launcher(app_page + 1); break;
-      case MenuAction::previous_apps: show_launcher(app_page ? app_page - 1 : 0); break;
+      case MenuAction::show_programs: show_programs(); break;
+      case MenuAction::next_apps: show_programs(app_page + 1); break;
+      case MenuAction::previous_apps: show_programs(app_page ? app_page - 1 : 0); break;
       case MenuAction::open_item: if (selected_item) open_item(*selected_item); break;
       case MenuAction::copy:
       case MenuAction::cut:
@@ -819,8 +1014,27 @@ struct Shell::Impl {
           if (result) refresh(); else show_notice("Delete failed: " + result.error());
         }
         break;
-      case MenuAction::close_folder: break;
+      case MenuAction::close_folder:
+        if (folders.contains(menu_owner)) {
+          unwatch(menu_owner);
+          if (dnd_unregister) dnd_unregister(menu_owner);
+          xcb_destroy_window(connection, menu_owner);
+          folders.erase(menu_owner);
+          draw_panel();
+        }
+        break;
       case MenuAction::exit_session: show_exit_dialog(); break;
+      case MenuAction::refresh_folder: refresh(); break;
+      case MenuAction::sort_by_name:
+      case MenuAction::sort_by_type:
+        if (auto it = folders.find(menu_owner); it != folders.end()) {
+          it->second.sort_by_type = entry.action == MenuAction::sort_by_type;
+          it->second.items = list_items(it->second.path, false);
+          sort_folder(it->second);
+          it->second.selected = -1;
+          draw_folder(it->second);
+        }
+        break;
     }
   }
 
@@ -955,6 +1169,13 @@ struct Shell::Impl {
                        XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC, XCB_NONE, XCB_NONE, event->time);
       return;
     }
+    if (folder && event->detail == 1 && event->event_y >= 31 && event->event_y < folder_header) {
+      const int tab = event->event_x >= 8 && event->event_x < 50 ? 0 :
+                      event->event_x >= 52 && event->event_x < 96 ? 1 :
+                      event->event_x >= 98 && event->event_x < 150 ? 2 : -1;
+      if (tab >= 0) show_folder_menu(*folder, tab);
+      return;
+    }
     if (folder) {
       const auto scroll = folder_scroll(*folder);
       if (event->event_y >= folder_header && event->event_y < folder_header + scroll.view_height &&
@@ -1076,6 +1297,13 @@ struct Shell::Impl {
   }
 
   void motion(const xcb_motion_notify_event_t* event) {
+    if (event->event == menu) {
+      const int index = (event->event_y - 4) / row_height;
+      const int next = event->event_y >= 4 && index >= 0 &&
+        static_cast<std::size_t>(index) < menu_entries.size() ? index : -1;
+      if (next != menu_hover) { menu_hover = next; draw_menu(); }
+      return;
+    }
     if (scroll_drag_window) {
       auto it = folders.find(scroll_drag_window);
       if (it == folders.end()) return;
@@ -1133,6 +1361,7 @@ bool Shell::initialize() {
   auto& p = *impl_;
   p.visual = visual_for(p.screen);
   if (!p.visual) return false;
+  p.load_logo();
   if (auto state = p.volume.read(); state) p.volume_state = *state;
   p.last_volume_poll = std::chrono::steady_clock::now();
   p.key_symbols = xcb_key_symbols_alloc(p.connection);

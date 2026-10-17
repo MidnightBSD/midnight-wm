@@ -8,7 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(DEPS REQUIRED IMPORTED_TARGET
   xcb xcb-icccm xcb-keysyms xcb-xfixes xcb-randr cairo-xcb pangocairo
-  gio-2.0 gio-unix-2.0 sqlite3)
+  gio-2.0 gio-unix-2.0 gdk-pixbuf-2.0 sqlite3)
 
 add_library(midnight_core src/store.cpp src/model.cpp src/config.cpp src/audio.cpp)
 target_include_directories(midnight_core PUBLIC src)
@@ -20,9 +20,11 @@ target_link_libraries(midnight-wm PRIVATE midnight_core)
 target_compile_options(midnight-wm PRIVATE -Wall -Wextra -Wpedantic)
 
 include(GNUInstallDirs)
+target_compile_definitions(midnight-wm PRIVATE MIDNIGHT_WM_DATA_DIR="${CMAKE_INSTALL_FULL_DATADIR}/midnight-wm")
 install(TARGETS midnight-wm RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES data/midnight-wm.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/xsessions)
-install(FILES data/config.ini DESTINATION ${CMAKE_INSTALL_DATADIR}/midnight-wm)
+install(FILES data/config.ini data/MidnightBSDLogo.svg data/MidnightBSDLogo22x22.png
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/midnight-wm)
 install(FILES README.md LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/midnight-wm)
 
 enable_testing()
@@ -37,5 +39,5 @@ set(CPACK_PACKAGE_NAME "midnight-wm")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
 set(CPACK_SOURCE_PACKAGE_FILE_NAME "midnight-wm-${PROJECT_VERSION}")
 set(CPACK_SOURCE_GENERATOR "TGZ")
-set(CPACK_SOURCE_IGNORE_FILES "/build/;/.git/;/.cache/;[.]core$;/packaging/mports/.*/distinfo$;/packaging/mports/.*/work/;[.]tar[.]gz$")
+set(CPACK_SOURCE_IGNORE_FILES "/build/;/.git/;/.cache/;/_CPack_Packages/;[.]core$;/packaging/mports/.*/distinfo$;/packaging/mports/.*/work/;[.]tar[.]gz$")
 include(CPack)

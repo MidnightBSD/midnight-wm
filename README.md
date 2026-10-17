@@ -6,7 +6,7 @@ MidnightBSD. The current target is MidnightBSD 4.2 with Clang 19 and C++23.
 ## Build
 
 The build needs CMake, pkg-config, XCB (including icccm, keysyms, XFixes, and
-RandR), Cairo, Pango, GLib/GIO, and SQLite 3.
+RandR), Cairo, Pango, GLib/GIO, GdkPixbuf, and SQLite 3.
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -22,8 +22,10 @@ control an X screen at a time. `midnight-wm --version` prints the version.
 ## Desktop behavior
 
 The top bar contains an application launcher, task buttons, a volume control,
-and a clock. Use `−` and `+` or the mouse wheel over the volume control to
-change output volume in 5% steps. **Mute** sets both master mixer channels to
+and a clock. Open **Programs** in the launcher to browse installed X11
+applications with their desktop entry icons. Use `−` and `+` or the mouse wheel
+over the volume control to change output volume in 5% steps. **Mute** sets both
+master mixer channels to
 zero and restores their previous levels when pressed again during the same
 session. The control uses
 MidnightBSD's default OSS `/dev/mixer` device, falling back to its PCM control
@@ -38,6 +40,9 @@ Folder windows have vertical scrollbars: use the arrows, click the track to
 move a page, or drag the thumb. The mouse wheel and Page Up, Page Down, Home,
 and End keys also scroll. Other applications draw and control their own
 scrollbars.
+In a folder window, **File** opens the selected item, creates a folder, shows
+properties, moves an item to Trash, or closes the window. **Edit** offers copy,
+cut, and paste. **View** refreshes the folder and sorts by name or type.
 
 The `Home`, `Trash`, and `Templates` objects are created on the desktop at first
 run. Physical files appear from the user's XDG Desktop directory. Shell object
@@ -63,6 +68,10 @@ window and its lower frame to resize it. The launcher menu has **Exit X11
 session…**, which asks for confirmation before closing the window manager. When
 started as the Xsession or from `.xinitrc`, that also ends the X11 session.
 The desktop sets an explicit pointer cursor as soon as the window manager starts.
+The default silver panel and deep blue desktop take their colors from the
+OS/2 Warp 4 references; existing user configuration overrides those defaults.
+The clickable launcher button uses the MidnightBSD logo from the
+[MidnightBSD website art collection](https://github.com/MidnightBSD/www/tree/main/art/logo).
 
 ## Design
 

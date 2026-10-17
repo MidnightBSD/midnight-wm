@@ -15,7 +15,7 @@ LIB_DEPENDS=	libxcb-icccm.so:x11/xcb-util-wm \
 		libsqlite3.so:databases/sqlite3
 
 USES=		cmake compiler:c++23-lang gnome localbase pkgconfig xorg
-USE_GNOME=	cairo glib20 pango
+USE_GNOME=	cairo glib20 pango gdkpixbuf
 USE_XORG=	xcb
 
 .include <bsd.port.mk>

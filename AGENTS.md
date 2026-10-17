@@ -13,7 +13,8 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
 - `src/x11.*` manages external X11 clients, frames, focus, geometry, EWMH, and
   the root pointer cursor.
 - `src/shell.*` draws the panel, desktop, menus, folder windows, scrollbars,
-  and properties. Its exit callback asks the main loop to end the session.
+  and properties. It resolves desktop-entry icons through GIO and GdkPixbuf.
+  Its exit callback asks the main loop to end the session.
 - `src/clipboard.*` implements the X11 `CLIPBOARD` selection and persistence.
 - `src/dnd.*` implements XDND file drag and drop. A drop reports completion
   through its callback after the file operation finishes.
@@ -21,7 +22,8 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
 - `src/model.*` and `src/store.*` own display independent object and file
   behavior. Keep XCB types and event handling out of these files so a future
   Wayland backend can reuse them.
-- `data/` contains the Xsession entry and example configuration.
+- `data/` contains the Xsession entry, example configuration, and MidnightBSD
+  launcher logo sourced from `MidnightBSD/www/art/logo`.
 - `packaging/mports/x11-wm/midnight-wm/` contains an experimental mport.
 
 ## Build and check
