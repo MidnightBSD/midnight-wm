@@ -47,6 +47,13 @@
 namespace midnight {
 namespace {
 constexpr int volume_group_width = 24;
+// Icon cache limits; see Shell::Impl::trim_icon_caches().
+constexpr std::size_t max_icon_surfaces = 512;
+constexpr std::size_t max_icon_files = 2048;
+// Per-path maps are also cleared on refresh; keep large folders from thrashing.
+constexpr std::size_t max_file_entries = 16384;
+constexpr std::size_t max_icon_name = 255;
+constexpr std::size_t max_icon_value = 4096;
 constexpr int audio_popup_width = 260;
 constexpr int audio_popup_height = 230;
 constexpr int volume_clock_gap = 4;
@@ -574,6 +581,8 @@ struct Shell::Impl {
   std::vector<std::filesystem::path> icon_roots;
   std::unordered_map<std::string, IconTheme> icon_themes;
   std::unordered_map<std::string, std::filesystem::path> icon_files;
+  // Bounded by trim_icon_caches(): thumbnails, the icon chooser, and icon names
+  // from D-Bus peers can each add entries for the whole session.
   std::unordered_map<std::string, cairo_surface_t*> icon_surfaces;
   std::unordered_map<std::string, std::string> file_content_types;
   std::unordered_map<std::string, cairo_surface_t*> file_icon_cache;
@@ -973,7 +982,7 @@ struct Shell::Impl {
 
   std::filesystem::path themed_icon_path(const std::string& name) {
     if (auto it = icon_files.find(name); it != icon_files.end()) return it->second;
-    if (name.empty() || name.find('/') != std::string::npos) return {};
+    if (name.empty() || name.size() > max_icon_name || name.find('/') != std::string::npos) return {};
     std::unordered_set<std::string> visited;
     auto path = lookup_theme_icon(icon_theme, name, visited);
     if (path.empty()) path = lookup_theme_icon("hicolor", name, visited);
@@ -987,6 +996,7 @@ struct Shell::Impl {
         if (!path.empty()) break;
       }
     }
+    if (icon_files.size() >= 2 * max_icon_files) return path;
     return icon_files.emplace(name, std::move(path)).first->second;
   }
 
@@ -1008,9 +1018,12 @@ struct Shell::Impl {
   cairo_surface_t* gio_icon_surface(GIcon* icon, int size) {
     if (!icon) return nullptr;
     char* key_text = g_icon_to_string(icon);
-    const std::string key = "gio:" + std::to_string(size) + ":" + (key_text ? key_text : "");
+    const std::string_view text = key_text ? key_text : "";
+    if (text.size() > max_icon_value) { g_free(key_text); return nullptr; }
+    const std::string key = "gio:" + std::to_string(size) + ":" + std::string(text);
     g_free(key_text);
     if (auto it = icon_surfaces.find(key); it != icon_surfaces.end()) return it->second;
+    if (icon_cache_full()) return nullptr;
     const auto path = icon_path(icon);
     auto* surface = path.empty() ? nullptr : image_surface(path, size);
     icon_surfaces.emplace(key, surface);
@@ -1022,8 +1035,10 @@ struct Shell::Impl {
   }
 
   cairo_surface_t* themed_icon_surface(const std::string& name) {
+    if (name.size() > max_icon_name) return nullptr;
     const std::string key = "theme:" + name;
     if (auto it = icon_surfaces.find(key); it != icon_surfaces.end()) return it->second;
+    if (icon_cache_full()) return nullptr;
     const auto path = themed_icon_path(name);
     auto* surface = path.empty() ? nullptr : image_surface(path, launcher_icon_size);
     icon_surfaces.emplace(key, surface);
@@ -1031,9 +1046,10 @@ struct Shell::Impl {
   }
 
   cairo_surface_t* object_icon_surface(const std::string& name) {
-    if (name.empty()) return nullptr;
+    if (name.empty() || name.size() > max_icon_value) return nullptr;
     const std::string key = "object:" + name;
     if (auto it = icon_surfaces.find(key); it != icon_surfaces.end()) return it->second;
+    if (icon_cache_full()) return nullptr;
     const auto path = std::filesystem::path(name).is_absolute() ?
       std::filesystem::path(name) : themed_icon_path(name);
     auto* surface = path.empty() ? nullptr : image_surface(path, 40);
@@ -1077,6 +1093,7 @@ struct Shell::Impl {
     const auto key = "thumbnail:" + thumbnail->string() + ":" +
                      std::to_string(static_cast<long long>(modified.time_since_epoch().count()));
     if (auto it = icon_surfaces.find(key); it != icon_surfaces.end()) return it->second;
+    if (icon_cache_full()) return nullptr;
     auto* surface = image_surface(*thumbnail, 40);
     icon_surfaces.emplace(key, surface);
     return surface;
@@ -1219,6 +1236,29 @@ struct Shell::Impl {
       };
       return category(a) < category(b);
     });
+  }
+
+  // Drops every cached icon surface and the lookups that alias them. Callers
+  // receive non-owning surface pointers, so run this only between events.
+  void release_icon_caches() {
+    for (auto& entry : icon_surfaces)
+      if (entry.second) cairo_surface_destroy(entry.second);
+    icon_surfaces.clear();
+    icon_files.clear();
+    file_icon_cache.clear();
+    file_content_types.clear();
+  }
+
+  void trim_icon_caches() {
+    if (icon_surfaces.size() > max_icon_surfaces || icon_files.size() > max_icon_files ||
+        file_icon_cache.size() > max_file_entries || file_content_types.size() > max_file_entries)
+      release_icon_caches();
+  }
+
+  // tick() may be delayed while D-Bus or X events keep arriving. Rather than
+  // evict during a draw, stop adding surfaces until the next trim.
+  [[nodiscard]] bool icon_cache_full() const {
+    return icon_surfaces.size() >= 2 * max_icon_surfaces;
   }
 
   void refresh() {
@@ -3308,6 +3348,7 @@ bool Shell::handle(xcb_generic_event_t* event) {
 
 void Shell::tick() {
   auto& p = *impl_;
+  p.trim_icon_caches();
   bool redraw = false;
   const auto now = clock_text(p.config.clock_format);
   if (now != p.last_clock) { p.last_clock = now; redraw = true; }
@@ -3407,12 +3448,8 @@ void Shell::apply_config(ThemeConfig config) {
   p.config = std::move(config);
   // A live reload may follow an icon theme change. Drop every surface that
   // can contain a themed icon and its dependent lookup metadata.
-  for (auto& entry : p.icon_surfaces)
-    if (entry.second) cairo_surface_destroy(entry.second);
-  p.icon_surfaces.clear();
-  p.icon_files.clear();
+  p.release_icon_caches();
   p.icon_themes.clear();
-  p.file_icon_cache.clear();
   p.icon_theme = selected_icon_theme();
   // Clear even when the new selection is empty, and reload a changed image at
   // the same monitor dimensions on the next desktop paint.
