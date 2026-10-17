@@ -49,9 +49,20 @@ int main() {
   const auto invalid = midnight::load_config();
   check(!invalid.dark_mode && invalid.desktop_color == defaults.desktop_color &&
         invalid.ui_font == defaults.ui_font, "invalid values must retain defaults");
-  check(defaults.desktop_image.empty() && defaults.desktop_image_mode == "fill",
-        "wallpapers must be disabled by default");
+  check((defaults.desktop_image.empty() ||
+         std::filesystem::path(defaults.desktop_image).filename() == midnight::default_desktop_image) &&
+        defaults.desktop_image_mode == "fill",
+        "default wallpaper must be the installed MidnightBSD background or none");
   std::filesystem::create_directories(root / "system/backgrounds/midnightbsd");
+  std::ofstream(root / "system/backgrounds/midnightbsd" / midnight::default_desktop_image) << "fixture";
+  check(midnight::load_config().desktop_image ==
+        (root / "system/backgrounds/midnightbsd" / midnight::default_desktop_image).string(),
+        "missing config must use the installed default wallpaper");
+  write("[Workspace]\ndark_mode=true\n");
+  check(std::filesystem::path(midnight::load_config().desktop_image).filename() == midnight::default_desktop_image,
+        "unset desktop_image must use the default wallpaper");
+  write("[Workspace]\ndesktop_image=\n");
+  check(midnight::load_config().desktop_image.empty(), "empty desktop_image must disable the wallpaper");
   std::ofstream(root / "system/backgrounds/midnightbsd/example.png") << "fixture";
   write("[Workspace]\ndesktop_image=example.png\ndesktop_image_mode=fit\n");
   auto image_config = midnight::load_config();

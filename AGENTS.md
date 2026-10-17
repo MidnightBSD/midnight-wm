@@ -56,8 +56,10 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   notifications, and D-Bus menus. `ui_font` and `title_font`
   accept Pango family/style descriptions with an optional 6–32 point size;
   omitting the size preserves each widget's default. `desktop_color` remains
-  the `#RRGGBB` background in either mode. Optional `desktop_image` sets a
-  wallpaper path (absolute or `~/...`; relative paths resolve against the
+  the lavender `#RRGGBB` background in either mode. When `desktop_image` is
+  absent it defaults to the installed `mnbsd_bg_purple.png`, falling back to
+  `desktop_color` alone if missing; an explicit empty value disables it.
+  `desktop_image` sets a wallpaper path (absolute or `~/...`; relative paths resolve against the
   config file directory first, then user XDG data `backgrounds`, system XDG
   data `backgrounds/midnightbsd` and `backgrounds`, and the installation
   prefix `share/backgrounds/midnightbsd`). The optional MidnightBSD backgrounds
@@ -70,8 +72,7 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   areas. Optional `panel_color` and `accent_color` override their defaults.
   These settings are read from
   `$XDG_CONFIG_HOME/midnight-wm/config.ini` (normally
-  `~/.config/midnight-wm/config.ini`) and apply live after saving. An empty
-  `desktop_image` keeps the current appearance. These settings do not change
+  `~/.config/midnight-wm/config.ini`) and apply live after saving. These settings do not change
   controls drawn by application toolkits.
 - `src/settings.cpp` implements the GTK 3 `midnightbsd-settings` companion,
   launched from the Midnight menu. Keep font/color/file controls accessible,

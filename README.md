@@ -187,8 +187,11 @@ size keeps each UI element's default size. The dark preset does not change
 controls drawn by application toolkits. `desktop_color` remains a `#RRGGBB`
 desktop background in either mode; `panel_color` optionally overrides the
 panel color, and `accent_color` sets the accent color. The shared `ui_scale`
-override is also configured here. Set `desktop_image` to an absolute path,
-`~/...` path, or path relative to this config file to use a wallpaper.
+override is also configured here. By default the desktop shows
+`mnbsd_bg_purple.png` from the `midnightbsd-backgrounds` package over the
+lavender `desktop_color`; if that image is not installed, only the color is
+shown. Set `desktop_image` to an absolute path,
+`~/...` path, or path relative to this config file to use another wallpaper.
 If a relative path is not found there, lookup searches the user XDG data
 `backgrounds` directory, then system XDG data `backgrounds/midnightbsd` and
 `backgrounds` directories, and the installation prefix
@@ -200,7 +203,7 @@ frame. The wallpaper repeats independently on each monitor. `desktop_image_mode`
 can be `fill` (the default, centered crop) or `fit` (the whole image centered
 with `desktop_color` showing around it). `desktop_color` also appears if the
 wallpaper is unset or unreadable and behind transparent parts of an image.
-Leave `desktop_image` empty to keep the current appearance. Saved changes are
+Set `desktop_image=` (empty) to show only `desktop_color`. Saved changes are
 reloaded automatically; malformed INI files leave the current settings active.
 In the `[Desktop]` section,
 `show_documents` and `show_pictures` default to `true`; `show_music`,

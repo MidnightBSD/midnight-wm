@@ -7,6 +7,9 @@
 
 namespace midnight {
 
+// Wallpaper used when desktop_image is absent, from midnightbsd-backgrounds.
+inline constexpr const char* default_desktop_image = "mnbsd_bg_purple.png";
+
 struct ThemeConfig {
   std::string panel_label{"Midnight ▾"};
   std::string clock_format{"%a %H:%M"};

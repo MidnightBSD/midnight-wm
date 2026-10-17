@@ -50,28 +50,34 @@ std::optional<ThemeConfig> parse_config(std::string_view contents) {
   };
   if (auto value = read("panel_label"); !value.empty()) config.panel_label = std::move(value);
   if (auto value = read("clock_format"); !value.empty()) config.clock_format = std::move(value);
-  if (auto value = read("desktop_image"); !value.empty()) {
+  // Relative filenames resolve against the config directory, then installed
+  // background directories. Returns nothing when no candidate exists.
+  auto find_image = [&path](const std::string& value) -> std::optional<std::filesystem::path> {
+    std::error_code error;
+    const auto local = path.parent_path() / value;
+    if (std::filesystem::is_regular_file(local, error)) return local;
+    std::vector<std::filesystem::path> directories{
+      std::filesystem::path(g_get_user_data_dir()) / "backgrounds"};
+    for (const char* const* data = g_get_system_data_dirs(); *data; ++data) {
+      directories.emplace_back(std::filesystem::path(*data) / "backgrounds/midnightbsd");
+      directories.emplace_back(std::filesystem::path(*data) / "backgrounds");
+    }
+    directories.emplace_back(MIDNIGHT_WM_BACKGROUND_DIR);
+    for (const auto& directory : directories) {
+      const auto candidate = directory / value;
+      if (std::filesystem::is_regular_file(candidate, error)) return candidate;
+    }
+    return std::nullopt;
+  };
+  if (!g_key_file_has_key(keyfile, "Workspace", "desktop_image", nullptr)) {
+    // Without an explicit setting, use the midnightbsd-backgrounds wallpaper
+    // when installed; otherwise desktop_color remains the background.
+    if (auto image = find_image(default_desktop_image))
+      config.desktop_image = image->lexically_normal().string();
+  } else if (auto value = read("desktop_image"); !value.empty()) {
     std::filesystem::path image(value);
     if (value.starts_with("~/")) image = std::filesystem::path(g_get_home_dir()) / value.substr(2);
-    if (image.is_relative()) {
-      const auto local = path.parent_path() / image;
-      std::error_code error;
-      if (std::filesystem::is_regular_file(local, error)) image = local;
-      else {
-        std::vector<std::filesystem::path> directories{
-          std::filesystem::path(g_get_user_data_dir()) / "backgrounds"};
-        for (const char* const* data = g_get_system_data_dirs(); *data; ++data) {
-          directories.emplace_back(std::filesystem::path(*data) / "backgrounds/midnightbsd");
-          directories.emplace_back(std::filesystem::path(*data) / "backgrounds");
-        }
-        directories.emplace_back(MIDNIGHT_WM_BACKGROUND_DIR);
-        image = local;
-        for (const auto& directory : directories) {
-          const auto candidate = directory / value;
-          if (std::filesystem::is_regular_file(candidate, error)) { image = candidate; break; }
-        }
-      }
-    }
+    if (image.is_relative()) image = find_image(value).value_or(path.parent_path() / image);
     config.desktop_image = image.lexically_normal().string();
   }
   if (auto value = read("desktop_image_mode"); value == "fit" || value == "fill")
@@ -119,9 +125,11 @@ ThemeConfig load_config() {
   const auto path = std::filesystem::path(g_get_user_config_dir()) / "midnight-wm" / "config.ini";
   char* contents = nullptr;
   gsize length{};
-  if (!g_file_get_contents(path.c_str(), &contents, &length, nullptr)) return {};
+  // An empty snapshot still applies defaults that depend on installed files.
+  if (!g_file_get_contents(path.c_str(), &contents, &length, nullptr))
+    return parse_config("").value_or(ThemeConfig{});
   const auto config = parse_config(std::string_view(contents, length));
   g_free(contents);
-  return config.value_or(ThemeConfig{});
+  return config ? *config : parse_config("").value_or(ThemeConfig{});
 }
 } // namespace midnight

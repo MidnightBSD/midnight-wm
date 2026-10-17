@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Lucas Holt
 // SPDX-License-Identifier: BSD-2-Clause
 
+#include "config.hpp"
+
 #include <gtk/gtk.h>
 #include <glib/gstdio.h>
 
@@ -304,7 +306,7 @@ class Settings {
   void wallpaper(GtkWidget* grid) {
     auto* box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 5);
     auto* value = gtk_entry_new();
-    gtk_entry_set_text(GTK_ENTRY(value), string("Workspace", "desktop_image", "").c_str());
+    gtk_entry_set_text(GTK_ENTRY(value), string("Workspace", "desktop_image", midnight::default_desktop_image).c_str());
     gtk_entry_set_placeholder_text(GTK_ENTRY(value), "No image (desktop color)");
     gtk_widget_set_tooltip_text(value, "Full path or installed wallpaper filename. PNG, JPEG, GIF (first frame), SVG.");
     gtk_box_pack_start(GTK_BOX(box), value, FALSE, FALSE, 0);
