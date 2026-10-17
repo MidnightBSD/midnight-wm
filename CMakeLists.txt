@@ -52,7 +52,7 @@ enable_testing()
 find_program(XVFB Xvfb)
 find_package(Python3 COMPONENTS Interpreter)
 if(XVFB AND Python3_Interpreter_FOUND)
-  add_executable(security_x11_test tests/security_x11_test.cpp src/clipboard.cpp)
+  add_executable(security_x11_test tests/security_x11_test.cpp src/clipboard.cpp src/dnd.cpp)
   target_link_libraries(security_x11_test PRIVATE midnight_core)
   add_test(NAME security_x11_test COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/security_x11_test.py $<TARGET_FILE:security_x11_test>)

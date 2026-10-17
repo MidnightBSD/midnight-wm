@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-2-Clause
 #include "startup_notification.hpp"
 #include "clipboard.hpp"
+#include "dnd.hpp"
 #include <gio/gdesktopappinfo.h>
 #include <xcb/xcb.h>
 #include <chrono>
@@ -92,7 +93,65 @@ int main() {
     }
     if (!recovered) { std::cerr << "expired clipboard slots were not reclaimed\n"; return 1; }
   }
+  {
+    // Outgoing XDND data must use the same INCR limits as the clipboard.
+    const auto source = xcb_generate_id(connection);
+    xcb_create_window(connection, XCB_COPY_FROM_PARENT, source, screen->root,
+        20, 20, 10, 10, 0, XCB_WINDOW_CLASS_INPUT_OUTPUT, XCB_COPY_FROM_PARENT, 0, nullptr);
+    xcb_map_window(connection, source);
+    xcb_flush(connection);
+    std::free(xcb_get_input_focus_reply(connection, xcb_get_input_focus(connection), nullptr));
+    midnight::X11Dnd dnd(connection, screen->root);
+    if (!dnd.initialize() ||
+        !dnd.begin_drag(source, {std::filesystem::path("/" + std::string(70000, 'a'))}, false)) {
+      std::cerr << "could not start XDND source\n";
+      return 1;
+    }
+    const auto selection = atom("XdndSelection");
+    const auto uri_list = atom("text/uri-list");
+    auto request_all = [&](int count, const char* prefix, xcb_atom_t target) {
+      for (int i = 0; i < count; ++i) {
+        const auto property = atom((prefix + std::to_string(i)).c_str());
+        xcb_convert_selection(connection, client, selection, target, property, XCB_CURRENT_TIME);
+      }
+      xcb_flush(connection);
+      int accepted = 0, rejected = 0;
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+      while (accepted + rejected < count && std::chrono::steady_clock::now() < deadline) {
+        while (auto* event = xcb_poll_for_event(connection)) {
+          if (!dnd.handle(event) && (event->response_type & 0x7f) == XCB_SELECTION_NOTIFY) {
+            const auto* notify = reinterpret_cast<xcb_selection_notify_event_t*>(event);
+            if (notify->requestor == client) {
+              if (notify->property) ++accepted;
+              else ++rejected;
+            }
+          }
+          std::free(event);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+      return std::pair{accepted, rejected};
+    };
+    if (const auto [accepted, rejected] = request_all(17, "SECURITY_DND_", uri_list); accepted != 16 || rejected != 1) {
+      std::cerr << "XDND INCR limit: accepted=" << accepted << " rejected=" << rejected << '\n';
+      return 1;
+    }
+    if (const auto [accepted, rejected] = request_all(1, "SECURITY_DND_", uri_list); accepted != 0 || rejected != 1) {
+      std::cerr << "duplicate XDND requestor/property was not rejected\n";
+      return 1;
+    }
+    if (const auto [accepted, rejected] = request_all(1, "SECURITY_DND_", atom("TARGETS")); accepted != 0 || rejected != 1) {
+      std::cerr << "TARGETS reused an active XDND transfer property\n";
+      return 1;
+    }
+    dnd.tick(std::chrono::steady_clock::now() + std::chrono::seconds(31));
+    if (const auto [accepted, rejected] = request_all(1, "SECURITY_DND_RECOVERED_", uri_list); accepted != 1) {
+      std::cerr << "expired XDND slots were not reclaimed\n";
+      return 1;
+    }
+    xcb_destroy_window(connection, source);
+  }
   xcb_destroy_window(connection, client);
   xcb_disconnect(connection);
-  std::cout << "Malformed WM_CLASS and stalled clipboard transfer checks passed.\n";
+  std::cout << "Malformed WM_CLASS, stalled clipboard, and XDND transfer checks passed.\n";
 }
