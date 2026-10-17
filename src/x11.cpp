@@ -372,8 +372,11 @@ void X11WindowManager::draw_frame(Frame& frame) {
   box(cr, 0, height - 2, width, 2, .25, .27, .29);
   if (frame.fullscreen) { cairo_destroy(cr); cairo_surface_destroy(surface); return; }
   const bool selected = active_ == frame.client;
+  const auto& accent = shell_.accent_color();
   box(cr, border, border, width - 2 * border, title_height - border,
-      selected ? .16 : .42, selected ? .30 : .45, selected ? .62 : .49);
+      selected ? accent[0] : accent[0] * .65 + .18,
+      selected ? accent[1] : accent[1] * .65 + .18,
+      selected ? accent[2] : accent[2] * .65 + .18);
   cairo_set_source_rgb(cr, 1, 1, 1);
   label(cr, frame.title, border + 9, border + 4, std::max(1, width - 124), true);
   const int button_y = 7;

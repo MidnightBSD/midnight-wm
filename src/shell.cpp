@@ -19,6 +19,7 @@
 #include <ctime>
 #include <filesystem>
 #include <memory>
+#include <numbers>
 #include <optional>
 #include <string_view>
 #include <unordered_map>
@@ -29,7 +30,9 @@ namespace {
 constexpr int panel_height = 30;
 constexpr int volume_group_width = 102;
 constexpr int volume_clock_gap = 4;
-constexpr int task_start_x = 128;
+constexpr int lock_button_x = 124;
+constexpr int lock_button_width = 24;
+constexpr int task_start_x = 156;
 constexpr int task_button_width = 110;
 constexpr int task_step = 114;
 constexpr int task_overflow_width = 24;
@@ -199,6 +202,20 @@ void sound_icon(cairo_t* cr, int x, int y, SoundIcon kind) {
     }
   }
   cairo_stroke(cr);
+  cairo_restore(cr);
+}
+
+void lock_icon(cairo_t* cr, int x, int y) {
+  cairo_save(cr);
+  cairo_set_source_rgb(cr, .12, .12, .12);
+  cairo_set_line_width(cr, 2);
+  cairo_arc(cr, x + 8, y + 7, 5, std::numbers::pi, 2 * std::numbers::pi);
+  cairo_stroke(cr);
+  cairo_rectangle(cr, x + 2, y + 7, 12, 9);
+  cairo_fill(cr);
+  cairo_set_source_rgb(cr, .85, .85, .85);
+  cairo_arc(cr, x + 8, y + 11, 1.2, 0, 2 * std::numbers::pi);
+  cairo_fill(cr);
   cairo_restore(cr);
 }
 
@@ -586,6 +603,8 @@ struct Shell::Impl {
       }
       text(cr, config.panel_label, logo_surface ? 31 : 13, 7,
            logo_surface ? 84 : 102, 11, false, true);
+      bevel(cr, lock_button_x, 5, lock_button_width, 24);
+      lock_icon(cr, lock_button_x + 4, 8);
       const int clock_x = std::max(140, static_cast<int>(width) - 105);
       const int volume_x = clock_x - volume_group_width - volume_clock_gap;
       const bool show_volume = volume_x >= 245;
@@ -593,8 +612,9 @@ struct Shell::Impl {
       for (std::size_t i = 0; i < layout.visible; ++i) {
         const auto& task = all_tasks[i];
         const int x = task_start_x + static_cast<int>(i) * task_step;
-        fill(cr, task.active ? .28 : .80, task.active ? .39 : .80,
-             task.active ? .63 : .80, x, 5, task_button_width, 24);
+        fill(cr, task.active ? config.accent_color[0] : .80,
+             task.active ? config.accent_color[1] : .80,
+             task.active ? config.accent_color[2] : .80, x, 5, task_button_width, 24);
         bevel(cr, x, 5, task_button_width, 24, task.active);
         text(cr, task.title, x + 7, 8, 95, 11, task.active);
       }
@@ -686,7 +706,9 @@ struct Shell::Impl {
     for (std::size_t i = static_cast<std::size_t>(scroll_rows * cols); i < items.size(); ++i) {
       const int x = 12 + static_cast<int>(i % cols) * icon_width;
       const int y = start_y + (static_cast<int>(i / cols) - scroll_rows) * icon_height;
-      if (selected == static_cast<int>(i)) fill(cr, .19, .32, .57, x, y, 75, 74);
+      if (selected == static_cast<int>(i))
+        fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
+             x, y, 75, 74);
       icon(cr, items[i], x + 14, y + 3);
       text(cr, items[i].object.title, x + 2, y + 50, 76, 10,
            selected == static_cast<int>(i) || on_desktop);
@@ -707,7 +729,8 @@ struct Shell::Impl {
     paint(folder.window, folder.width, folder.height, [&](cairo_t* cr) {
       fill(cr, .73, .73, .73, 0, 0, folder.width, folder.height);
       bevel(cr, 0, 0, folder.width, folder.height);
-      fill(cr, .14, .27, .56, 4, 4, folder.width - 8, 26);
+      fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
+           4, 4, folder.width - 8, 26);
       text(cr, folder.trash ? "Trash" : basename(folder.path), 12, 7, folder.width - 65, 13, true, true);
       fill(cr, .73, .73, .73, folder.width - 30, 7, 20, 19);
       bevel(cr, folder.width - 30, 7, 20, 19);
@@ -802,7 +825,8 @@ struct Shell::Impl {
     paint(properties->window, 500, 220, [&](cairo_t* cr) {
       fill(cr, .75, .75, .75, 0, 0, 500, 220);
       bevel(cr, 0, 0, 500, 220);
-      fill(cr, .14, .27, .56, 4, 4, 492, 27);
+      fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
+           4, 4, 492, 27);
       text(cr, "Properties", 13, 8, 450, 12, true, true);
       constexpr std::array<std::string_view, 3> labels{"Name", "Icon", "Target"};
       for (int i = 0; i < 3; ++i) {
@@ -836,7 +860,8 @@ struct Shell::Impl {
     paint(notice, 420, 100, [&](cairo_t* cr) {
       fill(cr, .75, .75, .75, 0, 0, 420, 100);
       bevel(cr, 0, 0, 420, 100);
-      fill(cr, .14, .27, .56, 4, 4, 412, 25);
+      fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
+           4, 4, 412, 25);
       text(cr, "Workspace", 12, 7, 390, 12, true, true);
       text(cr, notice_text, 14, 42, 390, 11);
       bevel(cr, 170, 70, 80, 22);
@@ -849,7 +874,8 @@ struct Shell::Impl {
     paint(exit_dialog, 380, 140, [&](cairo_t* cr) {
       fill(cr, .75, .75, .75, 0, 0, 380, 140);
       bevel(cr, 0, 0, 380, 140);
-      fill(cr, .14, .27, .56, 4, 4, 372, 25);
+      fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
+           4, 4, 372, 25);
       text(cr, "Exit X11 session", 12, 7, 350, 12, true, true);
       text(cr, "End this X11 session?", 14, 43, 350, 12);
       text(cr, "Open applications may close.", 14, 65, 350, 11);
@@ -941,6 +967,22 @@ struct Shell::Impl {
                                    {"Paste on desktop", MenuAction::paste},
                                    {"Exit X11 session…", MenuAction::exit_session}};
     show_menu(3, panel_height, desktop, std::move(entries));
+  }
+
+  void lock_screen() {
+    if (menu) close_menu();
+    GError* error = nullptr;
+    int status = 0;
+    char command[] = "xscreensaver-command";
+    char option[] = "-lock";
+    char* argv[] = {command, option, nullptr};
+    const bool launched = g_spawn_sync(nullptr, argv, nullptr,
+                                       G_SPAWN_SEARCH_PATH, nullptr, nullptr,
+                                       nullptr, nullptr, &status, &error);
+    if (!launched || !g_spawn_check_wait_status(status, &error)) {
+      show_notice("Could not lock screen. Start xscreensaver first.");
+    }
+    if (error) g_error_free(error);
   }
 
   void show_programs(std::size_t page = 0) {
@@ -1243,7 +1285,9 @@ struct Shell::Impl {
         return;
       }
       if (event->detail == 1 && event->event_x < 122) { if (menu) close_menu(); else show_launcher(); }
-      else if (event->detail == 1 && event->event_x >= 128) {
+      else if (event->detail == 1 && event->event_x >= lock_button_x &&
+               event->event_x < lock_button_x + lock_button_width) lock_screen();
+      else if (event->detail == 1 && event->event_x >= task_start_x) {
         const auto all_tasks = panel_tasks();
         const auto layout = task_layout(all_tasks.size());
         if (layout.overflow && event->event_x >= layout.overflow_x &&
@@ -1593,6 +1637,10 @@ void Shell::tick() {
 void Shell::set_tasks(std::vector<Task> tasks) {
   impl_->tasks = std::move(tasks);
   if (impl_->panel) { impl_->raise_panel(); impl_->draw_panel(); }
+}
+
+const std::array<double, 3>& Shell::accent_color() const {
+  return impl_->config.accent_color;
 }
 
 void Shell::set_exit_handler(std::function<void()> handler) {

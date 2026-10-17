@@ -21,9 +21,13 @@ control an X screen at a time. `midnight-wm --version` prints the version.
 
 ## Desktop behavior
 
-The top bar contains an application launcher, task buttons, a volume control,
-and a clock. When windows exceed the available taskbar space, use the small
-down-arrow button after the visible tasks to open the remaining window list.
+The top bar contains an application launcher, a lock button immediately to its
+right, task buttons, a volume control, and a clock. The lock button asks a
+running `xscreensaver` daemon to lock the screen with `xscreensaver-command -lock`;
+if the daemon is unavailable, the desktop shows a notice. Start `xscreensaver`
+in your X session to use the button. When windows exceed the available taskbar
+space, use the small down-arrow button after the visible tasks to open the
+remaining window list.
 The list has pages when needed, and selecting a window raises it. Open
 **Programs** in the launcher to browse installed X11
 applications with their desktop entry icons. The launcher stays open while you
