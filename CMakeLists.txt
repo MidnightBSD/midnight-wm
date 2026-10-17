@@ -16,7 +16,8 @@ target_link_libraries(midnight_core PUBLIC PkgConfig::DEPS)
 target_compile_options(midnight_core PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(midnight-wm src/main.cpp src/x11.cpp src/shell.cpp src/clipboard.cpp src/dnd.cpp
-  src/tray.cpp src/status_notifier.cpp src/status_panel.cpp src/autostart.cpp)
+  src/tray.cpp src/status_notifier.cpp src/status_panel.cpp src/dbus_menu.cpp
+  src/dbus_menu_popup.cpp src/autostart.cpp)
 target_link_libraries(midnight-wm PRIVATE midnight_core)
 target_compile_options(midnight-wm PRIVATE -Wall -Wextra -Wpedantic)
 

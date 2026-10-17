@@ -1,6 +1,8 @@
 #include "autostart.hpp"
 #include "clipboard.hpp"
 #include "dnd.hpp"
+#include "dbus_menu.hpp"
+#include "dbus_menu_popup.hpp"
 #include "shell.hpp"
 #include "status_notifier.hpp"
 #include "status_panel.hpp"
@@ -71,8 +73,10 @@ int main(int argc, char** argv) {
       midnight::X11Clipboard clipboard(connection, screen->root);
       midnight::X11WindowManager wm(connection, screen, shell);
       midnight::StatusNotifier notifier;
+      midnight::DbusMenu dbus_menu;
       midnight::X11SystemTray tray(connection, screen, screen_number, shell);
-      midnight::StatusNotifierPanel status_panel(connection, screen, shell, tray, notifier);
+      midnight::DbusMenuPopup menu_popup(connection, screen, shell, dbus_menu);
+      midnight::StatusNotifierPanel status_panel(connection, screen, shell, tray, notifier, menu_popup);
       shell.set_exit_handler([] { running = false; });
       if (!dnd.initialize()) std::cerr << "XDND integration unavailable\n";
       if (!clipboard.initialize()) std::cerr << "XFixes clipboard integration unavailable\n";
@@ -102,7 +106,8 @@ int main(int argc, char** argv) {
         pollfd display{.fd = xcb_get_file_descriptor(connection), .events = POLLIN, .revents = 0};
         while (running && !xcb_connection_has_error(connection)) {
           while (auto* event = xcb_poll_for_event(connection)) {
-            if (!clipboard.handle(event) && !dnd.handle(event) && !shell.handle(event) &&
+            if (!clipboard.handle(event) && !dnd.handle(event) && !menu_popup.handle(event) &&
+                !shell.handle(event) &&
                 !tray.handle(event) && !status_panel.handle(event)) wm.handle(event);
             std::free(event);
           }

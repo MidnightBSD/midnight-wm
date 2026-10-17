@@ -22,6 +22,8 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   notification icons in the panel.
 - `src/status_notifier.*` provides the D-Bus StatusNotifier watcher and host;
   `src/status_panel.*` draws those items in the X11 panel and sends input actions.
+- `src/dbus_menu.*` reads application menus over D-Bus;
+  `src/dbus_menu_popup.*` draws their rows and submenus in X11.
 - `src/audio.*` controls the default OSS mixer and has no X11 dependency.
 - `src/model.*` and `src/store.*` own display independent object and file
   behavior. Keep XCB types and event handling out of these files so a future

@@ -27,6 +27,8 @@ accepts legacy XEmbed icons and D-Bus StatusNotifierItem icons from applications
 StatusNotifier items use icon theme names or embedded pixmaps and support left,
 middle, and right clicks plus mouse wheel actions. A session D-Bus is needed for
 StatusNotifier items; the legacy XEmbed tray also works without it.
+StatusNotifier context menus supplied through DBusMenu open in the Warp-style
+popup, including submenus, disabled items, separators, and toggle marks.
 The lock button asks a
 running `xscreensaver` daemon to lock the screen with `xscreensaver-command -lock`;
 if the daemon is unavailable, the desktop shows a notice. Start `xscreensaver`

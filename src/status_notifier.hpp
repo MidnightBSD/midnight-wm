@@ -25,6 +25,7 @@ struct StatusNotifierItem {
   std::string icon_name;
   std::string attention_icon_name;
   std::string icon_theme_path;
+  std::string menu_path;
   StatusNotifierPixmap pixmap;
   bool item_is_menu{};
 };

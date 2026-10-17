@@ -204,6 +204,9 @@ void fetch_done(GObject* object, GAsyncResult* result, gpointer data) {
   string_prop("IconName", item->icon_name);
   string_prop("AttentionIconName", item->attention_icon_name);
   string_prop("IconThemePath", item->icon_theme_path);
+  if (auto value = lookup("Menu"); value &&
+      g_variant_is_of_type(value.get(), G_VARIANT_TYPE_OBJECT_PATH))
+    item->menu_path = g_variant_get_string(value.get(), nullptr);
   if (auto value = lookup("ItemIsMenu"); value &&
       g_variant_is_of_type(value.get(), G_VARIANT_TYPE_BOOLEAN))
     item->item_is_menu = g_variant_get_boolean(value.get());

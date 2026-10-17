@@ -2,6 +2,7 @@
 
 #include "shell.hpp"
 #include "status_notifier.hpp"
+#include "dbus_menu_popup.hpp"
 #include "tray.hpp"
 
 #include <cairo/cairo-xcb.h>
@@ -43,8 +44,10 @@ cairo_surface_t* pixmap_surface(const StatusNotifierPixmap& pixmap) {
 } // namespace
 
 StatusNotifierPanel::StatusNotifierPanel(xcb_connection_t* connection, xcb_screen_t* screen,
-                                         Shell& shell, X11SystemTray& tray, StatusNotifier& notifier)
-    : connection_(connection), screen_(screen), shell_(shell), tray_(tray), notifier_(notifier) {}
+                                         Shell& shell, X11SystemTray& tray, StatusNotifier& notifier,
+                                         DbusMenuPopup& menu_popup)
+    : connection_(connection), screen_(screen), shell_(shell), tray_(tray),
+      notifier_(notifier), menu_popup_(menu_popup) {}
 
 StatusNotifierPanel::~StatusNotifierPanel() {
   if (window_) xcb_destroy_window(connection_, window_);
@@ -73,6 +76,13 @@ bool StatusNotifierPanel::initialize() {
 
 void StatusNotifierPanel::refresh() {
   if (!window_) return;
+  if (!active_menu_key_.empty() &&
+      std::ranges::find_if(notifier_.items(), [this](const auto& item) {
+        return item.key == active_menu_key_ && item.status != "Passive";
+      }) == notifier_.items().end()) {
+    menu_popup_.close();
+    active_menu_key_.clear();
+  }
   visible_keys_.clear();
   for (const auto& item : notifier_.items())
     if (item.status != "Passive") visible_keys_.push_back(item.key);
@@ -168,15 +178,35 @@ bool StatusNotifierPanel::handle(xcb_generic_event_t* event) {
   const auto& key = visible_keys_[index];
   if (press->detail == 4 || press->detail == 5) {
     notifier_.scroll(key, press->detail == 4 ? 120 : -120, "vertical");
-  } else if (press->detail == 3) notifier_.context_menu(key, press->root_x, press->root_y);
+  } else if (press->detail == 3) {
+    const auto it = std::ranges::find_if(notifier_.items(), [&key](const auto& item) {
+      return item.key == key;
+    });
+    if (it != notifier_.items().end() && !it->menu_path.empty() &&
+        it->menu_path != "/NO_DBUSMENU") {
+      const auto service = it->service;
+      active_menu_key_ = key;
+      menu_popup_.open(service, it->menu_path, press->root_x, 30,
+                       [this, key, x = press->root_x, y = press->root_y] {
+                         notifier_.context_menu(key, x, y);
+                       });
+    } else notifier_.context_menu(key, press->root_x, press->root_y);
+  }
   else if (press->detail == 2) notifier_.secondary_activate(key, press->root_x, press->root_y);
   else if (press->detail == 1) {
     const auto it = std::ranges::find_if(notifier_.items(), [&key](const auto& item) {
       return item.key == key;
     });
-    if (it != notifier_.items().end() && it->item_is_menu)
-      notifier_.context_menu(key, press->root_x, press->root_y);
-    else notifier_.activate(key, press->root_x, press->root_y);
+    if (it != notifier_.items().end() && it->item_is_menu) {
+      if (!it->menu_path.empty() && it->menu_path != "/NO_DBUSMENU") {
+        const auto service = it->service;
+        active_menu_key_ = key;
+        menu_popup_.open(service, it->menu_path, press->root_x, 30,
+                         [this, key, x = press->root_x, y = press->root_y] {
+                           notifier_.context_menu(key, x, y);
+                         });
+      } else notifier_.context_menu(key, press->root_x, press->root_y);
+    } else notifier_.activate(key, press->root_x, press->root_y);
   }
   return true;
 }
