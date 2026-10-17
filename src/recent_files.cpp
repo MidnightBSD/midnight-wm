@@ -45,11 +45,11 @@ std::vector<RecentFile> recent_files(std::size_t limit) {
     std::error_code error;
     if (!std::filesystem::is_regular_file(local, error)) continue;
     char* title = g_bookmark_file_get_title(bookmark.get(), uris[i], nullptr);
+    // Owned by the bookmark file (transfer none); do not unref.
     GDateTime* date = g_bookmark_file_get_visited_date_time(bookmark.get(), uris[i], nullptr);
     entries.push_back({{local, title && *title ? title : local.filename().string()},
                        date ? g_date_time_to_unix(date) : 0});
     g_free(title);
-    if (date) g_date_time_unref(date);
   }
   g_strfreev(uris);
   std::ranges::sort(entries, [](const Entry& a, const Entry& b) {
