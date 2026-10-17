@@ -1,6 +1,7 @@
 #include "notifications.hpp"
 
 #include "shell.hpp"
+#include "ui_theme.hpp"
 
 #include <cairo/cairo-xcb.h>
 #include <gio/gio.h>
@@ -54,9 +55,9 @@ xcb_visualtype_t* root_visual(xcb_screen_t* screen) {
 }
 
 void draw_text(cairo_t* cr, const std::string& content, int x, int y, int width,
-               int height, bool bold) {
+               int height, bool bold, const ThemeConfig& theme) {
   auto* layout = pango_cairo_create_layout(cr);
-  auto* font = pango_font_description_from_string(bold ? "Sans Bold 10" : "Sans 9");
+  auto* font = make_ui_font(theme, bold, bold ? 10 : 9, false);
   pango_layout_set_font_description(layout, font);
   pango_layout_set_text(layout, content.c_str(), -1);
   pango_layout_set_width(layout, width * PANGO_SCALE);
@@ -151,13 +152,18 @@ struct Notifications::Impl {
     const int width = std::min(popup_width, std::max(1, int(screen->width_in_pixels) - 2 * gap));
     auto* surface = cairo_xcb_surface_create(connection, popup.window, visual, width, popup_height);
     auto* cr = cairo_create(surface);
-    cairo_set_source_rgb(cr, .88, .85, .93);
+    const auto& theme = shell.theme();
+    const auto color = [&](const std::array<double, 3>& dark, double r, double g, double b) {
+      cairo_set_source_rgb(cr, theme.dark_mode ? dark[0] : r,
+                          theme.dark_mode ? dark[1] : g, theme.dark_mode ? dark[2] : b);
+    };
+    color(theme.surface_color, .88, .85, .93);
     cairo_paint(cr);
-    cairo_set_source_rgb(cr, .99, .99, .99);
+    color(theme.highlight_color, .99, .99, .99);
     cairo_rectangle(cr, 0, 0, width, 2);
     cairo_rectangle(cr, 0, 0, 2, popup_height);
     cairo_fill(cr);
-    cairo_set_source_rgb(cr, .30, .20, .40);
+    color(theme.shadow_color, .30, .20, .40);
     cairo_rectangle(cr, 0, popup_height - 2, width, 2);
     cairo_rectangle(cr, width - 2, 0, 2, popup_height);
     cairo_fill(cr);
@@ -179,10 +185,10 @@ struct Notifications::Impl {
         }
       }
     }
-    cairo_set_source_rgb(cr, .16, .09, .23);
-    draw_text(cr, popup.summary, left, 10, std::max(1, width - left - 12), 23, true);
-    cairo_set_source_rgb(cr, .19, .18, .22);
-    draw_text(cr, popup.body, left, 34, std::max(1, width - left - 12), 46, false);
+    color(theme.text_color, .16, .09, .23);
+    draw_text(cr, popup.summary, left, 10, std::max(1, width - left - 12), 23, true, theme);
+    color(theme.text_color, .19, .18, .22);
+    draw_text(cr, popup.body, left, 34, std::max(1, width - left - 12), 46, false, theme);
     cairo_destroy(cr);
     cairo_surface_flush(surface);
     cairo_surface_destroy(surface);

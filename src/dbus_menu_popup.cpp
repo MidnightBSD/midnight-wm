@@ -2,6 +2,7 @@
 
 #include "dbus_menu.hpp"
 #include "shell.hpp"
+#include "ui_theme.hpp"
 
 #include <X11/keysym.h>
 #include <cairo/cairo-xcb.h>
@@ -31,12 +32,16 @@ std::string display_label(const std::string& label) {
 }
 
 void text(cairo_t* cr, const std::string& value, int x, int y, int width,
-          double scale, bool disabled) {
+          double scale, bool disabled, const ThemeConfig& theme, bool selected) {
   cairo_save(cr);
-  cairo_set_source_rgb(cr, disabled ? .48 : .08, disabled ? .48 : .08, disabled ? .48 : .08);
+  if (theme.dark_mode) {
+    const auto& color = disabled ? theme.muted_text_color : theme.text_color;
+    cairo_set_source_rgb(cr, selected && !disabled ? 1 : color[0],
+                         selected && !disabled ? 1 : color[1],
+                         selected && !disabled ? 1 : color[2]);
+  } else cairo_set_source_rgb(cr, disabled ? .48 : .08, disabled ? .48 : .08, disabled ? .48 : .08);
   auto* layout = pango_cairo_create_layout(cr);
-  auto* font = pango_font_description_from_string("Sans 10");
-  pango_font_description_set_size(font, static_cast<int>(std::lround(10 * scale * PANGO_SCALE)));
+  auto* font = make_ui_font(theme, false, 10, false, scale);
   pango_layout_set_font_description(layout, font);
   pango_layout_set_text(layout, value.c_str(), -1);
   pango_layout_set_width(layout, width * PANGO_SCALE);
@@ -253,17 +258,22 @@ void DbusMenuPopup::paint(const Layer& layer) {
   if (!visual) return;
   auto* surface = cairo_xcb_surface_create(connection_, layer.window, visual, layer.width, layer.height);
   auto* cr = cairo_create(surface);
-  cairo_set_source_rgb(cr, .79, .79, .79);
+  const auto& theme = shell_.theme();
+  const auto color = [&](const std::array<double, 3>& dark, double light) {
+    cairo_set_source_rgb(cr, theme.dark_mode ? dark[0] : light,
+                        theme.dark_mode ? dark[1] : light, theme.dark_mode ? dark[2] : light);
+  };
+  color(theme.surface_color, .79);
   cairo_paint(cr);
-  cairo_set_source_rgb(cr, .97, .97, .97);
+  color(theme.highlight_color, .97);
   cairo_rectangle(cr, 0, 0, layer.width, 1);
   cairo_rectangle(cr, 0, 0, 1, layer.height);
   cairo_fill(cr);
-  cairo_set_source_rgb(cr, .31, .31, .31);
+  color(theme.shadow_color, .31);
   cairo_rectangle(cr, layer.width - 1, 0, 1, layer.height);
   cairo_rectangle(cr, 0, layer.height - 1, layer.width, 1);
   cairo_fill(cr);
-  cairo_set_source_rgb(cr, .70, .70, .70);
+  color(theme.button_color, .70);
   cairo_rectangle(cr, border_, border_, scaled(25),
                   std::max(0, layer.height - 2 * border_));
   cairo_fill(cr);
@@ -282,7 +292,7 @@ void DbusMenuPopup::paint(const Layer& layer) {
       cairo_fill(cr);
     }
     if (it->separator) {
-      cairo_set_source_rgb(cr, .36, .36, .36);
+      color(theme.highlight_color, .36);
       cairo_rectangle(cr, scaled(34), y + row_height_ / 2,
                       std::max(1, layer.width - scaled(42)), 1);
       cairo_fill(cr);
@@ -290,7 +300,7 @@ void DbusMenuPopup::paint(const Layer& layer) {
     }
     if (it->toggle_state == 1 && !it->toggle_type.empty())
       text(cr, it->toggle_type == "radio" ? "●" : "✓",
-           scaled(9), y + scaled(3), scaled(17), scale_, !it->enabled);
+           scaled(9), y + scaled(3), scaled(17), scale_, !it->enabled, theme, index == layer.hover);
     else if (!it->icon_name.empty()) {
       if (auto* icon = shell_.themed_icon_surface(it->icon_name)) {
         cairo_save(cr);
@@ -302,9 +312,9 @@ void DbusMenuPopup::paint(const Layer& layer) {
       }
     }
     text(cr, display_label(it->label), scaled(35), y + scaled(3),
-         std::max(1, layer.width - scaled(55)), scale_, !it->enabled);
+         std::max(1, layer.width - scaled(55)), scale_, !it->enabled, theme, index == layer.hover);
     if (it->has_children)
-      text(cr, "▶", layer.width - scaled(22), y + scaled(3), scaled(18), scale_, !it->enabled);
+      text(cr, "▶", layer.width - scaled(22), y + scaled(3), scaled(18), scale_, !it->enabled, theme, index == layer.hover);
   }
   cairo_destroy(cr);
   cairo_surface_flush(surface);

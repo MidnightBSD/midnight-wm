@@ -1,6 +1,7 @@
 #include "status_panel.hpp"
 
 #include "shell.hpp"
+#include "ui_theme.hpp"
 #include "status_notifier.hpp"
 #include "dbus_menu_popup.hpp"
 #include "tray.hpp"
@@ -142,11 +143,16 @@ void StatusNotifierPanel::paint() {
   const auto& color = shell_.panel_color();
   cairo_set_source_rgb(cr, color[0], color[1], color[2]);
   cairo_paint(cr);
-  cairo_set_source_rgb(cr, .98, .98, .98);
+  const auto& theme = shell_.theme();
+  if (theme.dark_mode)
+    cairo_set_source_rgb(cr, theme.highlight_color[0], theme.highlight_color[1], theme.highlight_color[2]);
+  else cairo_set_source_rgb(cr, .98, .98, .98);
   cairo_rectangle(cr, 0, 0, width_, 1);
   cairo_rectangle(cr, 0, 0, 1, panel_height);
   cairo_fill(cr);
-  cairo_set_source_rgb(cr, .28, .29, .31);
+  if (theme.dark_mode)
+    cairo_set_source_rgb(cr, theme.shadow_color[0], theme.shadow_color[1], theme.shadow_color[2]);
+  else cairo_set_source_rgb(cr, .28, .29, .31);
   cairo_rectangle(cr, width_ - 1, 0, 1, panel_height);
   cairo_rectangle(cr, 0, panel_height - 1, width_, 1);
   cairo_fill(cr);

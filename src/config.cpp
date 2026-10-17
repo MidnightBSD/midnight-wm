@@ -6,6 +6,7 @@
 #include <cmath>
 #include <optional>
 #include <string_view>
+#include <utility>
 
 namespace midnight {
 namespace {
@@ -44,6 +45,22 @@ ThemeConfig load_config() {
   };
   if (auto value = read("panel_label"); !value.empty()) config.panel_label = std::move(value);
   if (auto value = read("clock_format"); !value.empty()) config.clock_format = std::move(value);
+  config.dark_mode = g_key_file_get_boolean(keyfile, "Workspace", "dark_mode", nullptr);
+  if (config.dark_mode) {
+    config.panel_color = {.18, .18, .21};
+    config.text_color = {.92, .92, .95};
+    config.surface_color = {.18, .18, .21};
+    config.field_color = {.11, .11, .14};
+    config.button_color = {.25, .25, .29};
+    config.highlight_color = {.40, .40, .45};
+    config.shadow_color = {.07, .07, .09};
+    config.muted_text_color = {.65, .65, .69};
+  }
+  for (auto [key, target] : {std::pair{"ui_font", &config.ui_font},
+                             std::pair{"title_font", &config.title_font}}) {
+    if (auto value = read(key); !value.empty() && value.size() <= 256 &&
+        g_utf8_validate(value.c_str(), value.size(), nullptr)) *target = std::move(value);
+  }
   if (auto value = parse_color(read("desktop_color"))) config.desktop_color = *value;
   if (auto value = parse_color(read("panel_color"))) config.panel_color = *value;
   if (auto value = parse_color(read("accent_color"))) config.accent_color = *value;

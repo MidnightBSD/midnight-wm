@@ -135,7 +135,17 @@ Trash restore actions. Copying or moving files runs in the background.
 Copy `share/midnight-wm/config.ini` to
 `$XDG_CONFIG_HOME/midnight-wm/config.ini` (normally
 `~/.config/midnight-wm/config.ini`) to change the panel label, clock format,
-workspace colors, or desktop shortcuts. In its `[Desktop]` section,
+workspace appearance, or desktop shortcuts. In its `[Workspace]` section,
+`dark_mode` defaults to `false` and selects the dark shell preset when set to
+`true`. It applies to the shell, window frames, notifications, and D-Bus menus.
+`ui_font` and `title_font` accept Pango family/style
+descriptions, optionally followed by a point size from 6 to 32. Omitting the
+size keeps each UI element's default size. The dark preset does not change
+controls drawn by application toolkits. `desktop_color` remains a `#RRGGBB`
+desktop background in either mode; `panel_color` optionally overrides the
+panel color, and `accent_color` sets the accent color. The shared `ui_scale`
+override is also configured here. Restart the session after editing the file.
+In the `[Desktop]` section,
 `show_documents` and `show_pictures` default to `true`; `show_music`,
 `show_videos`, and `show_public_share` default to `false`. Set any of these to
 `true` or `false` to show or hide that shortcut. Restart the session after

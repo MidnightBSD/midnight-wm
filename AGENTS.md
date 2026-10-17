@@ -39,6 +39,16 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   and `hicolor`, with GdkPixbuf rendering. Folder labels align with their
   icons; keep label drawing and icon hit areas consistent. The shell's exit
   callback asks the main loop to end the session.
+- `data/config.ini` documents the `[Workspace]` appearance settings. `dark_mode`
+  defaults to light and applies the dark preset to shell controls, frames,
+  notifications, D-Bus menus, and shared UI scale. `ui_font` and `title_font`
+  accept Pango family/style descriptions with an optional 6–32 point size;
+  omitting the size preserves each widget's default. `desktop_color` remains
+  the `#RRGGBB` background in either mode; optional `panel_color` and
+  `accent_color` override their defaults. These settings are read from
+  `$XDG_CONFIG_HOME/midnight-wm/config.ini` (normally
+  `~/.config/midnight-wm/config.ini`) and require a session restart. They do
+  not change controls drawn by application toolkits.
 - `src/clipboard.*` implements the X11 `CLIPBOARD` selection and persistence.
 - `src/dnd.*` implements XDND file drag and drop. A drop reports completion
   through its callback after the file operation finishes.

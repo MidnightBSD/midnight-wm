@@ -25,6 +25,9 @@ instead of relying only on geometry assertions.
 
 The target sizes are also recorded in `AGENTS.md`. Run this skill for future
 layout changes; ordinary non-visual edits do not need this matrix.
+For theme changes, repeat with `--config /path/to/config.ini` to test dark mode
+and custom fonts in the isolated session. Keep automatic `ui_scale` for the
+matrix geometry assertions, and inspect field, selection, and button contrast.
 
 ## Multiple monitors
 

@@ -1,5 +1,6 @@
 #include "x11.hpp"
 #include "shell.hpp"
+#include "ui_theme.hpp"
 #include "startup_notification.hpp"
 #include "display_scale.hpp"
 
@@ -35,10 +36,9 @@ void box(cairo_t* cr, double x, double y, double width, double height,
 }
 
 void label(cairo_t* cr, const std::string& text, int x, int y, int width,
-           double scale, bool bold = false) {
+           double scale, const ThemeConfig& theme, bool bold = false) {
   auto* layout = pango_cairo_create_layout(cr);
-  auto* desc = pango_font_description_from_string(bold ? "Sans Bold 10" : "Sans 10");
-  pango_font_description_set_size(desc, static_cast<int>(std::lround(10 * scale * PANGO_SCALE)));
+  auto* desc = make_ui_font(theme, bold, 10, false, scale);
   pango_layout_set_font_description(layout, desc);
   pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
   pango_layout_set_width(layout, width * PANGO_SCALE);
@@ -658,11 +658,18 @@ void X11WindowManager::draw_frame(Frame& frame) {
   const int height = frame.height + title_height + border;
   auto* surface = cairo_xcb_surface_create(connection_, frame.frame, visual, width, height);
   auto* cr = cairo_create(surface);
-  box(cr, 0, 0, width, height, .78, .79, .80);
-  box(cr, 0, 0, width, 2, .98, .98, .98);
-  box(cr, 0, 0, 2, height, .98, .98, .98);
-  box(cr, width - 2, 0, 2, height, .25, .27, .29);
-  box(cr, 0, height - 2, width, 2, .25, .27, .29);
+  const auto& theme = shell_.theme();
+  const auto themed_box = [&](double x, double y, double w, double h,
+                               const std::array<double, 3>& dark,
+                               double r, double g, double b) {
+    box(cr, x, y, w, h, theme.dark_mode ? dark[0] : r,
+        theme.dark_mode ? dark[1] : g, theme.dark_mode ? dark[2] : b);
+  };
+  themed_box(0, 0, width, height, theme.surface_color, .78, .79, .80);
+  themed_box(0, 0, width, 2, theme.highlight_color, .98, .98, .98);
+  themed_box(0, 0, 2, height, theme.highlight_color, .98, .98, .98);
+  themed_box(width - 2, 0, 2, height, theme.shadow_color, .25, .27, .29);
+  themed_box(0, height - 2, width, 2, theme.shadow_color, .25, .27, .29);
   const bool selected = active_ == frame.client;
   const auto& accent = shell_.accent_color();
   box(cr, border, border, width - 2 * border, title_height - border,
@@ -671,19 +678,21 @@ void X11WindowManager::draw_frame(Frame& frame) {
       selected ? accent[2] : accent[2] * .65 + .18);
   cairo_set_source_rgb(cr, 1, 1, 1);
   label(cr, frame.title, border + scaled_pixel(scale, 9), border + scaled_pixel(scale, 4),
-        std::max(1, width - scaled_pixel(scale, 124)), scale, true);
+        std::max(1, width - scaled_pixel(scale, 124)), scale, theme, true);
   const int button_y = scaled_pixel(scale, 7);
   for (int i = 0; i < 3; ++i) {
     const int x = width - scaled_pixel(scale, 74) + i * scaled_pixel(scale, 23);
     const int button_width = scaled_pixel(scale, 20);
     const int button_height = scaled_pixel(scale, 17);
-    box(cr, x, button_y, button_width, button_height, .88, .88, .86);
-    box(cr, x, button_y, button_width, 1, 1, 1, 1);
-    box(cr, x + button_width - 1, button_y, 1, button_height, .2, .2, .2);
-    box(cr, x, button_y + button_height - 1, button_width, 1, .2, .2, .2);
-    cairo_set_source_rgb(cr, .12, .12, .12);
+    themed_box(x, button_y, button_width, button_height, theme.button_color, .88, .88, .86);
+    themed_box(x, button_y, button_width, 1, theme.highlight_color, 1, 1, 1);
+    themed_box(x + button_width - 1, button_y, 1, button_height, theme.shadow_color, .2, .2, .2);
+    themed_box(x, button_y + button_height - 1, button_width, 1, theme.shadow_color, .2, .2, .2);
+    if (theme.dark_mode)
+      cairo_set_source_rgb(cr, theme.text_color[0], theme.text_color[1], theme.text_color[2]);
+    else cairo_set_source_rgb(cr, .12, .12, .12);
     label(cr, i == 0 ? "_" : i == 1 ? "□" : "×", x + scaled_pixel(scale, 5),
-          button_y - scaled_pixel(scale, 2), scaled_pixel(scale, 16), scale, true);
+          button_y - scaled_pixel(scale, 2), scaled_pixel(scale, 16), scale, theme, true);
   }
   cairo_destroy(cr);
   cairo_surface_flush(surface);

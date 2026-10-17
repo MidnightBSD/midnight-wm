@@ -14,6 +14,7 @@
 
 namespace midnight {
 
+struct ThemeConfig;
 class Store;
 class StartupNotification;
 
@@ -36,6 +37,7 @@ public:
   void set_tasks(std::vector<Task> tasks);
   void set_screen_size(std::uint16_t width, std::uint16_t height);
   void refresh_display_layout();
+  [[nodiscard]] const ThemeConfig& theme() const;
   [[nodiscard]] double ui_scale() const;
   [[nodiscard]] int panel_height() const;
   [[nodiscard]] int screen_width() const;

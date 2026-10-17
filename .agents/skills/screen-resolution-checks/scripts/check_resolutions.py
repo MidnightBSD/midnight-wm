@@ -23,13 +23,16 @@ def scaled(value, scale):
     return math.floor(value * scale + 0.5)
 
 
-def run_size(binary, output, width, height, live_resize):
+def run_size(binary, output, width, height, live_resize, config_file=None):
     name = f"{width}x{height}"
     with tempfile.TemporaryDirectory(prefix="midnight-resolution-") as temporary:
         root = Path(temporary)
         for entry in ("home", "config", "config-system", "data", "runtime", "folder"):
             (root / entry).mkdir()
         (root / "runtime").chmod(0o700)
+        if config_file:
+            (root / "config" / "midnight-wm").mkdir()
+            shutil.copyfile(config_file, root / "config" / "midnight-wm" / "config.ini")
         for index in range(70):
             (root / "folder" / f"item-{index:02}.txt").write_text("resolution check\n")
 
@@ -147,7 +150,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, default=Path("build/midnight-wm"))
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--config", type=Path, help="Theme configuration to test (keep automatic ui_scale)")
     args = parser.parse_args()
+    if args.config and not args.config.is_file():
+        parser.error(f"config not found: {args.config}")
     binary = args.binary.resolve()
     if not binary.is_file():
         parser.error(f"binary not found: {binary}")
@@ -161,7 +167,7 @@ def main():
     output = output.resolve()
     print(f"Results: {output}", flush=True)
     for width, height in SIZES:
-        result = run_size(binary, output, width, height, width == 3840)
+        result = run_size(binary, output, width, height, width == 3840, args.config)
         print(f"{width}x{height}: {result}", flush=True)
     if (output / "live-resize-type.txt").read_text().startswith("synthetic"):
         print("Xvfb has no smaller RandR mode; internal reflow was checked with ConfigureNotify.")

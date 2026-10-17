@@ -35,6 +35,9 @@ install(FILES data/config.ini data/MidnightBSDLogo.svg data/MidnightBSDLogo22x22
 install(FILES README.md LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/midnight-wm)
 
 enable_testing()
+add_executable(config_test tests/config_test.cpp)
+target_link_libraries(config_test PRIVATE midnight_core)
+add_test(NAME config_test COMMAND config_test)
 add_executable(screen_resize_event tests/screen_resize_event.cpp)
 target_link_libraries(screen_resize_event PRIVATE PkgConfig::DEPS)
 add_executable(display_monitors_test tests/display_monitors_test.cpp)

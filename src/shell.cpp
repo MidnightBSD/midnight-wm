@@ -12,6 +12,7 @@
 #include "startup_notification.hpp"
 #include "terminal_launcher.hpp"
 #include "thumbnail.hpp"
+#include "ui_theme.hpp"
 
 #include <cairo/cairo-xcb.h>
 #include <gio/gio.h>
@@ -303,30 +304,37 @@ void fill(cairo_t* cr, double r, double g, double b, int x, int y, int w, int h)
   cairo_fill(cr);
 }
 
-void bevel(cairo_t* cr, int x, int y, int w, int h, bool sunken = false) {
+void draw_bevel(cairo_t* cr, int x, int y, int w, int h, bool sunken = false,
+                const ThemeConfig* theme = nullptr) {
   cairo_set_line_width(cr, 1);
-  cairo_set_source_rgb(cr, sunken ? .25 : 1, sunken ? .25 : 1, sunken ? .25 : 1);
+  const auto light = theme && theme->dark_mode ? theme->highlight_color : std::array<double, 3>{1, 1, 1};
+  const auto dark = theme && theme->dark_mode ? theme->shadow_color : std::array<double, 3>{.25, .25, .25};
+  const auto& top = sunken ? dark : light;
+  cairo_set_source_rgb(cr, top[0], top[1], top[2]);
   cairo_move_to(cr, x + w - 1, y);
   cairo_line_to(cr, x, y);
   cairo_line_to(cr, x, y + h - 1);
   cairo_stroke(cr);
-  cairo_set_source_rgb(cr, sunken ? 1 : .25, sunken ? 1 : .25, sunken ? 1 : .25);
+  const auto& bottom = sunken ? light : dark;
+  cairo_set_source_rgb(cr, bottom[0], bottom[1], bottom[2]);
   cairo_move_to(cr, x + w - 1, y);
   cairo_line_to(cr, x + w - 1, y + h - 1);
   cairo_line_to(cr, x, y + h - 1);
   cairo_stroke(cr);
 }
 
-void text(cairo_t* cr, const std::string& value, int x, int y, int width,
-          int size = 11, bool white = false, bool bold = false) {
+void draw_text(cairo_t* cr, const std::string& value, int x, int y, int width,
+          int size = 11, bool white = false, bool bold = false,
+          const ThemeConfig& theme = ThemeConfig{}) {
   PangoLayout* layout = pango_cairo_create_layout(cr);
-  PangoFontDescription* font = pango_font_description_from_string(bold ? "Sans Bold" : "Sans");
-  pango_font_description_set_absolute_size(font, size * PANGO_SCALE);
+  PangoFontDescription* font = make_ui_font(theme, bold, size, true);
   pango_layout_set_font_description(layout, font);
   pango_layout_set_text(layout, value.c_str(), -1);
   pango_layout_set_width(layout, width * PANGO_SCALE);
   pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
-  cairo_set_source_rgb(cr, white ? 1 : .04, white ? 1 : .04, white ? 1 : .04);
+  const auto color = white ? std::array<double, 3>{1, 1, 1} :
+    (theme.dark_mode ? theme.text_color : std::array<double, 3>{.04, .04, .04});
+  cairo_set_source_rgb(cr, color[0], color[1], color[2]);
   cairo_move_to(cr, x, y);
   pango_cairo_show_layout(cr, layout);
   pango_font_description_free(font);
@@ -335,9 +343,10 @@ void text(cairo_t* cr, const std::string& value, int x, int y, int width,
 
 enum class SoundIcon { quieter, louder, mute };
 
-void sound_icon(cairo_t* cr, int x, int y, SoundIcon kind) {
+void sound_icon(cairo_t* cr, int x, int y, SoundIcon kind, const ThemeConfig& theme) {
   cairo_save(cr);
-  cairo_set_source_rgb(cr, .12, .12, .12);
+  const auto color = theme.dark_mode ? theme.text_color : std::array<double, 3>{.12, .12, .12};
+  cairo_set_source_rgb(cr, color[0], color[1], color[2]);
   cairo_rectangle(cr, x + 1, y + 6, 4, 5);
   cairo_fill(cr);
   cairo_move_to(cr, x + 5, y + 6);
@@ -348,7 +357,7 @@ void sound_icon(cairo_t* cr, int x, int y, SoundIcon kind) {
   cairo_fill(cr);
   cairo_set_line_width(cr, 1.5);
   if (kind == SoundIcon::mute) {
-    cairo_set_source_rgb(cr, .65, .09, .09);
+    cairo_set_source_rgb(cr, theme.dark_mode ? 1 : .65, theme.dark_mode ? .40 : .09, theme.dark_mode ? .40 : .09);
     cairo_move_to(cr, x + 11, y + 5);
     cairo_line_to(cr, x + 16, y + 12);
     cairo_move_to(cr, x + 16, y + 5);
@@ -365,23 +374,26 @@ void sound_icon(cairo_t* cr, int x, int y, SoundIcon kind) {
   cairo_restore(cr);
 }
 
-void lock_icon(cairo_t* cr, int x, int y) {
+void lock_icon(cairo_t* cr, int x, int y, const ThemeConfig& theme) {
   cairo_save(cr);
-  cairo_set_source_rgb(cr, .12, .12, .12);
+  const auto color = theme.dark_mode ? theme.text_color : std::array<double, 3>{.12, .12, .12};
+  cairo_set_source_rgb(cr, color[0], color[1], color[2]);
   cairo_set_line_width(cr, 2);
   cairo_arc(cr, x + 8, y + 7, 5, std::numbers::pi, 2 * std::numbers::pi);
   cairo_stroke(cr);
   cairo_rectangle(cr, x + 2, y + 7, 12, 9);
   cairo_fill(cr);
-  cairo_set_source_rgb(cr, .85, .85, .85);
+  const auto keyhole = theme.dark_mode ? theme.field_color : std::array<double, 3>{.85, .85, .85};
+  cairo_set_source_rgb(cr, keyhole[0], keyhole[1], keyhole[2]);
   cairo_arc(cr, x + 8, y + 11, 1.2, 0, 2 * std::numbers::pi);
   cairo_fill(cr);
   cairo_restore(cr);
 }
 
-void browser_icon(cairo_t* cr, int x, int y) {
+void browser_icon(cairo_t* cr, int x, int y, const ThemeConfig& theme) {
   cairo_save(cr);
-  cairo_set_source_rgb(cr, .13, .20, .40);
+  const auto color = theme.dark_mode ? theme.text_color : std::array<double, 3>{.13, .20, .40};
+  cairo_set_source_rgb(cr, color[0], color[1], color[2]);
   cairo_set_line_width(cr, 1.4);
   cairo_arc(cr, x + 8, y + 8, 7, 0, 2 * std::numbers::pi);
   cairo_move_to(cr, x + 1, y + 8);
@@ -460,17 +472,17 @@ void icon(cairo_t* cr, const Item& item, int x, int y, cairo_surface_t* surface)
   } else if (folder) {
     fill(cr, .95, .78, .35, x + 5, y + 12, 38, 28);
     fill(cr, .99, .88, .51, x + 5, y + 6, 20, 10);
-    bevel(cr, x + 5, y + 12, 38, 28);
+    draw_bevel(cr, x + 5, y + 12, 38, 28);
   } else {
     fill(cr, .94, .94, .91, x + 10, y + 4, 29, 37);
-    bevel(cr, x + 10, y + 4, 29, 37);
+    draw_bevel(cr, x + 10, y + 4, 29, 37);
     fill(cr, .20, .36, .65, x + 15, y + 13, 18, 3);
     fill(cr, .40, .40, .43, x + 15, y + 22, 17, 2);
     fill(cr, .40, .40, .43, x + 15, y + 28, 14, 2);
   }
   if (item.object.kind == ObjectKind::shadow) {
     fill(cr, .05, .10, .45, x + 28, y + 29, 14, 13);
-    text(cr, "↗", x + 29, y + 26, 12, 12, true);
+    draw_text(cr, "↗", x + 29, y + 26, 12, 12, true);
   }
 }
 
@@ -489,6 +501,21 @@ struct Shell::Impl {
   Store& store;
   ShellModel model;
   ThemeConfig config{load_config()};
+  void bevel(cairo_t* cr, int x, int y, int w, int h, bool sunken = false) const {
+    draw_bevel(cr, x, y, w, h, sunken, &config);
+  }
+
+  void text(cairo_t* cr, const std::string& value, int x, int y, int width,
+            int size = 11, bool white = false, bool bold = false) const {
+    draw_text(cr, value, x, y, width, size, white, bold, config);
+  }
+
+  void themed_fill(cairo_t* cr, const std::array<double, 3>& dark,
+                   double r, double g, double b, int x, int y, int w, int h) const {
+    if (config.dark_mode) fill(cr, dark[0], dark[1], dark[2], x, y, w, h);
+    else fill(cr, r, g, b, x, y, w, h);
+  }
+
   VolumeControl volume;
   std::optional<VolumeState> volume_state;
   std::chrono::steady_clock::time_point last_volume_poll{};
@@ -1198,7 +1225,7 @@ struct Shell::Impl {
     paint(panel, panel_width, panel_height, [&](cairo_t* cr) {
       fill(cr, config.panel_color[0], config.panel_color[1], config.panel_color[2], 0, 0, panel_width, panel_height);
       fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2], 0, 0, panel_width, 3);
-      fill(cr, .85, .85, .85, 4, 4, 116, 22);
+      themed_fill(cr, config.button_color, .85, .85, .85, 4, 4, 116, 22);
       bevel(cr, 4, 4, 116, 22);
       if (logo_surface) {
         cairo_set_source_surface(cr, logo_surface, 7, 5);
@@ -1207,11 +1234,11 @@ struct Shell::Impl {
       text(cr, config.panel_label, logo_surface ? 31 : 13, 7,
            logo_surface ? 84 : 102, 11, false, true);
       bevel(cr, lock_button_x, 5, lock_button_width, 24);
-      lock_icon(cr, lock_button_x + 4, 8);
+      lock_icon(cr, lock_button_x + 4, 8, config);
       bevel(cr, terminal_button_x, 5, terminal_button_width, 24);
       terminal_icon(cr, terminal_button_x + 3, 9);
       bevel(cr, browser_button_x, 5, browser_button_width, 24);
-      browser_icon(cr, browser_button_x + 4, 9);
+      browser_icon(cr, browser_button_x + 4, 9, config);
       const int clock_x = this->clock_x();
       const int volume_x = this->volume_x();
       const bool show_volume = this->show_volume();
@@ -1221,9 +1248,9 @@ struct Shell::Impl {
       for (std::size_t i = 0; i < layout.visible; ++i) {
         const auto& task = all_tasks[i];
         const int x = task_start_x + static_cast<int>(i) * task_step;
-        fill(cr, task.active ? config.accent_color[0] : .80,
-             task.active ? config.accent_color[1] : .80,
-             task.active ? config.accent_color[2] : .80, x, 5, task_button_width, 24);
+        fill(cr, task.active ? config.accent_color[0] : (config.dark_mode ? config.button_color[0] : .80),
+             task.active ? config.accent_color[1] : (config.dark_mode ? config.button_color[1] : .80),
+             task.active ? config.accent_color[2] : (config.dark_mode ? config.button_color[2] : .80), x, 5, task_button_width, 24);
         bevel(cr, x, 5, task_button_width, 24, task.active);
         text(cr, task.title, x + 7, 8, 95, 11, task.active);
       }
@@ -1233,14 +1260,14 @@ struct Shell::Impl {
       }
       if (show_volume) {
         bevel(cr, volume_x, 5, 18, 24);
-        sound_icon(cr, volume_x + 1, 9, SoundIcon::quieter);
+        sound_icon(cr, volume_x + 1, 9, SoundIcon::quieter, config);
         bevel(cr, volume_x + 20, 5, 42, 24, true);
         text(cr, volume_state ? std::to_string(volume_state->percent) + "%" : "N/A",
              volume_x + 23, 8, 36, 11, false, true);
         bevel(cr, volume_x + 64, 5, 18, 24);
-        sound_icon(cr, volume_x + 65, 9, SoundIcon::louder);
+        sound_icon(cr, volume_x + 65, 9, SoundIcon::louder, config);
         bevel(cr, volume_x + 84, 5, 18, 24, volume_state && volume_state->muted);
-        sound_icon(cr, volume_x + 85, 9, SoundIcon::mute);
+        sound_icon(cr, volume_x + 85, 9, SoundIcon::mute, config);
       }
       bevel(cr, clock_x, 5, 99, 24, true);
       text(cr, clock_text(config.clock_format), clock_x + 7, 8, 86, 11, false, true);
@@ -1374,34 +1401,34 @@ struct Shell::Impl {
     folder.scroll_rows = std::clamp(folder.scroll_rows, 0, scroll.max_scroll);
     scroll = folder_scroll(folder);
     paint(folder.window, folder.width, folder.height, [&](cairo_t* cr) {
-      fill(cr, .73, .73, .73, 0, 0, folder.width, folder.height);
+      themed_fill(cr, config.surface_color, .73, .73, .73, 0, 0, folder.width, folder.height);
       bevel(cr, 0, 0, folder.width, folder.height);
       fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
            4, 4, folder.width - 8, 26);
       text(cr, folder.trash ? "Trash" : basename(folder.path), 12, 7, folder.width - 65, 13, true, true);
-      fill(cr, .73, .73, .73, folder.width - 30, 7, 20, 19);
+      themed_fill(cr, config.surface_color, .73, .73, .73, folder.width - 30, 7, 20, 19);
       bevel(cr, folder.width - 30, 7, 20, 19);
       text(cr, "×", folder.width - 25, 6, 17, 15);
       text(cr, "File", 12, 34, 36, 11);
       text(cr, "Edit", 56, 34, 36, 11);
       text(cr, "View", 102, 34, 42, 11);
-      fill(cr, .96, .96, .92, 5, folder_header, scroll.view_width, scroll.view_height);
+      themed_fill(cr, config.field_color, .96, .96, .92, 5, folder_header, scroll.view_width, scroll.view_height);
       cairo_save(cr);
       cairo_rectangle(cr, 5, folder_header, scroll.view_width, scroll.view_height);
       cairo_clip(cr);
       draw_items(cr, folder.items, folder_header + 11, scroll.view_width, folder.selected, false, folder.scroll_rows);
       cairo_restore(cr);
-      fill(cr, .69, .69, .69, scroll.x, folder_header, scrollbar_width, scroll.view_height);
+      themed_fill(cr, config.button_color, .69, .69, .69, scroll.x, folder_header, scrollbar_width, scroll.view_height);
       bevel(cr, scroll.x, folder_header, scrollbar_width, scrollbar_width);
       text(cr, "▲", scroll.x + 3, folder_header + 2, 12, 10);
       const int down_y = folder_header + scroll.view_height - scrollbar_width;
       bevel(cr, scroll.x, down_y, scrollbar_width, scrollbar_width);
       text(cr, "▼", scroll.x + 3, down_y + 2, 12, 10);
-      fill(cr, .57, .57, .57, scroll.x, scroll.track_y, scrollbar_width, scroll.track_height);
+      themed_fill(cr, config.field_color, .57, .57, .57, scroll.x, scroll.track_y, scrollbar_width, scroll.track_height);
       bevel(cr, scroll.x, scroll.track_y, scrollbar_width, scroll.track_height, true);
-      fill(cr, .77, .77, .77, scroll.x + 1, scroll.thumb_y, scrollbar_width - 2, scroll.thumb_height);
+      themed_fill(cr, config.button_color, .77, .77, .77, scroll.x + 1, scroll.thumb_y, scrollbar_width - 2, scroll.thumb_height);
       bevel(cr, scroll.x + 1, scroll.thumb_y, scrollbar_width - 2, scroll.thumb_height);
-      fill(cr, .73, .73, .73, 5, folder.height - 21, folder.width - 10, 16);
+      themed_fill(cr, config.surface_color, .73, .73, .73, 5, folder.height - 21, folder.width - 10, 16);
       text(cr, std::to_string(folder.items.size()) + " objects", 11, folder.height - 21, folder.width - 22, 10);
     });
   }
@@ -1410,10 +1437,10 @@ struct Shell::Impl {
     if (!window) return;
     const int h = static_cast<int>(entries.size()) * row_height + 8;
     paint(window, menu_width, h, [&](cairo_t* cr) {
-      fill(cr, .79, .79, .79, 0, 0, menu_width, h);
+      themed_fill(cr, config.surface_color, .79, .79, .79, 0, 0, menu_width, h);
       bevel(cr, 0, 0, menu_width, h);
-      fill(cr, .70, .70, .70, 4, 4, 25, h - 8);
-      fill(cr, .45, .45, .45, 29, 4, 1, h - 8);
+      themed_fill(cr, config.button_color, .70, .70, .70, 4, 4, 25, h - 8);
+      themed_fill(cr, config.shadow_color, .45, .45, .45, 29, 4, 1, h - 8);
       for (std::size_t i = 0; i < entries.size(); ++i) {
         const int y = 4 + static_cast<int>(i) * row_height;
         const bool selected = static_cast<int>(i) == hover;
@@ -1440,15 +1467,15 @@ struct Shell::Impl {
           } else {
             fill(cr, .96, .77, .31, 8, y + 9, 16, 11);
             fill(cr, .99, .88, .51, 8, y + 6, 9, 4);
-            bevel(cr, 8, y + 9, 16, 11);
+            draw_bevel(cr, 8, y + 9, 16, 11);
           }
         } else if (entry.action == MenuAction::open_home || entry.action == MenuAction::open_desktop ||
                    entry.action == MenuAction::new_folder || entry.action == MenuAction::show_programs) {
           fill(cr, .96, .77, .31, 8, y + 9, 16, 11);
           fill(cr, .99, .88, .51, 8, y + 6, 9, 4);
-          bevel(cr, 8, y + 9, 16, 11);
+          draw_bevel(cr, 8, y + 9, 16, 11);
         } else if (entry.action == MenuAction::exit_session) {
-          fill(cr, .94, .94, .89, 9, y + 5, 14, 14);
+          themed_fill(cr, config.button_color, .94, .94, .89, 9, y + 5, 14, 14);
           bevel(cr, 9, y + 5, 14, 14);
           text(cr, "×", 12, y + 4, 10, 12);
         }
@@ -1491,13 +1518,13 @@ struct Shell::Impl {
     if (!open_with_dialog) return;
     const auto& dialog = *open_with_dialog;
     paint(dialog.window, open_with_width, open_with_height, [&](cairo_t* cr) {
-      fill(cr, .75, .75, .75, 0, 0, open_with_width, open_with_height);
+      themed_fill(cr, config.surface_color, .75, .75, .75, 0, 0, open_with_width, open_with_height);
       bevel(cr, 0, 0, open_with_width, open_with_height);
       fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
            4, 4, open_with_width - 8, 26);
       text(cr, "Open With", 12, 7, open_with_width - 24, 12, true, true);
       text(cr, basename(dialog.path), 12, 36, open_with_width - 24, 11);
-      fill(cr, .96, .96, .92, 10, 56, open_with_width - 20, 282);
+      themed_fill(cr, config.field_color, .96, .96, .92, 10, 56, open_with_width - 20, 282);
       bevel(cr, 10, 56, open_with_width - 20, 282, true);
       for (std::size_t row = 0; row < open_with_rows && row + dialog.scroll < dialog.apps.size(); ++row) {
         const auto index = row + dialog.scroll;
@@ -1617,7 +1644,7 @@ struct Shell::Impl {
   void draw_properties() {
     if (!properties) return;
     paint(properties->window, 500, 220, [&](cairo_t* cr) {
-      fill(cr, .75, .75, .75, 0, 0, 500, 220);
+      themed_fill(cr, config.surface_color, .75, .75, .75, 0, 0, 500, 220);
       bevel(cr, 0, 0, 500, 220);
       fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
            4, 4, 492, 27);
@@ -1626,7 +1653,7 @@ struct Shell::Impl {
       for (int i = 0; i < 3; ++i) {
         const int y = 47 + i * 45;
         text(cr, std::string(labels[i]), 14, y + 5, 80, 11);
-        fill(cr, 1, 1, 1, 92, y, 390, 29);
+        themed_fill(cr, config.field_color, 1, 1, 1, 92, y, 390, 29);
         bevel(cr, 92, y, 390, 29, true);
         if (i == 1) {
           if (auto* surface = object_icon_surface(properties->values[i])) {
@@ -1675,13 +1702,13 @@ struct Shell::Impl {
     if (!icon_chooser) return;
     const auto& chooser = *icon_chooser;
     paint(chooser.window, icon_chooser_width, icon_chooser_height, [&](cairo_t* cr) {
-      fill(cr, .75, .75, .75, 0, 0, icon_chooser_width, icon_chooser_height);
+      themed_fill(cr, config.surface_color, .75, .75, .75, 0, 0, icon_chooser_width, icon_chooser_height);
       bevel(cr, 0, 0, icon_chooser_width, icon_chooser_height);
       fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
            4, 4, icon_chooser_width - 8, 27);
       text(cr, "Choose an icon", 13, 8, 520, 12, true, true);
       text(cr, "Search", 12, 49, 58, 11);
-      fill(cr, 1, 1, 1, 72, 42, 496, 30);
+      themed_fill(cr, config.field_color, 1, 1, 1, 72, 42, 496, 30);
       bevel(cr, 72, 42, 496, 30, true);
       text(cr, chooser.search + "|", 79, 48, 478, 11);
       const auto start = chooser.page * icon_chooser_page_size;
@@ -1696,7 +1723,7 @@ struct Shell::Impl {
         const bool selected = name == chooser.selected;
         if (selected) fill(cr, config.accent_color[0], config.accent_color[1],
                            config.accent_color[2], x, y, 108, 70);
-        else fill(cr, .88, .88, .88, x, y, 108, 70);
+        else themed_fill(cr, config.button_color, .88, .88, .88, x, y, 108, 70);
         bevel(cr, x, y, 108, 70, selected);
         if (auto* surface = object_icon_surface(name)) {
           cairo_set_source_surface(cr, surface, x + 34, y + 5);
@@ -1769,7 +1796,7 @@ struct Shell::Impl {
   void draw_notice() {
     if (!notice) return;
     paint(notice, 420, 100, [&](cairo_t* cr) {
-      fill(cr, .75, .75, .75, 0, 0, 420, 100);
+      themed_fill(cr, config.surface_color, .75, .75, .75, 0, 0, 420, 100);
       bevel(cr, 0, 0, 420, 100);
       fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
            4, 4, 412, 25);
@@ -1783,18 +1810,19 @@ struct Shell::Impl {
   void draw_exit_dialog() {
     if (!exit_dialog) return;
     paint(exit_dialog, exit_dialog_width, exit_dialog_height, [&](cairo_t* cr) {
-      fill(cr, .75, .75, .75, 0, 0, exit_dialog_width, exit_dialog_height);
+      themed_fill(cr, config.surface_color, .75, .75, .75, 0, 0, exit_dialog_width, exit_dialog_height);
       bevel(cr, 0, 0, exit_dialog_width, exit_dialog_height);
       fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
            4, 4, exit_dialog_width - 8, 25);
       text(cr, "Exit X11 session", 12, 7, 350, 12, true, true);
-      fill(cr, .87, .83, .93, 16, 42, 66, 66);
+      themed_fill(cr, config.button_color, .87, .83, .93, 16, 42, 66, 66);
       bevel(cr, 16, 42, 66, 66, true);
       if (exit_logo_surface) {
         cairo_set_source_surface(cr, exit_logo_surface, 25, 51);
         cairo_paint(cr);
       } else {
-        cairo_set_source_rgb(cr, .25, .14, .38);
+        const auto color = config.dark_mode ? config.text_color : std::array<double, 3>{.25, .14, .38};
+        cairo_set_source_rgb(cr, color[0], color[1], color[2]);
         cairo_set_line_width(cr, 4);
         cairo_arc(cr, 49, 75, 18, -.29 * std::numbers::pi, 1.29 * std::numbers::pi);
         cairo_stroke(cr);
@@ -1804,8 +1832,8 @@ struct Shell::Impl {
       }
       text(cr, "End this X11 session?", 96, 53, 265, 13, false, true);
       text(cr, "Open applications may close.", 96, 78, 265, 11);
-      fill(cr, .43, .43, .43, 12, 122, exit_dialog_width - 24, 1);
-      fill(cr, .93, .93, .93, 12, 123, exit_dialog_width - 24, 1);
+      themed_fill(cr, config.shadow_color, .43, .43, .43, 12, 122, exit_dialog_width - 24, 1);
+      themed_fill(cr, config.highlight_color, .93, .93, .93, 12, 123, exit_dialog_width - 24, 1);
       bevel(cr, 165, exit_dialog_button_y, 82, 26);
       text(cr, "Cancel", 183, exit_dialog_button_y + 4, 64, 11);
       bevel(cr, 265, exit_dialog_button_y, 90, 26);
@@ -2913,6 +2941,8 @@ int Shell::tray_width() const { return impl_->tray_width(); }
 int Shell::tray_x() const { return impl_->tray_x(); }
 int Shell::panel_x() const { return impl_->primary_monitor.x; }
 int Shell::panel_y() const { return impl_->primary_monitor.y; }
+
+const ThemeConfig& Shell::theme() const { return impl_->config; }
 
 const std::array<double, 3>& Shell::panel_color() const {
   return impl_->config.panel_color;
