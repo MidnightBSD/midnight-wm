@@ -10,7 +10,9 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
 - `src/main.cpp` owns the XCB connection and dispatches events to clipboard,
   drag and drop, shell, then window manager. Preserve that dispatch order and
   destroy X11 users before disconnecting XCB. `--version` uses the CMake
-  project version through `MIDNIGHT_WM_VERSION`.
+  project version through `MIDNIGHT_WM_VERSION`. Startup re-execs through
+  `dbus-run-session` only if no reachable session bus is available; preserve
+  the recursion guard and the wrapper's ownership of the new bus.
 - `src/x11.*` manages external X11 clients, frames, focus, geometry, EWMH, and
   the root pointer cursor.
 - `src/shell.*` draws the panel, desktop, menus, folder windows, scrollbars,

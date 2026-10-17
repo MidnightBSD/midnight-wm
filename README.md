@@ -18,6 +18,10 @@ cmake --install build --prefix /usr/local
 Select **Midnight Workspace** from an X11 display manager, or run
 `exec /usr/local/bin/midnight-wm` from `.xinitrc`. Only one window manager can
 control an X screen at a time. `midnight-wm --version` prints the version.
+At startup, Midnight Workspace uses an existing D-Bus session bus when one is
+reachable. If none is available and `dbus-run-session` is installed, it starts
+a bus for the X11 session and stops it when Midnight Workspace exits. Without
+the D-Bus tools, the desktop still starts, but D-Bus integrations are unavailable.
 
 ## Desktop behavior
 
