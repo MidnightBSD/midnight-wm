@@ -1684,9 +1684,11 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
   }
   case XCB_CONFIGURE_NOTIFY: {
     auto* e = reinterpret_cast<xcb_configure_notify_event_t*>(event);
-    if (e->window == screen_->root)
-      update_screen_size(e->width, e->height);
-    else if (frame_to_client_.contains(e->window) && e->event == screen_->root)
+    // Any client can send a synthetic root ConfigureNotify. Synthetic sizes
+    // stay accepted for Xvfb resize checks, but an empty screen is never valid.
+    if (e->window == screen_->root) {
+      if (e->width && e->height) update_screen_size(e->width, e->height);
+    } else if (frame_to_client_.contains(e->window) && e->event == screen_->root)
       update_stacking();
     break;
   }

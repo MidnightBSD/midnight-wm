@@ -25,8 +25,10 @@ inline DisplayMonitor choose_display_monitor(const std::vector<DisplayMonitor>& 
   const DisplayMonitor* closest = nullptr;
   std::int64_t best_distance = std::numeric_limits<std::int64_t>::max();
   for (const auto& monitor : monitors) {
-    const int near_x = std::clamp(x, monitor.x, monitor.x + monitor.width - 1);
-    const int near_y = std::clamp(y, monitor.y, monitor.y + monitor.height - 1);
+    // Treat empty monitors as one pixel: std::clamp requires hi >= lo, and
+    // hardened libc++ traps on a zero-size rectangle.
+    const int near_x = std::clamp(x, monitor.x, monitor.x + std::max(monitor.width, 1) - 1);
+    const int near_y = std::clamp(y, monitor.y, monitor.y + std::max(monitor.height, 1) - 1);
     const auto dx = std::int64_t(x) - near_x;
     const auto dy = std::int64_t(y) - near_y;
     const auto distance = dx * dx + dy * dy;
