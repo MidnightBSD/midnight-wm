@@ -249,7 +249,7 @@ struct Shell::Impl {
   std::shared_ptr<bool> alive{std::make_shared<bool>(true)};
   int transfers_in_progress{};
   xcb_visualtype_t* visual{};
-  xcb_window_t desktop{}, panel{}, menu{}, exit_dialog{};
+  xcb_window_t desktop{}, panel{}, menu{}, submenu{}, exit_dialog{};
   xcb_window_t notice{};
   std::string notice_text;
   std::optional<Properties> properties;
@@ -265,10 +265,12 @@ struct Shell::Impl {
   cairo_surface_t* logo_surface{};
   bool icons_indexed{};
   std::vector<MenuEntry> menu_entries;
+  std::vector<MenuEntry> submenu_entries;
   std::size_t app_page{};
   xcb_window_t menu_owner{};
   int menu_x{}, menu_y{}, menu_width{250};
   int menu_hover{-1};
+  int submenu_hover{-1};
   int selected_desktop{-1};
   std::optional<Item> selected_item;
   std::filesystem::path clipboard_path;
@@ -304,6 +306,7 @@ struct Shell::Impl {
     for (auto& [window, monitor] : monitors) g_object_unref(monitor);
     for (auto& [window, folder] : folders) xcb_destroy_window(connection, window);
     if (menu) xcb_destroy_window(connection, menu);
+    if (submenu) xcb_destroy_window(connection, submenu);
     if (exit_dialog) xcb_destroy_window(connection, exit_dialog);
     if (notice) xcb_destroy_window(connection, notice);
     if (properties) xcb_destroy_window(connection, properties->window);
@@ -582,6 +585,7 @@ struct Shell::Impl {
     const std::uint32_t above[]{XCB_STACK_MODE_ABOVE};
     if (panel) xcb_configure_window(connection, panel, XCB_CONFIG_WINDOW_STACK_MODE, above);
     if (menu) xcb_configure_window(connection, menu, XCB_CONFIG_WINDOW_STACK_MODE, above);
+    if (submenu) xcb_configure_window(connection, submenu, XCB_CONFIG_WINDOW_STACK_MODE, above);
     xcb_flush(connection);
   }
 
@@ -641,20 +645,20 @@ struct Shell::Impl {
     });
   }
 
-  void draw_menu() {
-    if (!menu) return;
-    const int h = static_cast<int>(menu_entries.size()) * row_height + 8;
-    paint(menu, menu_width, h, [&](cairo_t* cr) {
+  void draw_menu_window(xcb_window_t window, const std::vector<MenuEntry>& entries, int hover) {
+    if (!window) return;
+    const int h = static_cast<int>(entries.size()) * row_height + 8;
+    paint(window, menu_width, h, [&](cairo_t* cr) {
       fill(cr, .79, .79, .79, 0, 0, menu_width, h);
       bevel(cr, 0, 0, menu_width, h);
       fill(cr, .70, .70, .70, 4, 4, 25, h - 8);
       fill(cr, .45, .45, .45, 29, 4, 1, h - 8);
-      for (std::size_t i = 0; i < menu_entries.size(); ++i) {
+      for (std::size_t i = 0; i < entries.size(); ++i) {
         const int y = 4 + static_cast<int>(i) * row_height;
-        const bool selected = static_cast<int>(i) == menu_hover;
+        const bool selected = static_cast<int>(i) == hover;
         if (selected) fill(cr, config.accent_color[0], config.accent_color[1],
                            config.accent_color[2], 4, y, menu_width - 8, row_height);
-        const auto& entry = menu_entries[i];
+        const auto& entry = entries[i];
         if (entry.action == MenuAction::launch && entry.index < apps.size()) {
           if (auto* surface = app_icon(apps[entry.index])) {
             cairo_set_source_surface(cr, surface, 8, y + 3);
@@ -674,6 +678,9 @@ struct Shell::Impl {
       }
     });
   }
+
+  void draw_menu() { draw_menu_window(menu, menu_entries, menu_hover); }
+  void draw_submenu() { draw_menu_window(submenu, submenu_entries, submenu_hover); }
 
   void show_notice(std::string message) {
     notice_text = std::move(message);
@@ -791,9 +798,16 @@ struct Shell::Impl {
     if (exit_handler) exit_handler();
   }
 
+  void close_submenu() {
+    if (submenu) xcb_destroy_window(connection, submenu);
+    submenu = 0;
+    submenu_entries.clear();
+    submenu_hover = -1;
+  }
+
   void close_menu() {
-    if (!menu) return;
-    xcb_destroy_window(connection, menu);
+    close_submenu();
+    if (menu) xcb_destroy_window(connection, menu);
     menu = 0;
     menu_entries.clear();
     menu_hover = -1;
@@ -812,6 +826,21 @@ struct Shell::Impl {
     xcb_map_window(connection, menu);
     raise_panel();
     draw_menu();
+  }
+
+  void show_submenu(std::vector<MenuEntry> entries, int row) {
+    close_submenu();
+    submenu_entries = std::move(entries);
+    if (submenu_entries.empty()) return;
+    const int h = static_cast<int>(submenu_entries.size()) * row_height + 8;
+    const int right = menu_x + menu_width - 1;
+    const int x = right + menu_width <= width ? right : std::max(0, menu_x - menu_width + 1);
+    const int y = std::clamp(menu_y + 4 + row * row_height, 0,
+                             std::max(0, static_cast<int>(height) - h));
+    submenu = create_window(x, y, menu_width, h);
+    xcb_map_window(connection, submenu);
+    raise_panel();
+    draw_submenu();
   }
 
   void show_launcher() {
@@ -833,7 +862,7 @@ struct Shell::Impl {
     for (std::size_t i = start; i < std::min(apps.size(), start + page_size); ++i)
       entries.push_back({g_app_info_get_display_name(apps[i]), MenuAction::launch, i});
     if (start + page_size < apps.size()) entries.push_back({"More applications ▶", MenuAction::next_apps});
-    show_menu(menu_width - 2, panel_height + 2 * row_height, desktop, std::move(entries));
+    show_submenu(std::move(entries), 2);
   }
 
   void show_context(xcb_window_t window, int root_x, int root_y, const Item* item) {
@@ -937,7 +966,8 @@ struct Shell::Impl {
 
   void execute(MenuEntry entry) {
     const auto destination = owner_path();
-    close_menu();
+    if (entry.action != MenuAction::show_programs && entry.action != MenuAction::next_apps &&
+        entry.action != MenuAction::previous_apps) close_menu();
     switch (entry.action) {
       case MenuAction::open_home: open_folder(g_get_home_dir()); break;
       case MenuAction::open_desktop: open_folder(Store::desktop_path()); break;
@@ -1075,10 +1105,11 @@ struct Shell::Impl {
       notice = 0;
       return;
     }
-    if (event->event == menu) {
+    if (event->event == menu || event->event == submenu) {
+      const auto& entries = event->event == menu ? menu_entries : submenu_entries;
       const int index = (event->event_y - 4) / row_height;
-      if (event->detail == 1 && event->event_y >= 4 && index >= 0 && static_cast<std::size_t>(index) < menu_entries.size())
-        execute(menu_entries[index]);
+      if (event->detail == 1 && event->event_y >= 4 && index >= 0 && static_cast<std::size_t>(index) < entries.size())
+        execute(entries[index]);
       else close_menu();
       return;
     }
@@ -1297,11 +1328,14 @@ struct Shell::Impl {
   }
 
   void motion(const xcb_motion_notify_event_t* event) {
-    if (event->event == menu) {
+    if (event->event == menu || event->event == submenu) {
+      const bool parent = event->event == menu;
+      const auto& entries = parent ? menu_entries : submenu_entries;
+      int& hover = parent ? menu_hover : submenu_hover;
       const int index = (event->event_y - 4) / row_height;
       const int next = event->event_y >= 4 && index >= 0 &&
-        static_cast<std::size_t>(index) < menu_entries.size() ? index : -1;
-      if (next != menu_hover) { menu_hover = next; draw_menu(); }
+        static_cast<std::size_t>(index) < entries.size() ? index : -1;
+      if (next != hover) { hover = next; if (parent) draw_menu(); else draw_submenu(); }
       return;
     }
     if (scroll_drag_window) {
@@ -1391,7 +1425,8 @@ bool Shell::initialize() {
 
 bool Shell::owns(xcb_window_t window) const {
   const auto& p = *impl_;
-  return window && (window == p.desktop || window == p.panel || window == p.menu || window == p.notice ||
+  return window && (window == p.desktop || window == p.panel || window == p.menu ||
+                    window == p.submenu || window == p.notice ||
                     window == p.exit_dialog ||
                     (p.properties && window == p.properties->window) || p.folders.contains(window));
 }
@@ -1415,6 +1450,7 @@ bool Shell::handle(xcb_generic_event_t* event) {
     if (window == p.panel) p.draw_panel();
     else if (window == p.desktop) p.draw_desktop();
     else if (window == p.menu) p.draw_menu();
+    else if (window == p.submenu) p.draw_submenu();
     else if (window == p.notice) p.draw_notice();
     else if (window == p.exit_dialog) p.draw_exit_dialog();
     else if (p.properties && window == p.properties->window) p.draw_properties();

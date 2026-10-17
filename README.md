@@ -23,7 +23,9 @@ control an X screen at a time. `midnight-wm --version` prints the version.
 
 The top bar contains an application launcher, task buttons, a volume control,
 and a clock. Open **Programs** in the launcher to browse installed X11
-applications with their desktop entry icons. Use `−` and `+` or the mouse wheel
+applications with their desktop entry icons. The launcher stays open while you
+browse Programs pages and closes when you select an item or click outside.
+Use `−` and `+` or the mouse wheel
 over the volume control to change output volume in 5% steps. **Mute** sets both
 master mixer channels to
 zero and restores their previous levels when pressed again during the same
@@ -68,8 +70,8 @@ window and its lower frame to resize it. The launcher menu has **Exit X11
 session…**, which asks for confirmation before closing the window manager. When
 started as the Xsession or from `.xinitrc`, that also ends the X11 session.
 The desktop sets an explicit pointer cursor as soon as the window manager starts.
-The default silver panel and deep blue desktop take their colors from the
-OS/2 Warp 4 references; existing user configuration overrides those defaults.
+The default silver panel follows the OS/2 Warp 4 references, with a lavender
+desktop. Existing user configuration overrides those defaults.
 The clickable launcher button uses the MidnightBSD logo from the
 [MidnightBSD website art collection](https://github.com/MidnightBSD/www/tree/main/art/logo).
 
