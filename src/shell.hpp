@@ -35,6 +35,7 @@ public:
   void tick();
   void set_tasks(std::vector<Task> tasks);
   void set_screen_size(std::uint16_t width, std::uint16_t height);
+  void refresh_display_layout();
   [[nodiscard]] double ui_scale() const;
   [[nodiscard]] int panel_height() const;
   [[nodiscard]] int screen_width() const;
@@ -47,6 +48,8 @@ public:
   void set_tray_width(int width);
   [[nodiscard]] int tray_width() const;
   [[nodiscard]] int tray_x() const;
+  [[nodiscard]] int panel_x() const;
+  [[nodiscard]] int panel_y() const;
   [[nodiscard]] const std::array<double, 3>& panel_color() const;
   [[nodiscard]] cairo_surface_t* themed_icon_surface(const std::string& name);
   [[nodiscard]] const std::array<double, 3>& accent_color() const;

@@ -74,20 +74,27 @@ void DbusMenuPopup::sync_geometry() {
   const int width = std::max(1, shell_.screen_width());
   const int height = std::max(1, shell_.screen_height());
   const double scale = std::clamp(shell_.ui_scale(), 1.0, 4.0);
-  if (width == screen_width_ && height == screen_height_ && scale == scale_) return;
+  auto monitors = query_display_monitors(connection_, screen_);
+  const auto monitor = choose_display_monitor(monitors, anchor_x_, anchor_y_);
+  if (width == screen_width_ && height == screen_height_ && scale == scale_ &&
+      monitors == monitors_ && monitor == popup_monitor_) return;
+  monitors_ = std::move(monitors);
+  popup_monitor_ = monitor;
   screen_width_ = width;
   screen_height_ = height;
   scale_ = scale;
-  menu_width_ = std::min(screen_width_, scaled(base_menu_width));
+  menu_width_ = std::min(popup_monitor_.width, scaled(base_menu_width));
   row_height_ = scaled(base_row_height);
   border_ = scaled(base_border);
-  const int available = std::clamp(screen_height_ - scaled(36), 1, screen_height_);
+  const int available = std::clamp(popup_monitor_.height - scaled(36), 1, popup_monitor_.height);
   for (auto& layer : layers_) {
     layer.width = menu_width_;
     layer.height = std::min(available, 2 * border_ +
                             static_cast<int>(layer.ids.size()) * row_height_);
-    layer.x = std::clamp(layer.x, 0, std::max(0, screen_width_ - layer.width));
-    layer.y = std::clamp(layer.y, 0, std::max(0, screen_height_ - layer.height));
+    layer.x = std::clamp(layer.x, popup_monitor_.x,
+                         std::max(popup_monitor_.x, popup_monitor_.x + popup_monitor_.width - layer.width));
+    layer.y = std::clamp(layer.y, popup_monitor_.y,
+                         std::max(popup_monitor_.y, popup_monitor_.y + popup_monitor_.height - layer.height));
     layer.scroll = std::clamp(layer.scroll, 0,
                               std::max(0, static_cast<int>(layer.ids.size()) - capacity(layer)));
     const std::uint32_t values[]{static_cast<std::uint32_t>(layer.x),
@@ -109,11 +116,11 @@ void DbusMenuPopup::refresh_geometry() {
 void DbusMenuPopup::open(std::string service, std::string path, int x, int y,
                          std::function<void()> fallback) {
   close();
+  anchor_x_ = x;
+  anchor_y_ = y;
   sync_geometry();
   if (path.empty() || path == "/NO_DBUSMENU") { if (fallback) fallback(); return; }
   if (!menu_.initialize()) { if (fallback) fallback(); return; }
-  anchor_x_ = x;
-  anchor_y_ = y;
   fallback_ = std::move(fallback);
   pending_ = true;
   menu_.open(std::move(service), std::move(path));
@@ -164,13 +171,13 @@ void DbusMenuPopup::changed() {
       close_from(depth);
       break;
     }
-    const int available = std::clamp(screen_height_ - scaled(36), 1, screen_height_);
+    const int available = std::clamp(popup_monitor_.height - scaled(36), 1, popup_monitor_.height);
     const int new_height = std::min(available, border_ * 2 +
                                    static_cast<int>(layer.ids.size()) * row_height_);
     if (new_height != layer.height) {
       layer.height = new_height;
-      layer.y = std::clamp(layer.y, 0,
-                           std::max(0, screen_height_ - layer.height));
+      layer.y = std::clamp(layer.y, popup_monitor_.y,
+                           std::max(popup_monitor_.y, popup_monitor_.y + popup_monitor_.height - layer.height));
       const std::uint32_t values[] = {std::uint32_t(layer.y), std::uint32_t(layer.height)};
       xcb_configure_window(connection_, layer.window,
                            XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_HEIGHT, values);
@@ -187,7 +194,8 @@ void DbusMenuPopup::changed() {
     const auto it = std::ranges::find(menu_.rows(), layer.ids[layer.hover], &DbusMenuRow::id);
     if (it == menu_.rows().end() || !it->has_children) continue;
     const int right = layer.x + layer.width - 1;
-    const int x = right + menu_width_ <= screen_width_ ? right : layer.x - menu_width_ + 1;
+    const int x = right + menu_width_ <= popup_monitor_.x + popup_monitor_.width ?
+                    right : layer.x - menu_width_ + 1;
     const int y = layer.y + border_ + (layer.hover - layer.scroll) * row_height_;
     show_layer(it->id, x, y, depth + 1);
   }
@@ -202,11 +210,13 @@ void DbusMenuPopup::show_layer(int parent_id, int x, int y, std::size_t depth) {
   for (const auto& row : menu_.rows())
     if (row.parent_id == parent_id && row.id != parent_id && row.visible) layer.ids.push_back(row.id);
   if (layer.ids.empty()) return;
-  const int available = std::clamp(screen_height_ - scaled(36), 1, screen_height_);
+  const int available = std::clamp(popup_monitor_.height - scaled(36), 1, popup_monitor_.height);
   layer.height = std::min(available, border_ * 2 + static_cast<int>(layer.ids.size()) * row_height_);
   layer.width = menu_width_;
-  layer.x = std::clamp(x, 0, std::max(0, screen_width_ - layer.width));
-  layer.y = std::clamp(y, 0, std::max(0, screen_height_ - layer.height));
+  layer.x = std::clamp(x, popup_monitor_.x,
+                       std::max(popup_monitor_.x, popup_monitor_.x + popup_monitor_.width - layer.width));
+  layer.y = std::clamp(y, popup_monitor_.y,
+                       std::max(popup_monitor_.y, popup_monitor_.y + popup_monitor_.height - layer.height));
   layer.window = xcb_generate_id(connection_);
   const std::uint32_t values[] = {screen_->white_pixel, 1,
       XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_BUTTON_PRESS | XCB_EVENT_MASK_POINTER_MOTION |
@@ -332,7 +342,8 @@ void DbusMenuPopup::hover(std::size_t depth, int index) {
   }
   menu_.about_to_show(it->id);
   const int right = layer.x + layer.width - 1;
-  const int x = right + menu_width_ <= screen_width_ ? right : layer.x - menu_width_ + 1;
+  const int x = right + menu_width_ <= popup_monitor_.x + popup_monitor_.width ?
+                  right : layer.x - menu_width_ + 1;
   const int y = layer.y + border_ + (index - layer.scroll) * row_height_;
   show_layer(it->id, x, y, depth + 1);
 }

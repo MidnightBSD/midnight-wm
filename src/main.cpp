@@ -18,6 +18,7 @@
 #include <gio/gio.h>
 #include <glib.h>
 #include <xcb/xcb.h>
+#include <xcb/randr.h>
 
 #include <atomic>
 #include <cerrno>
@@ -215,8 +216,14 @@ int main(int argc, char** argv) {
                 !shell.handle(event) &&
                 !tray.handle(event) && !status_panel.handle(event)) {
               wm.handle(event);
-              if ((event->response_type & ~0x80) == XCB_CONFIGURE_NOTIFY &&
-                  reinterpret_cast<xcb_configure_notify_event_t*>(event)->window == screen->root)
+              const auto event_type = event->response_type & ~0x80;
+              const auto* randr = xcb_get_extension_data(connection, &xcb_randr_id);
+              const bool randr_layout_event = randr && randr->present &&
+                  (event_type == randr->first_event + XCB_RANDR_SCREEN_CHANGE_NOTIFY ||
+                   event_type == randr->first_event + XCB_RANDR_NOTIFY);
+              if (randr_layout_event ||
+                  (event_type == XCB_CONFIGURE_NOTIFY &&
+                   reinterpret_cast<xcb_configure_notify_event_t*>(event)->window == screen->root))
                 menu_popup.refresh_geometry();
             }
             std::free(event);

@@ -54,7 +54,8 @@ template <class T> using Reply = std::unique_ptr<T, decltype(&std::free)>;
 
 X11WindowManager::X11WindowManager(xcb_connection_t* connection, xcb_screen_t* screen, Shell& shell)
   : connection_(connection), screen_(screen), shell_(shell),
-    screen_width_(screen->width_in_pixels), screen_height_(screen->height_in_pixels) {}
+    screen_width_(screen->width_in_pixels), screen_height_(screen->height_in_pixels),
+    monitors_(query_display_monitors(connection, screen)) {}
 
 int X11WindowManager::border_pixels() const { return scaled_pixel(shell_.ui_scale(), 5); }
 int X11WindowManager::title_height_pixels() const { return scaled_pixel(shell_.ui_scale(), 28); }
@@ -242,26 +243,12 @@ xcb_visualtype_t* X11WindowManager::root_visual() const {
 }
 
 X11WindowManager::Monitor X11WindowManager::monitor_for(const Frame& frame) const {
-  const Monitor fallback{0, 0, screen_width_, screen_height_};
-  const auto* extension = xcb_get_extension_data(connection_, &xcb_randr_id);
-  if (!extension || !extension->present) return fallback;
-  auto cookie = xcb_randr_get_monitors(connection_, screen_->root, 1);
-  Reply<xcb_randr_get_monitors_reply_t> reply(xcb_randr_get_monitors_reply(connection_, cookie, nullptr), std::free);
-  if (!reply) return fallback;
+  if (frame.monitor_name && (frame.fullscreen || frame.maximized_horz || frame.maximized_vert))
+    for (const auto& monitor : monitors_)
+      if (monitor.name == frame.monitor_name) return monitor;
   const int cx = frame.x + frame.width / 2;
   const int cy = frame.y + frame.height / 2;
-  auto monitors = xcb_randr_get_monitors_monitors_iterator(reply.get());
-  Monitor first = fallback;
-  bool found = false;
-  for (; monitors.rem; xcb_randr_monitor_info_next(&monitors)) {
-    const auto* info = monitors.data;
-    if (!info || !info->width || !info->height) continue;
-    const Monitor monitor{info->x, info->y, info->width, info->height};
-    if (!found) { first = monitor; found = true; }
-    if (cx >= monitor.x && cx < monitor.x + monitor.width &&
-        cy >= monitor.y && cy < monitor.y + monitor.height) return monitor;
-  }
-  return first;
+  return choose_display_monitor(monitors_, cx, cy);
 }
 
 bool X11WindowManager::initialize() {
@@ -275,6 +262,13 @@ bool X11WindowManager::initialize() {
     return false;
   }
   if (!install_root_cursor()) return false;
+  if (const auto* extension = xcb_get_extension_data(connection_, &xcb_randr_id);
+      extension && extension->present) {
+    randr_event_base_ = extension->first_event;
+    xcb_randr_select_input(connection_, screen_->root,
+        XCB_RANDR_NOTIFY_MASK_SCREEN_CHANGE | XCB_RANDR_NOTIFY_MASK_CRTC_CHANGE |
+        XCB_RANDR_NOTIFY_MASK_OUTPUT_CHANGE | XCB_RANDR_NOTIFY_MASK_RESOURCE_CHANGE);
+  }
   set_root_properties();
   install_key_grabs();
   scan_existing();
@@ -325,7 +319,10 @@ void X11WindowManager::set_root_properties() {
 
 void X11WindowManager::update_geometry_properties() {
   const std::uint32_t geometry[] = {screen_width_, screen_height_};
-  const auto area = workarea_for({0, 0, screen_width_, screen_height_});
+  const bool panel_at_top = std::any_of(monitors_.begin(), monitors_.end(), [](const auto& monitor) {
+    return monitor.primary && monitor.y == 0;
+  });
+  const auto area = workarea_for({0, 0, screen_width_, screen_height_, panel_at_top});
   const std::uint32_t workarea[] = {std::uint32_t(area.x), std::uint32_t(area.y),
                                    std::uint32_t(area.width), std::uint32_t(area.height)};
   xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, screen_->root, atom("_NET_DESKTOP_GEOMETRY"),
@@ -335,7 +332,9 @@ void X11WindowManager::update_geometry_properties() {
 }
 
 X11WindowManager::Monitor X11WindowManager::workarea_for(const Monitor& monitor) const {
-  int left = 0, right = 0, top = shell_.panel_height(), bottom = 0;
+  int left = 0, right = 0;
+  int top = monitor.primary ? monitor.y + shell_.panel_height() : 0;
+  int bottom = 0;
   const auto overlaps = [](int a, int b, std::uint32_t start, std::uint32_t end) {
     return end >= std::uint32_t(std::max(0, a)) && start < std::uint32_t(std::max(0, b));
   };
@@ -871,6 +870,8 @@ void X11WindowManager::set_maximized(xcb_window_t client, bool horz, bool vert) 
   }
   frame.maximized_horz = horz;
   frame.maximized_vert = vert;
+  if (horz || vert) frame.monitor_name = monitor_for(frame).name;
+  else frame.monitor_name = XCB_ATOM_NONE;
   update_window_state(frame);
   if (horz || vert) update_maximized_geometry(frame);
   else resize_frame(frame);
@@ -886,9 +887,11 @@ void X11WindowManager::set_fullscreen(xcb_window_t client, bool enabled) {
     frame.old_x = frame.x; frame.old_y = frame.y;
     frame.old_width = frame.width; frame.old_height = frame.height;
     const auto monitor = monitor_for(frame);
+    frame.monitor_name = monitor.name;
     frame.x = monitor.x; frame.y = monitor.y;
     frame.width = monitor.width; frame.height = monitor.height;
   } else {
+    frame.monitor_name = XCB_ATOM_NONE;
     frame.x = frame.old_x; frame.y = frame.old_y;
     frame.width = frame.old_width; frame.height = frame.old_height;
   }
@@ -962,8 +965,22 @@ void X11WindowManager::cycle_focus() {
 }
 
 void X11WindowManager::update_screen_size(std::uint16_t width, std::uint16_t height) {
+  refresh_display_layout(width, height);
+}
+
+void X11WindowManager::refresh_display_layout(std::uint16_t width, std::uint16_t height) {
+  auto monitors = query_display_monitors(connection_, screen_);
+  if (monitors.size() == 1 && monitors.front().x == 0 && monitors.front().y == 0 &&
+      (monitors.front().width != width || monitors.front().height != height)) {
+    monitors.front().width = width;
+    monitors.front().height = height;
+  }
+  if (width == screen_width_ && height == screen_height_ && monitors == monitors_) return;
   screen_width_ = width; screen_height_ = height;
-  shell_.set_screen_size(width, height);
+  monitors_ = std::move(monitors);
+  if (shell_.screen_width() != width || shell_.screen_height() != height)
+    shell_.set_screen_size(width, height);
+  else shell_.refresh_display_layout();
   update_geometry_properties();
   for (auto& [client, frame] : frames_) {
     const std::uint32_t extents[]{static_cast<std::uint32_t>(decorated(frame) ? border_pixels() : 0),
@@ -974,14 +991,22 @@ void X11WindowManager::update_screen_size(std::uint16_t width, std::uint16_t hei
                         XCB_ATOM_CARDINAL, 32, 4, extents);
     if (frame.fullscreen) {
       const auto monitor = monitor_for(frame);
+      frame.monitor_name = monitor.name;
       frame.x = monitor.x; frame.y = monitor.y;
       frame.width = monitor.width; frame.height = monitor.height;
       resize_frame(frame);
-    } else if (frame.maximized_horz || frame.maximized_vert) update_maximized_geometry(frame);
+    } else if (frame.maximized_horz || frame.maximized_vert) {
+      frame.monitor_name = monitor_for(frame).name;
+      update_maximized_geometry(frame);
+    }
     else {
-      frame.x = std::clamp(frame.x, 0, std::max(0, int(screen_width_) - 80));
-      frame.y = std::clamp(frame.y, shell_.panel_height(),
-                           std::max(shell_.panel_height(), int(screen_height_) - title_height_pixels()));
+      const auto monitor = monitor_for(frame);
+      const int visible_width = std::min(80, monitor.width);
+      frame.x = std::clamp(frame.x, monitor.x - int(frame.width) + visible_width,
+                           monitor.x + monitor.width - visible_width);
+      const int top = monitor.primary ? monitor.y + shell_.panel_height() : monitor.y;
+      frame.y = std::clamp(frame.y, top,
+                           std::max(top, monitor.y + monitor.height - title_height_pixels()));
       resize_frame(frame);
     }
   }
@@ -989,6 +1014,15 @@ void X11WindowManager::update_screen_size(std::uint16_t width, std::uint16_t hei
 
 void X11WindowManager::handle(xcb_generic_event_t* event) {
   const auto type = event->response_type & ~0x80;
+  if (randr_event_base_ &&
+      (type == randr_event_base_ + XCB_RANDR_SCREEN_CHANGE_NOTIFY ||
+       type == randr_event_base_ + XCB_RANDR_NOTIFY)) {
+    Reply<xcb_get_geometry_reply_t> geometry(
+        xcb_get_geometry_reply(connection_, xcb_get_geometry(connection_, screen_->root), nullptr),
+        std::free);
+    if (geometry) refresh_display_layout(geometry->width, geometry->height);
+    return;
+  }
   switch (type) {
   case XCB_MAP_REQUEST: {
     auto* e = reinterpret_cast<xcb_map_request_event_t*>(event);
@@ -1267,7 +1301,7 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
   }
   case XCB_CONFIGURE_NOTIFY: {
     auto* e = reinterpret_cast<xcb_configure_notify_event_t*>(event);
-    if (e->window == screen_->root && (e->width != screen_width_ || e->height != screen_height_))
+    if (e->window == screen_->root)
       update_screen_size(e->width, e->height);
     else if (frame_to_client_.contains(e->window) && e->event == screen_->root)
       update_stacking();

@@ -2,6 +2,7 @@
 
 #include <xcb/xcb.h>
 #include <xcb/xcb_icccm.h>
+#include "display_monitors.hpp"
 
 #include <cstdint>
 #include <array>
@@ -50,10 +51,11 @@ private:
     bool modal{};
     WindowRole role{WindowRole::normal};
     xcb_window_t transient_for{};
+    xcb_atom_t monitor_name{};
     xcb_size_hints_t size_hints{};
     std::string title;
   };
-  struct Monitor { int x{}, y{}, width{}, height{}; };
+  using Monitor = DisplayMonitor;
   struct Dock {
     std::array<std::uint32_t, 12> strut{};
     bool mapped{};
@@ -102,6 +104,7 @@ private:
   xcb_window_t client_for(xcb_window_t window) const;
   xcb_visualtype_t* root_visual() const;
   Monitor monitor_for(const Frame& frame) const;
+  void refresh_display_layout(std::uint16_t width, std::uint16_t height);
 
   xcb_connection_t* connection_{};
   xcb_screen_t* screen_{};
@@ -118,6 +121,8 @@ private:
   xcb_timestamp_t last_event_time_{};
   std::uint16_t screen_width_{};
   std::uint16_t screen_height_{};
+  std::vector<DisplayMonitor> monitors_;
+  std::uint8_t randr_event_base_{};
   DragMode drag_mode_{DragMode::none};
   xcb_window_t drag_client_{};
   int drag_root_x_{};

@@ -211,7 +211,8 @@ bool StatusNotifierPanel::handle(xcb_generic_event_t* event) {
         it->menu_path != "/NO_DBUSMENU") {
       const auto service = it->service;
       active_menu_key_ = key;
-      menu_popup_.open(service, it->menu_path, press->root_x, shell_.panel_height(),
+      menu_popup_.open(service, it->menu_path, press->root_x,
+                       shell_.panel_y() + shell_.panel_height(),
                        [this, key, x = press->root_x, y = press->root_y] {
                          notifier_.context_menu(key, x, y);
                        });
@@ -226,7 +227,8 @@ bool StatusNotifierPanel::handle(xcb_generic_event_t* event) {
       if (!it->menu_path.empty() && it->menu_path != "/NO_DBUSMENU") {
         const auto service = it->service;
         active_menu_key_ = key;
-        menu_popup_.open(service, it->menu_path, press->root_x, shell_.panel_height(),
+        menu_popup_.open(service, it->menu_path, press->root_x,
+                         shell_.panel_y() + shell_.panel_height(),
                          [this, key, x = press->root_x, y = press->root_y] {
                            notifier_.context_menu(key, x, y);
                          });

@@ -25,3 +25,28 @@ instead of relying only on geometry assertions.
 
 The target sizes are also recorded in `AGENTS.md`. Run this skill for future
 layout changes; ordinary non-visual edits do not need this matrix.
+
+## Multiple monitors
+
+Run `ctest --test-dir build -R display_monitors_test --output-on-failure` for
+the monitor selection geometry checks. Xvfb on MidnightBSD reports a single
+full-screen RandR monitor even after `xrandr --setmonitor` succeeds, so the
+isolated resolution script cannot prove behavior with two real monitors.
+
+For a change to RandR handling, also test on an Xorg session with two outputs:
+
+1. Place a 1920×1080 primary monitor on the left and a 3840×2160 monitor on
+   the right. Check that the panel stays within the primary monitor and that
+   opening a folder or Properties dialog places it fully on a visible output.
+2. Make the right monitor primary without changing the overall framebuffer.
+   Check that the panel moves to it. Open a folder and dialog again.
+3. Rearrange the outputs with the same framebuffer dimensions, including a
+   vertical offset or a gap. Check that no window opens in the gap. Maximize
+   and fullscreen an application on each output; each state should use only
+   that output. Check that ordinary windows remain reachable.
+4. Disconnect and reconnect one output. Check that open windows recover onto
+   a visible output, and that the panel and dialogs stay reachable.
+
+Record the output geometry from `xrandr --listmonitors` before and after each
+change, plus screenshots or window geometry for any failure. A root-screen
+resize alone does not cover monitor rearrangement or a primary-output change.

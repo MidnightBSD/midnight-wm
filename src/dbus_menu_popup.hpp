@@ -2,6 +2,7 @@
 
 #include <xcb/xcb.h>
 #include <xcb/xcb_keysyms.h>
+#include "display_monitors.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -56,6 +57,8 @@ private:
   std::function<void()> fallback_;
   int anchor_x_{}, anchor_y_{};
   int screen_width_{}, screen_height_{};
+  std::vector<DisplayMonitor> monitors_;
+  DisplayMonitor popup_monitor_{};
   int menu_width_{244}, row_height_{24}, border_{4};
   double scale_{1.0};
   bool pending_{};

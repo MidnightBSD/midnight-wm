@@ -18,7 +18,13 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   reachable inherited `SSH_AUTH_SOCK`; stop only the fallback ssh-agent owned
   by Midnight Workspace.
 - `src/x11.*` manages external X11 clients, frames, focus, geometry, EWMH, and
-  the root pointer cursor.
+  the root pointer cursor. RandR monitor changes must refresh layout even when
+  the root size stays the same. Keep fullscreen and maximized windows on their
+  named monitor where possible, and recover ordinary windows onto a visible
+  monitor when an output disappears.
+- `src/display_monitors.hpp` queries RandR monitor rectangles and chooses a
+  visible monitor for a point. The shell uses the primary monitor for its panel
+  and desktop shortcuts while keeping the lavender background across the root.
 - `src/shell.*` draws the panel, desktop, menus, folder windows, scrollbars,
   and properties. Programs reads freedesktop `.menu` layouts through Garcon,
   then falls back to desktop entry Categories; preserve the earlier menu levels
@@ -93,7 +99,7 @@ For shell layout and scale changes, check 1280×720, 1920×1080, 2560×1440,
 smaller one. Keep panel controls, menus, folder windows, dialogs, and the
 desktop usable at each size.
 Use `.agents/skills/screen-resolution-checks/SKILL.md` for the repeatable
-isolated display matrix.
+isolated display matrix and its manual two-monitor Xorg checklist.
 Before pushing, use `.agents/skills/pre-push-review/SKILL.md` to run cppcheck
 and review the outgoing diff for basic security issues.
 
