@@ -432,6 +432,7 @@ struct Shell::Impl {
   std::optional<IconChooser> icon_chooser;
   std::uint16_t width{}, height{};
   std::unordered_map<xcb_window_t, Folder> folders;
+  xcb_window_t focused_folder{};
   std::unordered_map<xcb_window_t, GFileMonitor*> monitors;
   std::vector<Item> desktop_items;
   std::vector<Task> tasks;
@@ -925,8 +926,12 @@ struct Shell::Impl {
     std::ranges::sort(ids);
     for (const auto window : ids) {
       const auto& folder = folders.at(window);
-      result.push_back({window, folder.trash ? "Trash" : basename(folder.path), false});
+      result.push_back({window, folder.trash ? "Trash" : basename(folder.path),
+                        window == focused_folder});
     }
+    if (focused_folder)
+      for (auto& task : result)
+        if (task.window != focused_folder) task.active = false;
     return result;
   }
 
@@ -1560,7 +1565,8 @@ struct Shell::Impl {
     folder.y = 75 + 22 * static_cast<int>(folders.size() % 10);
     folder.width = std::min<int>(620, width - 30);
     folder.height = std::min<int>(430, height - 60);
-    folder.window = create_window(folder.x, folder.y, folder.width, folder.height);
+    folder.window = create_window(folder.x, folder.y, folder.width, folder.height,
+                                  XCB_EVENT_MASK_FOCUS_CHANGE);
     folder.items = list_items(path, false);
     xcb_map_window(connection, folder.window);
     xcb_set_input_focus(connection, XCB_INPUT_FOCUS_POINTER_ROOT, folder.window, XCB_CURRENT_TIME);
@@ -1855,6 +1861,7 @@ struct Shell::Impl {
         if (dnd_unregister) dnd_unregister(window);
         xcb_destroy_window(connection, window);
         folders.erase(window);
+        if (focused_folder == window) focused_folder = 0;
         draw_panel();
       }
       else {
@@ -2169,11 +2176,18 @@ bool Shell::handle(xcb_generic_event_t* event) {
     case XCB_BUTTON_RELEASE: window = reinterpret_cast<xcb_button_release_event_t*>(event)->event; break;
     case XCB_MOTION_NOTIFY: window = reinterpret_cast<xcb_motion_notify_event_t*>(event)->event; break;
     case XCB_KEY_PRESS: window = reinterpret_cast<xcb_key_press_event_t*>(event)->event; break;
+    case XCB_FOCUS_IN:
+    case XCB_FOCUS_OUT: window = reinterpret_cast<xcb_focus_in_event_t*>(event)->event; break;
     case XCB_DESTROY_NOTIFY: window = reinterpret_cast<xcb_destroy_notify_event_t*>(event)->window; break;
     default: return false;
   }
   if (!owns(window)) return false;
-  if (type == XCB_EXPOSE) {
+  if (type == XCB_FOCUS_IN && p.folders.contains(window)) {
+    if (p.focused_folder != window) { p.focused_folder = window; p.draw_panel(); }
+  } else if (type == XCB_FOCUS_OUT && p.focused_folder == window) {
+    p.focused_folder = 0;
+    p.draw_panel();
+  } else if (type == XCB_EXPOSE) {
     if (window == p.panel) p.draw_panel();
     else if (window == p.desktop) p.draw_desktop();
     else if (window == p.menu) p.draw_menu();
@@ -2194,7 +2208,11 @@ bool Shell::handle(xcb_generic_event_t* event) {
   } else if (type == XCB_BUTTON_RELEASE) p.pending_icon_window = 0;
   else if (type == XCB_MOTION_NOTIFY) p.motion(reinterpret_cast<xcb_motion_notify_event_t*>(event));
   else if (type == XCB_KEY_PRESS) p.key(reinterpret_cast<xcb_key_press_event_t*>(event));
-  else if (type == XCB_DESTROY_NOTIFY) { p.unwatch(window); p.folders.erase(window); }
+  else if (type == XCB_DESTROY_NOTIFY) {
+    p.unwatch(window);
+    p.folders.erase(window);
+    if (p.focused_folder == window) { p.focused_folder = 0; p.draw_panel(); }
+  }
   return true;
 }
 
