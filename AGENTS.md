@@ -26,7 +26,10 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   visible monitor for a point. The shell uses the primary monitor for its panel
   and desktop shortcuts while keeping the lavender background across the root.
 - `src/shell.*` draws the panel, desktop, menus, folder windows, scrollbars,
-  and properties. Programs reads freedesktop `.menu` layouts through Garcon,
+  and properties. Publish desktop redraws through a complete offscreen X11
+  background pixmap so exposure during dragging never reveals an intermediate
+  color fill. Release replaced pixmaps and do not repaint the desktop on every
+  Expose when its background cache is valid. Programs reads freedesktop `.menu` layouts through Garcon,
   then falls back to desktop entry Categories; preserve the earlier menu levels
   while browsing a category.
   Built-in desktop folders use XDG user directory paths; Documents and Pictures
@@ -133,6 +136,9 @@ For settings UI or live configuration changes, run
 `python3 tests/settings_smoke.py` after building. It checks menu launch, Apply,
 INI preservation, live color/scale changes, open-folder preservation, and
 malformed-file recovery in an isolated session.
+For desktop repaint changes, run `python3 tests/desktop_repaint_smoke.py`;
+it uncovers wallpaper and a live-updated solid background while the WM is
+suspended, verifying that Xorg restores the complete cached desktop.
 Before pushing, use `.agents/skills/pre-push-review/SKILL.md` to run cppcheck
 and review the outgoing diff for basic security issues.
 

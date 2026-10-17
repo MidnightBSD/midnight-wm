@@ -533,6 +533,7 @@ struct Shell::Impl {
   std::uint16_t physical_width{}, physical_height{};
   double scale{1.0};
   Wallpaper wallpaper;
+  xcb_pixmap_t desktop_pixmap{};
   int wallpaper_width{}, wallpaper_height{};
   std::vector<DisplayMonitor> display_monitors;
   DisplayMonitor primary_monitor{};
@@ -701,6 +702,7 @@ struct Shell::Impl {
     if (properties) xcb_destroy_window(connection, properties->window);
     if (panel) xcb_destroy_window(connection, panel);
     if (desktop) xcb_destroy_window(connection, desktop);
+    if (desktop_pixmap) xcb_free_pixmap(connection, desktop_pixmap);
   }
 
   xcb_window_t create_window(int x, int y, int w, int h, std::uint32_t extra_mask = 0) {
@@ -727,6 +729,44 @@ struct Shell::Impl {
     cairo_destroy(cr);
     cairo_surface_flush(surface);
     cairo_surface_destroy(surface);
+    xcb_flush(connection);
+  }
+
+  void paint_desktop(auto&& draw) {
+    if (!visual || !desktop || !physical_width || !physical_height) return;
+    // Build a complete replacement before publishing it. Drawing into the
+    // currently installed background could expose a partly painted image.
+    const auto pixmap = xcb_generate_id(connection);
+    auto* error = xcb_request_check(connection, xcb_create_pixmap_checked(
+        connection, screen->root_depth, pixmap, desktop, physical_width, physical_height));
+    if (error) {
+      std::free(error);
+      return; // Keep the previous complete background if allocation fails.
+    }
+    auto* surface = cairo_xcb_surface_create(connection, pixmap, visual,
+                                             physical_width, physical_height);
+    auto* cr = cairo_create(surface);
+    // Cover the exact physical extent, including fractional-scale edge pixels.
+    cairo_set_source_rgb(cr, config.desktop_color[0], config.desktop_color[1], config.desktop_color[2]);
+    cairo_paint(cr);
+    cairo_scale(cr, scale, scale);
+    draw(cr);
+    const auto status = cairo_status(cr);
+    cairo_destroy(cr);
+    cairo_surface_flush(surface);
+    const bool complete = status == CAIRO_STATUS_SUCCESS &&
+                          cairo_surface_status(surface) == CAIRO_STATUS_SUCCESS;
+    cairo_surface_destroy(surface);
+    if (!complete) {
+      xcb_free_pixmap(connection, pixmap);
+      return;
+    }
+    xcb_change_window_attributes(connection, desktop, XCB_CW_BACK_PIXMAP, &pixmap);
+    // Clear copies the finished background in one server operation. Xorg also
+    // uses it automatically when dragging another window uncovers the desktop.
+    xcb_clear_area(connection, false, desktop, 0, 0, 0, 0);
+    if (desktop_pixmap) xcb_free_pixmap(connection, desktop_pixmap);
+    desktop_pixmap = pixmap;
     xcb_flush(connection);
   }
 
@@ -1390,7 +1430,7 @@ struct Shell::Impl {
         g_warning("Could not load desktop image: %s", config.desktop_image.c_str());
     }
     desktop_scroll_rows = std::clamp(desktop_scroll_rows, 0, desktop_max_scroll());
-    paint(desktop, width, height, [&](cairo_t* cr) {
+    paint_desktop([&](cairo_t* cr) {
       fill(cr, config.desktop_color[0], config.desktop_color[1], config.desktop_color[2], 0, 0, width, height);
       for (const auto& monitor : display_monitors)
         wallpaper.paint(cr, monitor.x / scale, monitor.y / scale,
@@ -2894,7 +2934,9 @@ bool Shell::handle(xcb_generic_event_t* event) {
     p.draw_panel();
   } else if (type == XCB_EXPOSE) {
     if (window == p.panel) p.draw_panel();
-    else if (window == p.desktop) p.draw_desktop();
+    else if (window == p.desktop) {
+      if (!p.desktop_pixmap) p.draw_desktop();
+    }
     else if (window == p.menu) p.draw_menu();
     else if (window == p.submenu) p.draw_submenu();
     else if (window == p.app_menu) p.draw_app_menu();
