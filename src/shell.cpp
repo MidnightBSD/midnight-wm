@@ -4,13 +4,16 @@
 #include "config.hpp"
 #include "desktop_launcher.hpp"
 #include "model.hpp"
+#include "recent_files.hpp"
 #include "store.hpp"
+#include "startup_notification.hpp"
 #include "thumbnail.hpp"
 
 #include <cairo/cairo-xcb.h>
 #include <gio/gio.h>
 #include <gio/gdesktopappinfo.h>
 #include <gdk-pixbuf/gdk-pixbuf.h>
+#include <garcon/garcon.h>
 #include <pango/pangocairo.h>
 #include <xcb/xcb_keysyms.h>
 #include <X11/keysym.h>
@@ -251,7 +254,8 @@ struct TransferCompletion {
   std::function<void(std::expected<void, std::string>)> callback;
 };
 
-enum class MenuAction { open_home, open_desktop, open_trash, new_folder, paste, show_programs,
+enum class MenuAction { noop, open_home, open_desktop, open_trash, new_folder, paste, show_programs,
+                        show_recent, open_recent,
                         show_category, next_categories, previous_categories,
                         launch, next_apps, previous_apps,
                         open_item, open_with, copy, cut, create_shadow, create_template, properties, trash,
@@ -464,11 +468,13 @@ struct Shell::Impl {
   std::unordered_map<std::string, std::string> file_content_types;
   std::unordered_map<std::string, cairo_surface_t*> file_icon_cache;
   ThumbnailCache thumbnail_cache;
+  StartupNotification* startup{};
   cairo_surface_t* logo_surface{};
   std::string icon_theme{selected_icon_theme()};
   std::vector<MenuEntry> menu_entries;
   std::vector<MenuEntry> submenu_entries;
   std::vector<MenuEntry> app_menu_entries;
+  std::vector<RecentFile> recent_menu_files;
   std::size_t category_page{};
   std::size_t selected_category{};
   std::size_t app_page{};
@@ -556,6 +562,58 @@ struct Shell::Impl {
   void reload_apps() {
     for (auto* app : apps) g_object_unref(app);
     apps.clear();
+    app_categories.clear();
+    std::filesystem::path menu_file;
+    const char* prefix = g_getenv("XDG_MENU_PREFIX");
+    const std::string menu_name = std::string(prefix ? prefix : "") + "applications.menu";
+    for (const char* const* dir = g_get_system_config_dirs(); dir && *dir; ++dir) {
+      const auto candidate = std::filesystem::path(*dir) / "menus" / menu_name;
+      if (std::filesystem::is_regular_file(candidate)) { menu_file = candidate; break; }
+    }
+    const auto user_menu = std::filesystem::path(g_get_user_config_dir()) / "menus" / menu_name;
+    if (std::filesystem::is_regular_file(user_menu)) menu_file = user_menu;
+    if (std::filesystem::is_regular_file(menu_file)) {
+      auto* menu = garcon_menu_new_for_path(menu_file.c_str());
+      GError* error = nullptr;
+      if (menu && garcon_menu_load(menu, nullptr, &error)) {
+        const auto collect = [&](auto&& self, GarconMenu* current, const std::string& parent) -> void {
+          auto* directory = garcon_menu_get_directory(current);
+          const char* menu_label = directory ? garcon_menu_directory_get_name(directory) : nullptr;
+          if (!menu_label || !*menu_label) menu_label = garcon_menu_element_get_name(GARCON_MENU_ELEMENT(current));
+          const std::string label = parent.empty() ? (menu_label ? menu_label : "Other") :
+            parent + " / " + (menu_label ? menu_label : "Other");
+          GList* elements = garcon_menu_get_elements(current);
+          AppCategory category{label, directory && garcon_menu_directory_get_icon_name(directory) ?
+            garcon_menu_directory_get_icon_name(directory) : "applications-other", {}};
+          for (GList* node = elements; node; node = node->next) {
+            auto* element = GARCON_MENU_ELEMENT(node->data);
+            if (!garcon_menu_element_get_visible(element)) continue;
+            if (GARCON_IS_MENU_ITEM(element)) {
+              auto* file = garcon_menu_item_get_file(GARCON_MENU_ITEM(element));
+              char* path = file ? g_file_get_path(file) : nullptr;
+              auto* app = path ? g_desktop_app_info_new_from_filename(path) : nullptr;
+              g_free(path);
+              if (app && g_app_info_should_show(G_APP_INFO(app))) {
+                category.apps.push_back(apps.size());
+                apps.push_back(G_APP_INFO(app));
+              } else if (app) g_object_unref(app);
+            } else if (GARCON_IS_MENU(element)) {
+              self(self, GARCON_MENU(element), label);
+            }
+          }
+          g_list_free(elements);
+          if (!category.apps.empty()) app_categories.push_back(std::move(category));
+        };
+        GList* root_elements = garcon_menu_get_elements(menu);
+        for (GList* node = root_elements; node; node = node->next)
+          if (GARCON_IS_MENU(node->data) && garcon_menu_element_get_visible(GARCON_MENU_ELEMENT(node->data)))
+            collect(collect, GARCON_MENU(node->data), "");
+        g_list_free(root_elements);
+      }
+      if (error) g_error_free(error);
+      if (menu) g_object_unref(menu);
+      if (!app_categories.empty()) return;
+    }
     GList* list = g_app_info_get_all();
     for (GList* cursor = list; cursor; cursor = cursor->next) {
       auto* app = G_APP_INFO(cursor->data);
@@ -1010,6 +1068,8 @@ struct Shell::Impl {
       const int volume_x = this->volume_x();
       const bool show_volume = this->show_volume();
       if (transfers_in_progress) text(cr, "Working…", (show_volume ? volume_x : tray_x()) - 85, 8, 80, 11);
+      else if (startup && startup->pending_count())
+        text(cr, "Starting…", (show_volume ? volume_x : tray_x()) - 85, 8, 80, 11);
       for (std::size_t i = 0; i < layout.visible; ++i) {
         const auto& task = all_tasks[i];
         const int x = task_start_x + static_cast<int>(i) * task_step;
@@ -1364,7 +1424,9 @@ struct Shell::Impl {
     }
     auto* file = g_file_new_for_path(dialog.path.c_str());
     GList* files = g_list_append(nullptr, file);
-    const gboolean launched = g_app_info_launch(app, files, nullptr, &error);
+    const gboolean launched = startup ? startup->launch(app, files, &error) :
+      g_app_info_launch(app, files, nullptr, &error);
+    if (launched) remember_file(dialog.path);
     g_list_free(files);
     g_object_unref(file);
     close_open_with_dialog();
@@ -1673,6 +1735,7 @@ struct Shell::Impl {
   void show_launcher() {
     std::vector<MenuEntry> entries{{"Home", MenuAction::open_home}, {"Desktop", MenuAction::open_desktop},
                                    {"Programs ▶", MenuAction::show_programs},
+                                   {"Recent Documents ▶", MenuAction::show_recent},
                                    {"New folder on desktop", MenuAction::new_folder},
                                    {"Paste on desktop", MenuAction::paste},
                                    {"Trash", MenuAction::open_trash},
@@ -1713,6 +1776,16 @@ struct Shell::Impl {
     reload_apps();
     if (app_categories.empty()) { show_notice("No applications available"); return; }
     show_categories();
+  }
+
+  void show_recent() {
+    const auto limit = static_cast<std::size_t>(std::clamp<int>((height - 130) / row_height, 1, 18));
+    recent_menu_files = recent_files(limit);
+    std::vector<MenuEntry> entries;
+    for (std::size_t i = 0; i < recent_menu_files.size(); ++i)
+      entries.push_back({recent_menu_files[i].title, MenuAction::open_recent, i});
+    if (entries.empty()) entries.push_back({"No recent documents", MenuAction::noop});
+    show_submenu(std::move(entries), 3);
   }
 
   void show_category(std::size_t category, std::size_t page = 0, int row = -1) {
@@ -1809,10 +1882,14 @@ struct Shell::Impl {
     return Store::desktop_path();
   }
 
-  void open_folder(const std::filesystem::path& path) {
+  bool open_folder(const std::filesystem::path& path,
+                   const std::optional<std::filesystem::path>& selected = std::nullopt) {
     std::error_code ec;
     const bool trash = path == "trash:///";
-    if (!trash && !std::filesystem::is_directory(path, ec)) { show_notice("Folder unavailable: " + path.string()); return; }
+    if (!trash && !std::filesystem::is_directory(path, ec)) {
+      show_notice("Folder unavailable: " + path.string());
+      return false;
+    }
     Folder folder;
     folder.path = path;
     folder.trash = trash;
@@ -1823,10 +1900,24 @@ struct Shell::Impl {
     folder.window = create_window(folder.x, folder.y, folder.width, folder.height,
                                   XCB_EVENT_MASK_FOCUS_CHANGE);
     folder.items = list_items(path, false);
+    bool found = !selected;
+    if (selected) {
+      const auto normalized = selected->lexically_normal();
+      for (std::size_t i = 0; i < folder.items.size(); ++i) {
+        if (folder.items[i].path.lexically_normal() != normalized) continue;
+        folder.selected = static_cast<int>(i);
+        const auto scroll = folder_scroll(folder);
+        const int columns = std::max(1, scroll.view_width / icon_width);
+        folder.scroll_rows = std::max(0, static_cast<int>(i) / columns - scroll.visible_rows + 1);
+        found = true;
+        break;
+      }
+    }
     xcb_map_window(connection, folder.window);
     xcb_set_input_focus(connection, XCB_INPUT_FOCUS_POINTER_ROOT, folder.window, XCB_CURRENT_TIME);
     auto [it, inserted] = folders.emplace(folder.window, std::move(folder));
     if (inserted) { watch_directory(it->first, path); register_drop(it->first); draw_folder(it->second); draw_panel(); }
+    return inserted && found;
   }
 
   void open_item(const Item& item) {
@@ -1848,13 +1939,15 @@ struct Shell::Impl {
     std::error_code ec;
     if (std::filesystem::is_directory(path, ec)) { open_folder(path); return; }
     if (path.extension() == ".desktop") {
-      if (auto launched = launch_desktop_entry(path, Store::desktop_path()); !launched)
+      if (auto launched = launch_desktop_entry(path, Store::desktop_path(), startup); !launched)
         show_notice("Launcher: " + launched.error());
       return;
     }
     const auto uri = file_uri(path);
     GError* error = nullptr;
-    g_app_info_launch_default_for_uri(uri.c_str(), nullptr, &error);
+    const bool launched = startup ? startup->launch_default_uri(uri.c_str(), &error) :
+      g_app_info_launch_default_for_uri(uri.c_str(), nullptr, &error);
+    if (launched) remember_file(path);
     if (error) {
       show_notice(std::string("Open failed: ") + error->message);
       g_error_free(error);
@@ -1863,14 +1956,28 @@ struct Shell::Impl {
 
   void execute(MenuEntry entry, int row = -1) {
     const auto destination = owner_path();
-    if (entry.action != MenuAction::show_programs && entry.action != MenuAction::next_apps &&
+    if (entry.action != MenuAction::show_programs && entry.action != MenuAction::show_recent &&
+        entry.action != MenuAction::next_apps &&
         entry.action != MenuAction::previous_apps && entry.action != MenuAction::show_category &&
         entry.action != MenuAction::next_categories &&
         entry.action != MenuAction::previous_categories) close_menu();
     switch (entry.action) {
+      case MenuAction::noop: break;
       case MenuAction::open_home: open_folder(g_get_home_dir()); break;
       case MenuAction::open_desktop: open_folder(Store::desktop_path()); break;
       case MenuAction::open_trash: open_folder("trash:///"); break;
+      case MenuAction::show_recent: show_recent(); break;
+      case MenuAction::open_recent: {
+        if (entry.index >= recent_menu_files.size()) break;
+        const auto path = recent_menu_files[entry.index].path;
+        const auto uri = file_uri(path);
+        GError* error = nullptr;
+        const bool launched = startup ? startup->launch_default_uri(uri.c_str(), &error) :
+          g_app_info_launch_default_for_uri(uri.c_str(), nullptr, &error);
+        if (launched) remember_file(path);
+        if (error) { show_notice(std::string("Open failed: ") + error->message); g_error_free(error); }
+        break;
+      }
       case MenuAction::new_folder: {
         auto result = model.create_folder(destination);
         if (result) refresh(); else show_notice("Could not create folder: " + result.error());
@@ -1896,7 +2003,8 @@ struct Shell::Impl {
       case MenuAction::launch: {
         if (entry.index >= apps.size()) break;
         GError* error = nullptr;
-        g_app_info_launch(apps[entry.index], nullptr, nullptr, &error);
+        if (startup) startup->launch(apps[entry.index], nullptr, &error);
+        else g_app_info_launch(apps[entry.index], nullptr, nullptr, &error);
         if (error) {
           show_notice(std::string("Launch failed: ") + error->message);
           g_error_free(error);
@@ -2485,6 +2593,10 @@ bool Shell::handle(xcb_generic_event_t* event) {
     default: return false;
   }
   if (!owns(window)) return false;
+  if (p.startup && type == XCB_BUTTON_PRESS)
+    p.startup->record_user_time(reinterpret_cast<xcb_button_press_event_t*>(event)->time);
+  else if (p.startup && type == XCB_KEY_PRESS)
+    p.startup->record_user_time(reinterpret_cast<xcb_key_press_event_t*>(event)->time);
   if (type == XCB_FOCUS_IN && p.folders.contains(window)) {
     if (p.focused_folder != window) { p.focused_folder = window; p.draw_panel(); }
   } else if (type == XCB_FOCUS_OUT && p.focused_folder == window) {
@@ -2570,6 +2682,13 @@ void Shell::set_exit_handler(std::function<void()> handler) {
   impl_->exit_handler = std::move(handler);
 }
 
+void Shell::set_startup_notification(StartupNotification* startup) {
+  impl_->startup = startup;
+  if (startup) startup->set_change_handler([this](std::size_t) {
+    if (impl_->panel) impl_->draw_panel();
+  });
+}
+
 void Shell::set_screen_size(std::uint16_t width, std::uint16_t height) {
   auto& p = *impl_;
   if (p.menu && (p.width != width || p.height != height)) p.close_menu();
@@ -2595,6 +2714,26 @@ void Shell::set_file_clipboard_handlers(
     std::function<void(std::function<void(std::vector<std::filesystem::path>, bool)>)> request) {
   impl_->clipboard_set = std::move(set);
   impl_->clipboard_request = std::move(request);
+}
+
+bool Shell::show_folder(const std::filesystem::path& path,
+                        const std::optional<std::filesystem::path>& selected) {
+  return impl_->open_folder(path, selected);
+}
+
+bool Shell::show_item_properties(const std::filesystem::path& path) {
+  auto& p = *impl_;
+  if (path.empty() || path == "/") return false;
+  const auto items = p.list_items(path.parent_path(), false);
+  const auto normalized = path.lexically_normal();
+  const auto it = std::ranges::find_if(items, [&](const Item& item) {
+    return item.path.lexically_normal() == normalized;
+  });
+  if (it == items.end()) return false;
+  p.close_menu();
+  p.menu_owner = 0;
+  p.show_properties(*it);
+  return true;
 }
 
 void Shell::set_dnd_handlers(std::function<void(xcb_window_t, DropHandler)> register_target,

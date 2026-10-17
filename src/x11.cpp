@@ -1,5 +1,6 @@
 #include "x11.hpp"
 #include "shell.hpp"
+#include "startup_notification.hpp"
 
 #include <cairo/cairo-xcb.h>
 #include <pango/pangocairo.h>
@@ -532,6 +533,7 @@ void X11WindowManager::map(xcb_window_t client) {
   constexpr std::uint32_t normal[] = {XCB_ICCCM_WM_STATE_NORMAL, XCB_WINDOW_NONE};
   xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, client, atom("WM_STATE"), atom("WM_STATE"), 32, 2, normal);
   update_window_state(it->second);
+  if (startup_) startup_->window_mapped(client);
   if (it->second.role != WindowRole::splash) focus(client);
   else { restack_layers(); update_stacking(); }
 }
@@ -1049,6 +1051,9 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
   case XCB_PROPERTY_NOTIFY: {
     auto* e = reinterpret_cast<xcb_property_notify_event_t*>(event);
     last_event_time_ = e->time;
+    if (startup_ && frames_.contains(e->window) &&
+        (e->atom == atom("_NET_STARTUP_ID") || e->atom == XCB_ATOM_WM_CLASS))
+      startup_->window_mapped(e->window);
     if (docks_.contains(e->window) &&
         (e->atom == atom("_NET_WM_STRUT_PARTIAL") || e->atom == atom("_NET_WM_STRUT")))
       refresh_dock(e->window);

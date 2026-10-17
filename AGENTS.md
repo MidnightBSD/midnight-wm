@@ -14,8 +14,9 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
 - `src/x11.*` manages external X11 clients, frames, focus, geometry, EWMH, and
   the root pointer cursor.
 - `src/shell.*` draws the panel, desktop, menus, folder windows, scrollbars,
-  and properties. Programs uses desktop entry Categories and three cascading
-  menu windows; preserve the earlier menu levels while browsing a category.
+  and properties. Programs reads freedesktop `.menu` layouts through Garcon,
+  then falls back to desktop entry Categories; preserve the earlier menu levels
+  while browsing a category.
   Built-in desktop folders use XDG user directory paths; Documents and Pictures
   are visible by default, while Music, Videos, and Public Share have config
   switches. Hidden shortcut metadata remains in the workspace database.
@@ -45,6 +46,12 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   thumbnail cache for images; keep thumbnail URI and freshness metadata valid.
 - `src/notifications.*` implements the session D-Bus notification service and
   draws passive X11 popups only when no other daemon owns the service name.
+- `src/file_manager1.*` serves D-Bus folder, item, and properties requests.
+  `src/recent_files.*` reads and updates the shared XBEL recent-files history.
+- `src/startup_notification.*` tracks launches over the X11 startup protocol;
+  `src/xsettings.*` publishes theme and input settings only when its X11
+  selection is free. Programs uses Garcon to read freedesktop `.menu` layouts,
+  falling back to its built-in categories.
 - `data/` contains the Xsession entry, example configuration, and MidnightBSD
   launcher logo sourced from `MidnightBSD/www/art/logo`.
 - `packaging/mports/x11-wm/midnight-wm/` contains an experimental mport.

@@ -8,12 +8,14 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace midnight {
 
 class Store;
+class StartupNotification;
 
 struct Task {
   xcb_window_t window{};
@@ -33,6 +35,10 @@ public:
   void tick();
   void set_tasks(std::vector<Task> tasks);
   void set_screen_size(std::uint16_t width, std::uint16_t height);
+  // Open a local folder, optionally revealing one of its items.
+  [[nodiscard]] bool show_folder(const std::filesystem::path& path,
+                                 const std::optional<std::filesystem::path>& selected = std::nullopt);
+  [[nodiscard]] bool show_item_properties(const std::filesystem::path& path);
   [[nodiscard]] xcb_window_t panel_window() const;
   void set_tray_width(int width);
   [[nodiscard]] int tray_width() const;
@@ -41,6 +47,7 @@ public:
   [[nodiscard]] cairo_surface_t* themed_icon_surface(const std::string& name);
   [[nodiscard]] const std::array<double, 3>& accent_color() const;
   void set_exit_handler(std::function<void()> handler);
+  void set_startup_notification(StartupNotification* startup);
   [[nodiscard]] bool owns(xcb_window_t window) const;
   void set_file_clipboard_handlers(
       std::function<void(const std::vector<std::filesystem::path>&, bool)> set,

@@ -8,17 +8,19 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(DEPS REQUIRED IMPORTED_TARGET
   xcb xcb-icccm xcb-keysyms xcb-xfixes xcb-randr cairo-xcb pangocairo
-  gio-2.0 gio-unix-2.0 gdk-pixbuf-2.0 sqlite3)
+  gio-2.0 gio-unix-2.0 gdk-pixbuf-2.0 garcon-1 sqlite3)
 
 add_library(midnight_core src/store.cpp src/model.cpp src/config.cpp src/audio.cpp
-  src/desktop_launcher.cpp src/thumbnail.cpp)
+  src/desktop_launcher.cpp src/thumbnail.cpp src/recent_files.cpp
+  src/startup_notification.cpp)
 target_include_directories(midnight_core PUBLIC src)
 target_link_libraries(midnight_core PUBLIC PkgConfig::DEPS)
 target_compile_options(midnight_core PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(midnight-wm src/main.cpp src/x11.cpp src/shell.cpp src/clipboard.cpp src/dnd.cpp
   src/tray.cpp src/status_notifier.cpp src/status_panel.cpp src/dbus_menu.cpp
-  src/dbus_menu_popup.cpp src/autostart.cpp src/notifications.cpp)
+  src/dbus_menu_popup.cpp src/autostart.cpp src/notifications.cpp src/xsettings.cpp
+  src/file_manager1.cpp)
 target_link_libraries(midnight-wm PRIVATE midnight_core)
 target_compile_options(midnight-wm PRIVATE -Wall -Wextra -Wpedantic)
 
@@ -48,6 +50,15 @@ add_test(NAME desktop_launcher_test COMMAND desktop_launcher_test)
 add_executable(thumbnail_test tests/thumbnail_test.cpp)
 target_link_libraries(thumbnail_test PRIVATE midnight_core)
 add_test(NAME thumbnail_test COMMAND thumbnail_test)
+add_executable(recent_files_test tests/recent_files_test.cpp)
+target_link_libraries(recent_files_test PRIVATE midnight_core)
+add_test(NAME recent_files_test COMMAND recent_files_test)
+find_program(DBUS_RUN_SESSION dbus-run-session)
+if(DBUS_RUN_SESSION)
+  add_executable(file_manager1_test tests/file_manager1_test.cpp src/file_manager1.cpp)
+  target_link_libraries(file_manager1_test PRIVATE midnight_core)
+  add_test(NAME file_manager1_test COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:file_manager1_test>)
+endif()
 
 set(CPACK_PACKAGE_NAME "midnight-wm")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")

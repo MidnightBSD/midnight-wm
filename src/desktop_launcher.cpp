@@ -1,4 +1,5 @@
 #include "desktop_launcher.hpp"
+#include "startup_notification.hpp"
 
 #include <gio/gdesktopappinfo.h>
 #include <gio/gio.h>
@@ -81,13 +82,15 @@ std::expected<DesktopLauncherInfo, std::string> desktop_launcher_info(
 }
 
 std::expected<void, std::string> launch_desktop_entry(
-    const std::filesystem::path& path, const std::filesystem::path& desktop_directory) {
+    const std::filesystem::path& path, const std::filesystem::path& desktop_directory,
+    StartupNotification* startup) {
   if (!trusted_entry(path, desktop_directory))
     return std::unexpected("Desktop launcher is not trusted. Place it on the Desktop and mark it executable to launch it.");
   auto app = read_entry(path);
   if (!app) return std::unexpected("Invalid desktop application entry: " + path.string());
   GError* error = nullptr;
-  if (!g_app_info_launch(G_APP_INFO(app.get()), nullptr, nullptr, &error))
+  if (!(startup ? startup->launch(G_APP_INFO(app.get()), nullptr, &error) :
+        g_app_info_launch(G_APP_INFO(app.get()), nullptr, nullptr, &error)))
     return std::unexpected(error_text(error));
   return {};
 }

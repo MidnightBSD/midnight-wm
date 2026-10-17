@@ -11,6 +11,7 @@
 
 namespace midnight {
 class Shell;
+class StartupNotification;
 
 class X11WindowManager {
 public:
@@ -22,6 +23,7 @@ public:
   bool initialize();
   void handle(xcb_generic_event_t* event);
   void update_screen_size(std::uint16_t width, std::uint16_t height);
+  void set_startup_notification(StartupNotification* startup) { startup_ = startup; }
 
 private:
   enum class WindowRole { normal, dialog, utility, splash };
@@ -102,6 +104,7 @@ private:
   xcb_connection_t* connection_{};
   xcb_screen_t* screen_{};
   Shell& shell_;
+  StartupNotification* startup_{};
   std::map<xcb_window_t, Frame> frames_;
   std::vector<xcb_window_t> client_order_;
   std::map<xcb_window_t, Dock> docks_;

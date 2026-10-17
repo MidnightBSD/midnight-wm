@@ -6,7 +6,7 @@ MidnightBSD. The current target is MidnightBSD 4.2 with Clang 19 and C++23.
 ## Build
 
 The build needs CMake, pkg-config, XCB (including icccm, keysyms, XFixes, and
-RandR), Cairo, Pango, GLib/GIO, GdkPixbuf, and SQLite 3.
+RandR), Cairo, Pango, GLib/GIO, GdkPixbuf, Garcon, and SQLite 3.
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -39,15 +39,21 @@ in your X session to use the button. When windows exceed the available taskbar
 space, use the small down-arrow button after the visible tasks to open the
 remaining window list.
 The list has pages when needed, and selecting a window raises it. Open
-**Programs** in the launcher to browse categories such as Accessories, Internet,
-Multimedia, and System. Open a category to see its installed X11 applications
-with their desktop entry icons. Apps without a standard main category appear in
-**Other**; an app may appear in more than one category. Long lists have pages.
+**Programs** in the launcher to browse applications using the freedesktop
+`applications.menu` layout (including user overrides, merges, and exclusions).
+When none is installed, Midnight uses its built-in categories. The menu displays
+submenus as named categories and paginates long lists. **Recent Documents**
+reads the shared `recently-used.xbel` history; files opened here are recorded
+there too.
 The launcher and category menus stay open while you browse, then close when you
 launch an app or click outside.
 The launcher also opens Trash directly, just above **Exit X11 session…**.
 Launcher icons follow the selected freedesktop icon theme, including inherited
 themes and the `hicolor` fallback.
+Launching an application that supports startup notification shows “Starting…”
+until its window appears or the launch times out. The XSETTINGS owner publishes
+the GTK icon theme, font, DPI, and double-click values to X11 clients, while
+leaving an existing settings owner in control.
 Use the speaker buttons marked `−` and `+`, or the mouse wheel over the volume
 control, to change output volume in 5% steps. The crossed speaker button sets
 both master mixer channels to zero and restores their previous levels when
@@ -73,6 +79,8 @@ scrollbars.
 In a folder window, **File** opens the selected item, creates a folder, shows
 properties, moves an item to Trash, or closes the window. **Edit** offers copy,
 cut, and paste. **View** refreshes the folder and sorts by name or type.
+On a session D-Bus, Midnight also offers `org.freedesktop.FileManager1`, so
+applications can open folders, reveal selected files, and show file properties.
 
 The `Home`, `Downloads`, `Documents`, `Pictures`, `Trash`, and `Templates`
 shortcuts appear on the desktop by default. Downloads, Documents, Pictures, and

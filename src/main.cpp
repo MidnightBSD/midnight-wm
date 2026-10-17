@@ -1,15 +1,18 @@
 #include "autostart.hpp"
 #include "clipboard.hpp"
 #include "dnd.hpp"
+#include "file_manager1.hpp"
 #include "dbus_menu.hpp"
 #include "dbus_menu_popup.hpp"
 #include "notifications.hpp"
 #include "shell.hpp"
+#include "startup_notification.hpp"
 #include "status_notifier.hpp"
 #include "status_panel.hpp"
 #include "store.hpp"
 #include "tray.hpp"
 #include "x11.hpp"
+#include "xsettings.hpp"
 
 #include <glib.h>
 #include <xcb/xcb.h>
@@ -73,12 +76,24 @@ int main(int argc, char** argv) {
       midnight::Shell shell(connection, screen, store);
       midnight::X11Clipboard clipboard(connection, screen->root);
       midnight::X11WindowManager wm(connection, screen, shell);
+      midnight::StartupNotification startup(connection, screen, screen_number);
+      wm.set_startup_notification(&startup);
+      shell.set_startup_notification(&startup);
       midnight::StatusNotifier notifier;
       midnight::DbusMenu dbus_menu;
       midnight::X11SystemTray tray(connection, screen, screen_number, shell);
       midnight::DbusMenuPopup menu_popup(connection, screen, shell, dbus_menu);
       midnight::StatusNotifierPanel status_panel(connection, screen, shell, tray, notifier, menu_popup);
       midnight::Notifications notifications(connection, screen, shell);
+      midnight::FileManager1 file_manager(
+          [&shell](const std::filesystem::path& path,
+                   const std::optional<std::filesystem::path>& selected) {
+            return shell.show_folder(path, selected);
+          },
+          [&shell](const std::filesystem::path& path) {
+            return shell.show_item_properties(path);
+          });
+      midnight::XSettings xsettings(connection, screen, screen_number);
       shell.set_exit_handler([] { running = false; });
       if (!dnd.initialize()) std::cerr << "XDND integration unavailable\n";
       if (!clipboard.initialize()) std::cerr << "XFixes clipboard integration unavailable\n";
@@ -105,12 +120,15 @@ int main(int argc, char** argv) {
         if (!notifier.initialize()) std::cerr << "Status notifier D-Bus unavailable\n";
         // Existing notification daemons retain the standard session name.
         (void)notifications.initialize();
+        if (!file_manager.initialize()) std::cerr << "FileManager1 D-Bus unavailable\n";
+        (void)xsettings.initialize();
         midnight::launch_autostart();
 
         pollfd display{.fd = xcb_get_file_descriptor(connection), .events = POLLIN, .revents = 0};
         while (running && !xcb_connection_has_error(connection)) {
           while (auto* event = xcb_poll_for_event(connection)) {
-            if (!clipboard.handle(event) && !dnd.handle(event) && !notifications.handle(event) &&
+            if (!clipboard.handle(event) && !dnd.handle(event) && !startup.handle(event) &&
+                !xsettings.handle(event) && !notifications.handle(event) &&
                 !menu_popup.handle(event) &&
                 !shell.handle(event) &&
                 !tray.handle(event) && !status_panel.handle(event)) wm.handle(event);
@@ -122,6 +140,8 @@ int main(int argc, char** argv) {
           status_panel.tick();
           dnd.tick();
           notifications.tick();
+          startup.tick();
+          xsettings.tick();
           xcb_flush(connection);
           if (poll(&display, 1, 100) < 0 && errno != EINTR) break;
         }

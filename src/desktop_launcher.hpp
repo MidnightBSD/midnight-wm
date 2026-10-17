@@ -5,6 +5,7 @@
 #include <string>
 
 namespace midnight {
+class StartupNotification;
 
 struct DesktopLauncherInfo {
   std::string name;
@@ -20,6 +21,7 @@ struct DesktopLauncherInfo {
 // Recheck trust immediately before launching. A desktop entry is trusted when
 // it is a regular, user-owned, owner-executable file directly on the Desktop.
 [[nodiscard]] std::expected<void, std::string> launch_desktop_entry(
-    const std::filesystem::path& path, const std::filesystem::path& desktop_directory);
+    const std::filesystem::path& path, const std::filesystem::path& desktop_directory,
+    StartupNotification* startup = nullptr);
 
 } // namespace midnight
