@@ -27,6 +27,8 @@
 namespace midnight {
 namespace {
 constexpr int panel_height = 30;
+constexpr int volume_group_width = 102;
+constexpr int volume_clock_gap = 4;
 constexpr int row_height = 24;
 constexpr int icon_width = 90;
 constexpr int icon_height = 90;
@@ -573,7 +575,7 @@ struct Shell::Impl {
            logo_surface ? 84 : 102, 11, false, true);
       int x = 128;
       const int clock_x = std::max(140, static_cast<int>(width) - 105);
-      const int volume_x = clock_x - 130;
+      const int volume_x = clock_x - volume_group_width - volume_clock_gap;
       const bool show_volume = volume_x >= 245;
       const int task_limit = (show_volume ? volume_x : clock_x) - (transfers_in_progress ? 85 : 0);
       if (transfers_in_progress) text(cr, "Working…", (show_volume ? volume_x : clock_x) - 85, 8, 80, 11);
@@ -593,9 +595,8 @@ struct Shell::Impl {
              volume_x + 23, 8, 36, 11, false, true);
         bevel(cr, volume_x + 64, 5, 18, 24);
         sound_icon(cr, volume_x + 65, 9, SoundIcon::louder);
-        bevel(cr, volume_x + 84, 5, 42, 24, volume_state && volume_state->muted);
+        bevel(cr, volume_x + 84, 5, 18, 24, volume_state && volume_state->muted);
         sound_icon(cr, volume_x + 85, 9, SoundIcon::mute);
-        text(cr, "Mute", volume_x + 102, 10, 24, 8, false, true);
       }
       bevel(cr, clock_x, 5, 99, 24, true);
       text(cr, clock_text(config.clock_format), clock_x + 7, 8, 86, 11, false, true);
@@ -1148,8 +1149,9 @@ struct Shell::Impl {
     }
     if (event->event == panel) {
       const int clock_x = std::max(140, static_cast<int>(width) - 105);
-      const int volume_x = clock_x - 130;
-      if (volume_x >= 245 && event->event_x >= volume_x && event->event_x < volume_x + 126) {
+      const int volume_x = clock_x - volume_group_width - volume_clock_gap;
+      if (volume_x >= 245 && event->event_x >= volume_x &&
+          event->event_x < volume_x + volume_group_width) {
         std::expected<VolumeState, std::string> changed = std::unexpected("No volume action");
         const int relative_x = event->event_x - volume_x;
         if (event->detail == 4 || (event->detail == 1 && relative_x >= 64 && relative_x < 82))
