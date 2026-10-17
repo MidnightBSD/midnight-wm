@@ -94,6 +94,8 @@ smaller one. Keep panel controls, menus, folder windows, dialogs, and the
 desktop usable at each size.
 Use `.agents/skills/screen-resolution-checks/SKILL.md` for the repeatable
 isolated display matrix.
+Before pushing, use `.agents/skills/pre-push-review/SKILL.md` to run cppcheck
+and review the outgoing diff for basic security issues.
 
 For file operations, test copy, move, name collisions, and an unsuccessful
 operation. GIO Trash can be unsupported on `/tmp` mounts on MidnightBSD; treat
