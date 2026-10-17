@@ -77,6 +77,9 @@ struct StatusNotifier::Impl : std::enable_shared_from_this<Impl> {
     std::string owner;
     guint signal_id{};
     unsigned interface_index{};
+    // One GetAll per item at a time; signals during a fetch request one more.
+    bool fetching{};
+    bool fetch_pending{};
   };
   std::map<std::string, ItemMeta> metadata;
   std::map<std::string, std::string> hosts;
@@ -177,6 +180,11 @@ void fetch_done(GObject* object, GAsyncResult* result, gpointer data) {
   std::unique_ptr<FetchContext> context(static_cast<FetchContext*>(data));
   auto self = context->owner.lock();
   if (!self) return;
+  bool refetch = false;
+  if (auto meta = self->metadata.find(context->key); meta != self->metadata.end()) {
+    meta->second.fetching = false;
+    refetch = std::exchange(meta->second.fetch_pending, false);
+  }
   GError* error = nullptr;
   GVariant* reply = g_dbus_connection_call_finish(G_DBUS_CONNECTION(object), result, &error);
   if (!reply) {
@@ -241,12 +249,16 @@ void fetch_done(GObject* object, GAsyncResult* result, gpointer data) {
   g_variant_unref(dict);
   g_variant_unref(reply);
   self->changed_now();
+  if (refetch) self->fetch(context->key, context->interface_index);
 }
 }  // namespace
 
 void StatusNotifier::Impl::fetch(const std::string& key, unsigned index) {
   auto* item = find(key);
-  if (!item || index >= item_ifaces.size()) return;
+  auto meta = metadata.find(key);
+  if (!item || meta == metadata.end() || index >= item_ifaces.size()) return;
+  if (meta->second.fetching) { meta->second.fetch_pending = true; return; }
+  meta->second.fetching = true;
   g_dbus_connection_call(bus, item->service.c_str(), item->path.c_str(), properties_iface,
                          "GetAll", g_variant_new("(s)", item_ifaces[index]),
                          G_VARIANT_TYPE("(a{sv})"), G_DBUS_CALL_FLAGS_NONE, 2000,

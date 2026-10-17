@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <utility>
 
 namespace midnight {
 namespace {
@@ -76,7 +77,7 @@ bool StatusNotifierPanel::initialize() {
     window_ = XCB_WINDOW_NONE;
     return false;
   }
-  notifier_.set_changed_handler([this] { refresh(); });
+  notifier_.set_changed_handler([this] { refresh_pending_ = true; });
   refresh();
   return true;
 }
@@ -99,6 +100,7 @@ void StatusNotifierPanel::refresh() {
 
 void StatusNotifierPanel::tick() {
   if (!window_) return;
+  if (std::exchange(refresh_pending_, false)) { refresh(); return; }
   const double scale = shell_.ui_scale();
   const int padding = scaled(base_padding, scale);
   const int slot_width = scaled(base_slot_width, scale);

@@ -148,6 +148,9 @@ struct Notifications::Impl {
     std::string default_action;
     unsigned urgency{1};
     bool resident{};
+    // Set by Notify; tick() creates, paints, and maps dirty popups once per
+    // main-loop pass, so a burst of D-Bus calls does no X work per message.
+    bool dirty{};
     int height() const { return popup_height + int((actions.size() + 1) / 2) * 28; }
     std::chrono::steady_clock::time_point deadline{};
     bool expires{};
@@ -162,6 +165,7 @@ struct Notifications::Impl {
   bool owns_name{};
   std::uint32_t next_id{1};
   std::vector<Popup> popups;
+  bool layout_dirty{};
 
   Impl(xcb_connection_t* c, xcb_screen_t* s, Shell& sh) : connection(c), screen(s), shell(sh) {}
   ~Impl() {
@@ -188,10 +192,10 @@ struct Notifications::Impl {
   bool close(std::uint32_t id, std::uint32_t reason) {
     auto it = std::ranges::find(popups, id, &Popup::id);
     if (it == popups.end()) return false;
-    xcb_destroy_window(connection, it->window);
+    if (it->window) xcb_destroy_window(connection, it->window);
     if (it->pixmap) xcb_free_pixmap(connection, it->pixmap);
     popups.erase(it);
-    reposition();
+    layout_dirty = true;
     emit_closed(id, reason);
     return true;
   }
@@ -203,6 +207,7 @@ struct Notifications::Impl {
     for (std::size_t i = 0; i < popups.size(); ++i) {
       const int y = std::max(34, std::min(top, int(screen->height_in_pixels) - popups[i].height() - gap));
       top += popups[i].height() + gap;
+      if (!popups[i].window) continue;
       const std::uint32_t coordinates[] = {std::uint32_t(x), std::uint32_t(y)};
       xcb_configure_window(connection, popups[i].window,
                            XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y, coordinates);
@@ -211,7 +216,7 @@ struct Notifications::Impl {
 
   void paint(Popup& popup) {
     auto* visual = root_visual(screen);
-    if (!visual) return;
+    if (!visual || !popup.window) return;
     const int width = std::min(popup_width, std::max(1, int(screen->width_in_pixels) - 2 * gap));
     const auto pixmap = xcb_generate_id(connection);
     auto cookie = xcb_create_pixmap_checked(connection, screen->root_depth, pixmap,
@@ -294,22 +299,8 @@ struct Notifications::Impl {
     if (!existing) {
       Popup popup;
       popup.id = id;
-      popup.window = xcb_generate_id(connection);
-      const int width = std::min(popup_width, std::max(1, int(screen->width_in_pixels) - 2 * gap));
-      const std::uint32_t attributes[] = {screen->white_pixel, 1,
-          XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_BUTTON_PRESS};
-      const auto cookie = xcb_create_window_checked(
-          connection, screen->root_depth, popup.window, screen->root, 0, 0,
-          width, popup_height, 0, XCB_WINDOW_CLASS_INPUT_OUTPUT, screen->root_visual,
-          XCB_CW_BACK_PIXEL | XCB_CW_OVERRIDE_REDIRECT | XCB_CW_EVENT_MASK, attributes);
-      if (auto* error = xcb_request_check(connection, cookie)) {
-        std::free(error);
-        return id;
-      }
       popups.push_back(std::move(popup));
       existing = &popups.back();
-      reposition();
-
     }
     existing->summary = summary ? summary : "";
     existing->body = plain_body(body);
@@ -336,11 +327,45 @@ struct Notifications::Impl {
     existing->expires = timeout != 0 && existing->urgency != 2;
     existing->deadline = std::chrono::steady_clock::now() +
                          std::chrono::milliseconds(timeout < 0 ? default_timeout : timeout);
-    reposition();
-    paint(*existing);
-    xcb_map_window(connection, existing->window);
-    xcb_flush(connection);
+    existing->dirty = true;
+    layout_dirty = true;
     return id;
+  }
+
+  // Create, lay out, and paint popups changed since the last pass. At most
+  // max_popups exist, which bounds the X work per pass.
+  void render() {
+    for (auto it = popups.begin(); it != popups.end();) {
+      if (it->window) { ++it; continue; }
+      const auto window = xcb_generate_id(connection);
+      const int width = std::min(popup_width, std::max(1, int(screen->width_in_pixels) - 2 * gap));
+      const std::uint32_t attributes[] = {screen->white_pixel, 1,
+          XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_BUTTON_PRESS};
+      const auto cookie = xcb_create_window_checked(
+          connection, screen->root_depth, window, screen->root, 0, 0,
+          width, popup_height, 0, XCB_WINDOW_CLASS_INPUT_OUTPUT, screen->root_visual,
+          XCB_CW_BACK_PIXEL | XCB_CW_OVERRIDE_REDIRECT | XCB_CW_EVENT_MASK, attributes);
+      if (auto* error = xcb_request_check(connection, cookie)) {
+        // As before, a popup that cannot be shown reports no NotificationClosed.
+        std::free(error);
+        it = popups.erase(it);
+        layout_dirty = true;
+        continue;
+      }
+      it->window = window;
+      ++it;
+    }
+    if (layout_dirty) reposition();
+    layout_dirty = false;
+    bool painted = false;
+    for (auto& popup : popups) {
+      if (!popup.dirty) continue;
+      popup.dirty = false;
+      paint(popup);
+      xcb_map_window(connection, popup.window);
+      painted = true;
+    }
+    if (painted) xcb_flush(connection);
   }
 
   static void method(GDBusConnection*, const gchar*, const gchar*, const gchar*,
@@ -466,5 +491,6 @@ void Notifications::tick() {
       self.close(self.popups[i].id, 1);
     else ++i;
   }
+  self.render();
 }
 }  // namespace midnight
