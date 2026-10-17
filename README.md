@@ -32,6 +32,8 @@ The list has pages when needed, and selecting a window raises it. Open
 **Programs** in the launcher to browse installed X11
 applications with their desktop entry icons. The launcher stays open while you
 browse Programs pages and closes when you select an item or click outside.
+Launcher icons follow the selected freedesktop icon theme, including inherited
+themes and the `hicolor` fallback.
 Use the speaker buttons marked `−` and `+`, or the mouse wheel over the volume
 control, to change output volume in 5% steps. The crossed speaker button sets
 both master mixer channels to zero and restores their previous levels when
@@ -70,11 +72,20 @@ Copy `share/midnight-wm/config.ini` to
 `~/.config/midnight-wm/config.ini`) to change the panel label, clock format,
 and workspace colors. Restart the session after editing it.
 
+At startup, Midnight Workspace launches eligible `.desktop` files from the
+user and system XDG autostart directories. A user entry takes precedence over
+a system entry with the same filename. `Hidden`, `OnlyShowIn`, `NotShowIn`, and
+`TryExec` are respected. Direct `.xinitrc` sessions identify themselves as
+`MidnightWorkspace` through `XDG_CURRENT_DESKTOP` when it is not already set.
+
 Alt+Tab switches tasks, and Alt+F4 closes the active window. The title bar
 provides minimize, maximize, and close buttons; drag the title bar to move a
 window and its lower frame to resize it. The launcher menu has **Exit X11
 session…**, which asks for confirmation before closing the window manager. When
 started as the Xsession or from `.xinitrc`, that also ends the X11 session.
+X11 clients can supply ICCCM size, focus, and transient-window hints. The
+window manager also handles EWMH fullscreen, maximize, hidden, skip-taskbar,
+and frame-extents requests.
 The desktop sets an explicit pointer cursor as soon as the window manager starts.
 The default silver panel follows the OS/2 Warp 4 references, with a lavender
 desktop. Existing user configuration overrides those defaults.

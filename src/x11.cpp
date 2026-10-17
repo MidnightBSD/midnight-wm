@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -57,10 +58,12 @@ X11WindowManager::~X11WindowManager() {
     xcb_change_save_set(connection_, XCB_SET_MODE_DELETE, client);
     xcb_destroy_window(connection_, frame.frame);
   }
-  if (support_window_) xcb_destroy_window(connection_, support_window_);
-  xcb_delete_property(connection_, screen_->root, atom("_NET_SUPPORTING_WM_CHECK"));
-  xcb_delete_property(connection_, screen_->root, atom("_NET_ACTIVE_WINDOW"));
-  xcb_delete_property(connection_, screen_->root, atom("_NET_CLIENT_LIST"));
+  if (support_window_) {
+    xcb_destroy_window(connection_, support_window_);
+    xcb_delete_property(connection_, screen_->root, atom("_NET_SUPPORTING_WM_CHECK"));
+    xcb_delete_property(connection_, screen_->root, atom("_NET_ACTIVE_WINDOW"));
+    xcb_delete_property(connection_, screen_->root, atom("_NET_CLIENT_LIST"));
+  }
   if (root_cursor_) {
     const std::uint32_t none = XCB_NONE;
     xcb_change_window_attributes(connection_, screen_->root, XCB_CW_CURSOR, &none);
@@ -133,6 +136,88 @@ xcb_atom_t X11WindowManager::atom(const std::string& name) {
   return value;
 }
 
+void X11WindowManager::update_icccm_hints(Frame& frame) {
+  frame.size_hints = {};
+  xcb_icccm_get_wm_normal_hints_reply(connection_,
+      xcb_icccm_get_wm_normal_hints(connection_, frame.client), &frame.size_hints, nullptr);
+  xcb_icccm_wm_hints_t hints{};
+  frame.accepts_input = true;
+  if (xcb_icccm_get_wm_hints_reply(connection_, xcb_icccm_get_wm_hints(connection_, frame.client),
+                                   &hints, nullptr) && (hints.flags & XCB_ICCCM_WM_HINT_INPUT))
+    frame.accepts_input = hints.input != 0;
+  frame.takes_focus = false;
+  auto cookie = xcb_get_property(connection_, 0, frame.client, atom("WM_PROTOCOLS"), XCB_ATOM_ATOM, 0, 32);
+  Reply<xcb_get_property_reply_t> protocols(xcb_get_property_reply(connection_, cookie, nullptr), std::free);
+  if (protocols && protocols->type == XCB_ATOM_ATOM) {
+    auto* values = static_cast<xcb_atom_t*>(xcb_get_property_value(protocols.get()));
+    for (int i = 0; i < xcb_get_property_value_length(protocols.get()) / 4; ++i)
+      if (values[i] == atom("WM_TAKE_FOCUS")) frame.takes_focus = true;
+  }
+  frame.transient_for = XCB_WINDOW_NONE;
+  xcb_icccm_get_wm_transient_for_reply(connection_,
+      xcb_icccm_get_wm_transient_for(connection_, frame.client), &frame.transient_for, nullptr);
+}
+
+void X11WindowManager::constrain_size(const Frame& frame, std::uint16_t& width,
+                                      std::uint16_t& height) const {
+  const auto& hints = frame.size_hints;
+  int minimum_w = std::clamp<int>(
+      (hints.flags & XCB_ICCCM_SIZE_HINT_P_MIN_SIZE) ? hints.min_width : min_width,
+      1, std::numeric_limits<std::uint16_t>::max());
+  int minimum_h = std::clamp<int>(
+      (hints.flags & XCB_ICCCM_SIZE_HINT_P_MIN_SIZE) ? hints.min_height : min_height,
+      1, std::numeric_limits<std::uint16_t>::max());
+  const int maximum_w = (hints.flags & XCB_ICCCM_SIZE_HINT_P_MAX_SIZE) && hints.max_width > 0
+      ? std::clamp<int>(hints.max_width, 1, std::numeric_limits<std::uint16_t>::max())
+      : std::numeric_limits<std::uint16_t>::max();
+  const int maximum_h = (hints.flags & XCB_ICCCM_SIZE_HINT_P_MAX_SIZE) && hints.max_height > 0
+      ? std::clamp<int>(hints.max_height, 1, std::numeric_limits<std::uint16_t>::max())
+      : std::numeric_limits<std::uint16_t>::max();
+  minimum_w = std::min(minimum_w, maximum_w);
+  minimum_h = std::min(minimum_h, maximum_h);
+  int w = std::clamp<int>(width, minimum_w, maximum_w);
+  int h = std::clamp<int>(height, minimum_h, maximum_h);
+  if ((hints.flags & XCB_ICCCM_SIZE_HINT_P_ASPECT) &&
+      hints.min_aspect_num > 0 && hints.min_aspect_den > 0 &&
+      hints.max_aspect_num > 0 && hints.max_aspect_den > 0) {
+    if (std::int64_t(w) * hints.min_aspect_den < std::int64_t(h) * hints.min_aspect_num) {
+      const auto wanted = std::int64_t(w) * hints.min_aspect_den / hints.min_aspect_num;
+      if (wanted >= minimum_h) h = static_cast<int>(wanted);
+      else w = static_cast<int>(std::min<std::int64_t>(maximum_w,
+          (std::int64_t(h) * hints.min_aspect_num + hints.min_aspect_den - 1) / hints.min_aspect_den));
+    }
+    if (std::int64_t(w) * hints.max_aspect_den > std::int64_t(h) * hints.max_aspect_num) {
+      const auto wanted = std::int64_t(h) * hints.max_aspect_num / hints.max_aspect_den;
+      if (wanted >= minimum_w) w = static_cast<int>(wanted);
+      else h = static_cast<int>(std::min<std::int64_t>(maximum_h,
+          (std::int64_t(w) * hints.max_aspect_den + hints.max_aspect_num - 1) / hints.max_aspect_num));
+    }
+  }
+  const int base_w = (hints.flags & XCB_ICCCM_SIZE_HINT_BASE_SIZE) ? hints.base_width : 0;
+  const int base_h = (hints.flags & XCB_ICCCM_SIZE_HINT_BASE_SIZE) ? hints.base_height : 0;
+  if (hints.flags & XCB_ICCCM_SIZE_HINT_P_RESIZE_INC) {
+    if (hints.width_inc > 0 && w >= base_w)
+      w = base_w + (w - base_w) / hints.width_inc * hints.width_inc;
+    if (hints.height_inc > 0 && h >= base_h)
+      h = base_h + (h - base_h) / hints.height_inc * hints.height_inc;
+  }
+  width = std::clamp(w, minimum_w, maximum_w);
+  height = std::clamp(h, minimum_h, maximum_h);
+}
+
+void X11WindowManager::update_window_state(const Frame& frame) {
+  std::vector<xcb_atom_t> states;
+  if (frame.maximized) {
+    states.push_back(atom("_NET_WM_STATE_MAXIMIZED_VERT"));
+    states.push_back(atom("_NET_WM_STATE_MAXIMIZED_HORZ"));
+  }
+  if (frame.fullscreen) states.push_back(atom("_NET_WM_STATE_FULLSCREEN"));
+  if (frame.minimized) states.push_back(atom("_NET_WM_STATE_HIDDEN"));
+  if (frame.skip_taskbar) states.push_back(atom("_NET_WM_STATE_SKIP_TASKBAR"));
+  xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, frame.client, atom("_NET_WM_STATE"),
+                      XCB_ATOM_ATOM, 32, states.size(), states.data());
+}
+
 xcb_visualtype_t* X11WindowManager::root_visual() const {
   auto depth = xcb_screen_allowed_depths_iterator(screen_);
   for (; depth.rem; xcb_depth_next(&depth)) {
@@ -203,7 +288,8 @@ void X11WindowManager::set_root_properties() {
                           "_NET_ACTIVE_WINDOW", "_NET_CLOSE_WINDOW", "_NET_WM_NAME",
                           "_NET_WM_STATE", "_NET_WM_STATE_FULLSCREEN",
                           "_NET_WM_STATE_MAXIMIZED_VERT", "_NET_WM_STATE_MAXIMIZED_HORZ",
-                          "_NET_FRAME_EXTENTS",
+                          "_NET_WM_STATE_HIDDEN", "_NET_WM_STATE_SKIP_TASKBAR",
+                          "_NET_FRAME_EXTENTS", "_NET_REQUEST_FRAME_EXTENTS",
                           "_NET_NUMBER_OF_DESKTOPS", "_NET_CURRENT_DESKTOP", "_NET_WORKAREA",
                           "_NET_DESKTOP_GEOMETRY", "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_DOCK"})
     supported.push_back(atom(key));
@@ -258,8 +344,26 @@ void X11WindowManager::manage(xcb_window_t window) {
   frame.frame = xcb_generate_id(connection_);
   frame.x = geometry->x;
   frame.y = std::max<int>(geometry->y, panel_height);
-  frame.width = std::max<std::uint16_t>(geometry->width, min_width);
-  frame.height = std::max<std::uint16_t>(geometry->height, min_height);
+  frame.width = geometry->width;
+  frame.height = geometry->height;
+  update_icccm_hints(frame);
+  constrain_size(frame, frame.width, frame.height);
+  if (auto parent = frames_.find(frame.transient_for); parent != frames_.end()) {
+    frame.x = parent->second.x + (int(parent->second.width) - int(frame.width)) / 2;
+    frame.y = parent->second.y + (int(parent->second.height) - int(frame.height)) / 2;
+  }
+  auto state_cookie = xcb_get_property(connection_, 0, window, atom("_NET_WM_STATE"), XCB_ATOM_ATOM, 0, 32);
+  Reply<xcb_get_property_reply_t> initial_states(xcb_get_property_reply(connection_, state_cookie, nullptr), std::free);
+  bool initial_maximized = false, initial_fullscreen = false;
+  if (initial_states && initial_states->type == XCB_ATOM_ATOM) {
+    auto* states = static_cast<xcb_atom_t*>(xcb_get_property_value(initial_states.get()));
+    for (int i = 0; i < xcb_get_property_value_length(initial_states.get()) / 4; ++i) {
+      if (states[i] == atom("_NET_WM_STATE_SKIP_TASKBAR")) frame.skip_taskbar = true;
+      if (states[i] == atom("_NET_WM_STATE_FULLSCREEN")) initial_fullscreen = true;
+      if (states[i] == atom("_NET_WM_STATE_MAXIMIZED_VERT") ||
+          states[i] == atom("_NET_WM_STATE_MAXIMIZED_HORZ")) initial_maximized = true;
+    }
+  }
   frame.ignore_unmap = attr->map_state != XCB_MAP_STATE_UNMAPPED ? 1 : 0;
   frame.mapped = attr->map_state != XCB_MAP_STATE_UNMAPPED;
   const std::uint32_t mask = XCB_EVENT_MASK_EXPOSURE | XCB_EVENT_MASK_BUTTON_PRESS |
@@ -283,6 +387,8 @@ void X11WindowManager::manage(xcb_window_t window) {
   update_title(frame);
   frame_to_client_[frame.frame] = window;
   frames_[window] = frame;
+  if (initial_fullscreen) set_fullscreen(window, true);
+  else if (initial_maximized) set_maximized(window, true);
   if (frame.mapped) map(window);
   update_client_list();
   update_tasks();
@@ -295,11 +401,18 @@ void X11WindowManager::unmanage(xcb_window_t client, bool destroyed) {
   if (!destroyed) {
     xcb_reparent_window(connection_, client, screen_->root, frame.x + border, frame.y + title_height);
     xcb_change_save_set(connection_, XCB_SET_MODE_DELETE, client);
+    xcb_delete_property(connection_, client, atom("WM_STATE"));
+    xcb_delete_property(connection_, client, atom("_NET_WM_STATE"));
+    xcb_delete_property(connection_, client, atom("_NET_FRAME_EXTENTS"));
   }
   xcb_destroy_window(connection_, frame.frame);
   frame_to_client_.erase(frame.frame);
   frames_.erase(it);
-  if (active_ == client) active_ = 0;
+  if (active_ == client) {
+    active_ = XCB_WINDOW_NONE;
+    xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, screen_->root, atom("_NET_ACTIVE_WINDOW"),
+                        XCB_ATOM_WINDOW, 32, 1, &active_);
+  }
   update_client_list();
   update_tasks();
 }
@@ -308,21 +421,44 @@ void X11WindowManager::map(xcb_window_t client) {
   auto it = frames_.find(client);
   if (it == frames_.end()) return;
   it->second.mapped = true;
+  it->second.minimized = false;
   xcb_map_window(connection_, it->second.frame);
   xcb_map_window(connection_, client);
   constexpr std::uint32_t normal[] = {XCB_ICCCM_WM_STATE_NORMAL, XCB_WINDOW_NONE};
   xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, client, atom("WM_STATE"), atom("WM_STATE"), 32, 2, normal);
+  update_window_state(it->second);
   focus(client);
 }
 
-void X11WindowManager::focus(xcb_window_t client) {
+void X11WindowManager::focus(xcb_window_t client, xcb_timestamp_t time) {
   auto it = frames_.find(client);
   if (it == frames_.end() || !it->second.mapped) return;
   auto old = active_;
   active_ = client;
-  xcb_set_input_focus(connection_, XCB_INPUT_FOCUS_POINTER_ROOT, client, XCB_CURRENT_TIME);
+  if (it->second.accepts_input)
+    xcb_set_input_focus(connection_, XCB_INPUT_FOCUS_POINTER_ROOT, client, time);
+  else if (!it->second.takes_focus)
+    xcb_set_input_focus(connection_, XCB_INPUT_FOCUS_POINTER_ROOT, XCB_INPUT_FOCUS_POINTER_ROOT, time);
+  const auto focus_time = time == XCB_CURRENT_TIME ? last_event_time_ : time;
+  if (it->second.takes_focus && focus_time != XCB_CURRENT_TIME) {
+    xcb_client_message_event_t event{};
+    event.response_type = XCB_CLIENT_MESSAGE;
+    event.format = 32;
+    event.window = client;
+    event.type = atom("WM_PROTOCOLS");
+    event.data.data32[0] = atom("WM_TAKE_FOCUS");
+    event.data.data32[1] = focus_time;
+    xcb_send_event(connection_, 0, client, XCB_EVENT_MASK_NO_EVENT,
+                   reinterpret_cast<const char*>(&event));
+  }
   const std::uint32_t stack[] = {XCB_STACK_MODE_ABOVE};
   xcb_configure_window(connection_, it->second.frame, XCB_CONFIG_WINDOW_STACK_MODE, stack);
+  for (auto& [child, transient] : frames_) {
+    if (transient.transient_for != client || !transient.mapped) continue;
+    const std::uint32_t values[] = {it->second.frame, XCB_STACK_MODE_ABOVE};
+    xcb_configure_window(connection_, transient.frame,
+                         XCB_CONFIG_WINDOW_SIBLING | XCB_CONFIG_WINDOW_STACK_MODE, values);
+  }
   xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, screen_->root, atom("_NET_ACTIVE_WINDOW"),
                       XCB_ATOM_WINDOW, 32, 1, &client);
   if (auto previous = frames_.find(old); previous != frames_.end()) draw_frame(previous->second);
@@ -341,7 +477,8 @@ void X11WindowManager::update_client_list() {
 
 void X11WindowManager::update_tasks() {
   std::vector<Task> tasks;
-  for (auto& [client, frame] : frames_) tasks.push_back({client, frame.title, client == active_});
+  for (auto& [client, frame] : frames_)
+    if (!frame.skip_taskbar) tasks.push_back({client, frame.title, client == active_});
   shell_.set_tasks(std::move(tasks));
 }
 
@@ -433,8 +570,14 @@ void X11WindowManager::close(xcb_window_t client) {
 void X11WindowManager::toggle_maximize(xcb_window_t client) {
   auto it = frames_.find(client);
   if (it == frames_.end()) return;
+  set_maximized(client, !it->second.maximized);
+}
+
+void X11WindowManager::set_maximized(xcb_window_t client, bool enabled) {
+  auto it = frames_.find(client);
+  if (it == frames_.end() || it->second.maximized == enabled || it->second.fullscreen) return;
   auto& frame = it->second;
-  if (!frame.maximized) {
+  if (enabled) {
     frame.old_x = frame.x; frame.old_y = frame.y;
     frame.old_width = frame.width; frame.old_height = frame.height;
     const auto monitor = monitor_for(frame);
@@ -446,17 +589,15 @@ void X11WindowManager::toggle_maximize(xcb_window_t client) {
     frame.x = frame.old_x; frame.y = frame.old_y;
     frame.width = frame.old_width; frame.height = frame.old_height;
   }
-  frame.maximized = !frame.maximized;
-  std::vector<xcb_atom_t> states;
-  if (frame.maximized) states = {atom("_NET_WM_STATE_MAXIMIZED_VERT"), atom("_NET_WM_STATE_MAXIMIZED_HORZ")};
-  xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, client, atom("_NET_WM_STATE"),
-                      XCB_ATOM_ATOM, 32, states.size(), states.data());
+  frame.maximized = enabled;
+  update_window_state(frame);
   resize_frame(frame);
 }
 
 void X11WindowManager::set_fullscreen(xcb_window_t client, bool enabled) {
   auto it = frames_.find(client);
   if (it == frames_.end() || it->second.fullscreen == enabled) return;
+  if (enabled && it->second.maximized) set_maximized(client, false);
   auto& frame = it->second;
   if (enabled) {
     frame.old_x = frame.x; frame.old_y = frame.y;
@@ -469,9 +610,7 @@ void X11WindowManager::set_fullscreen(xcb_window_t client, bool enabled) {
     frame.width = frame.old_width; frame.height = frame.old_height;
   }
   frame.fullscreen = enabled;
-  const auto state = atom("_NET_WM_STATE_FULLSCREEN");
-  xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, client, atom("_NET_WM_STATE"),
-                      XCB_ATOM_ATOM, 32, enabled ? 1 : 0, enabled ? &state : nullptr);
+  update_window_state(frame);
   resize_frame(frame);
   if (enabled) {
     const std::uint32_t above[] = {XCB_STACK_MODE_ABOVE};
@@ -484,9 +623,15 @@ void X11WindowManager::minimize(xcb_window_t client) {
   if (it == frames_.end()) return;
   xcb_unmap_window(connection_, it->second.frame);
   it->second.mapped = false;
+  it->second.minimized = true;
   constexpr std::uint32_t iconic[] = {XCB_ICCCM_WM_STATE_ICONIC, XCB_WINDOW_NONE};
   xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, client, atom("WM_STATE"), atom("WM_STATE"), 32, 2, iconic);
-  if (active_ == client) active_ = 0;
+  update_window_state(it->second);
+  if (active_ == client) {
+    active_ = XCB_WINDOW_NONE;
+    xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, screen_->root, atom("_NET_ACTIVE_WINDOW"),
+                        XCB_ATOM_WINDOW, 32, 1, &active_);
+  }
   update_tasks();
 }
 
@@ -580,8 +725,9 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
     if (!f.maximized && !f.fullscreen) {
       if (e->value_mask & XCB_CONFIG_WINDOW_X) f.x = e->x;
       if (e->value_mask & XCB_CONFIG_WINDOW_Y) f.y = e->y;
-      if (e->value_mask & XCB_CONFIG_WINDOW_WIDTH) f.width = std::max(e->width, min_width);
-      if (e->value_mask & XCB_CONFIG_WINDOW_HEIGHT) f.height = std::max(e->height, min_height);
+      if (e->value_mask & XCB_CONFIG_WINDOW_WIDTH) f.width = e->width;
+      if (e->value_mask & XCB_CONFIG_WINDOW_HEIGHT) f.height = e->height;
+      constrain_size(f, f.width, f.height);
       resize_frame(f);
     }
     xcb_configure_notify_event_t notify{};
@@ -614,23 +760,33 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
   }
   case XCB_PROPERTY_NOTIFY: {
     auto* e = reinterpret_cast<xcb_property_notify_event_t*>(event);
-    if (auto it = frames_.find(e->window); it != frames_.end() &&
-        (e->atom == atom("_NET_WM_NAME") || e->atom == XCB_ATOM_WM_NAME)) {
-      update_title(it->second); draw_frame(it->second); update_tasks();
+    last_event_time_ = e->time;
+    if (auto it = frames_.find(e->window); it != frames_.end()) {
+      if (e->atom == atom("_NET_WM_NAME") || e->atom == XCB_ATOM_WM_NAME) {
+        update_title(it->second); draw_frame(it->second); update_tasks();
+      } else if (e->atom == XCB_ATOM_WM_NORMAL_HINTS || e->atom == XCB_ATOM_WM_HINTS ||
+                 e->atom == atom("WM_PROTOCOLS") || e->atom == XCB_ATOM_WM_TRANSIENT_FOR) {
+        update_icccm_hints(it->second);
+        if (!it->second.maximized && !it->second.fullscreen) {
+          constrain_size(it->second, it->second.width, it->second.height);
+          resize_frame(it->second);
+        }
+      }
     }
     break;
   }
   case XCB_BUTTON_PRESS: {
     auto* e = reinterpret_cast<xcb_button_press_event_t*>(event);
+    last_event_time_ = e->time;
     const auto client = client_for(e->event);
     if (!client) break;
     if (e->event == client) {
-      focus(client);
+      focus(client, e->time);
       xcb_allow_events(connection_, XCB_ALLOW_REPLAY_POINTER, e->time);
       break;
     }
     auto& f = frames_.at(client);
-    focus(client);
+    focus(client, e->time);
     if (e->detail != 1) break;
     const int x = e->event_x, y = e->event_y;
     if (y < title_height && x > int(f.width + 2 * border) - 74) {
@@ -656,8 +812,11 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
       f.x = drag_x_ + e->root_x - drag_root_x_;
       f.y = drag_y_ + e->root_y - drag_root_y_;
     } else {
-      f.width = std::max<int>(min_width, int(drag_width_) + e->root_x - drag_root_x_);
-      f.height = std::max<int>(min_height, int(drag_height_) + e->root_y - drag_root_y_);
+      f.width = std::clamp<int>(int(drag_width_) + e->root_x - drag_root_x_, 1,
+                                std::numeric_limits<std::uint16_t>::max());
+      f.height = std::clamp<int>(int(drag_height_) + e->root_y - drag_root_y_, 1,
+                                 std::numeric_limits<std::uint16_t>::max());
+      constrain_size(f, f.width, f.height);
     }
     resize_frame(f);
     break;
@@ -668,6 +827,7 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
     break;
   case XCB_KEY_PRESS: {
     auto* e = reinterpret_cast<xcb_key_press_event_t*>(event);
+    last_event_time_ = e->time;
     if (!(e->state & XCB_MOD_MASK_1)) break;
     auto* symbols = xcb_key_symbols_alloc(connection_);
     if (!symbols) break;
@@ -679,17 +839,32 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
   }
   case XCB_CLIENT_MESSAGE: {
     auto* e = reinterpret_cast<xcb_client_message_event_t*>(event);
-    if (e->type == atom("_NET_ACTIVE_WINDOW")) {
+    if (e->type == atom("_NET_REQUEST_FRAME_EXTENTS")) {
+      const std::uint32_t extents[] = {border, border, title_height, border};
+      xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, e->window, atom("_NET_FRAME_EXTENTS"),
+                          XCB_ATOM_CARDINAL, 32, 4, extents);
+    } else if (e->type == atom("_NET_ACTIVE_WINDOW")) {
+      if (e->data.data32[1]) last_event_time_ = e->data.data32[1];
       if (frames_.contains(e->window)) { restore(e->window); focus(e->window); }
     } else if (e->type == atom("_NET_CLOSE_WINDOW")) close(e->window);
     else if (e->type == atom("_NET_WM_STATE")) {
-      auto state = e->data.data32[1];
-      if (state == atom("_NET_WM_STATE_FULLSCREEN")) {
-        auto it = frames_.find(e->window);
-        if (it != frames_.end()) set_fullscreen(e->window, e->data.data32[0] == 1 ||
-            (e->data.data32[0] == 2 && !it->second.fullscreen));
-      } else if (state == atom("_NET_WM_STATE_MAXIMIZED_VERT") ||
-                 state == atom("_NET_WM_STATE_MAXIMIZED_HORZ")) toggle_maximize(e->window);
+      auto it = frames_.find(e->window);
+      if (it == frames_.end() || e->format != 32 || e->data.data32[0] > 2) break;
+      const auto action = e->data.data32[0];
+      const auto next = [action](bool current) { return action == 2 ? !current : action == 1; };
+      const auto first = e->data.data32[1], second = e->data.data32[2];
+      if (first == atom("_NET_WM_STATE_FULLSCREEN") || second == atom("_NET_WM_STATE_FULLSCREEN"))
+        set_fullscreen(e->window, next(it->second.fullscreen));
+      if (first == atom("_NET_WM_STATE_MAXIMIZED_VERT") ||
+          first == atom("_NET_WM_STATE_MAXIMIZED_HORZ") ||
+          second == atom("_NET_WM_STATE_MAXIMIZED_VERT") ||
+          second == atom("_NET_WM_STATE_MAXIMIZED_HORZ"))
+        set_maximized(e->window, next(it->second.maximized));
+      if (first == atom("_NET_WM_STATE_SKIP_TASKBAR") || second == atom("_NET_WM_STATE_SKIP_TASKBAR")) {
+        it->second.skip_taskbar = next(it->second.skip_taskbar);
+        update_window_state(it->second);
+        update_tasks();
+      }
     }
     break;
   }

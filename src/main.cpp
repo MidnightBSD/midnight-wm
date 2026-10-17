@@ -1,3 +1,4 @@
+#include "autostart.hpp"
 #include "clipboard.hpp"
 #include "dnd.hpp"
 #include "shell.hpp"
@@ -33,6 +34,11 @@ int main(int argc, char** argv) {
 
   std::signal(SIGINT, stop);
   std::signal(SIGTERM, stop);
+
+  // Display managers may supply multiple desktop names. Keep that value when
+  // present, and identify direct .xinitrc sessions for desktop entry filters.
+  if (!std::getenv("XDG_CURRENT_DESKTOP") || !*std::getenv("XDG_CURRENT_DESKTOP"))
+    g_setenv("XDG_CURRENT_DESKTOP", "MidnightWorkspace", true);
 
   int screen_number = 0;
   xcb_connection_t* connection = xcb_connect(nullptr, &screen_number);
@@ -82,6 +88,7 @@ int main(int argc, char** argv) {
 
       if (!wm.initialize() || !shell.initialize()) result = 1;
       else {
+        midnight::launch_autostart();
 
         pollfd display{.fd = xcb_get_file_descriptor(connection), .events = POLLIN, .revents = 0};
         while (running && !xcb_connection_has_error(connection)) {

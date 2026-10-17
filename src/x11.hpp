@@ -1,6 +1,7 @@
 #pragma once
 
 #include <xcb/xcb.h>
+#include <xcb/xcb_icccm.h>
 
 #include <cstdint>
 #include <map>
@@ -37,6 +38,12 @@ private:
     bool maximized{};
     bool fullscreen{};
     bool mapped{};
+    bool minimized{};
+    bool accepts_input{true};
+    bool takes_focus{};
+    bool skip_taskbar{};
+    xcb_window_t transient_for{};
+    xcb_size_hints_t size_hints{};
     std::string title;
   };
   struct Monitor { int x{}, y{}, width{}, height{}; };
@@ -51,7 +58,11 @@ private:
   void manage(xcb_window_t window);
   void unmanage(xcb_window_t client, bool destroyed);
   void map(xcb_window_t client);
-  void focus(xcb_window_t client);
+  void focus(xcb_window_t client, xcb_timestamp_t time = XCB_CURRENT_TIME);
+  void update_icccm_hints(Frame& frame);
+  void constrain_size(const Frame& frame, std::uint16_t& width, std::uint16_t& height) const;
+  void update_window_state(const Frame& frame);
+  void set_maximized(xcb_window_t client, bool enabled);
   void close(xcb_window_t client);
   void toggle_maximize(xcb_window_t client);
   void set_fullscreen(xcb_window_t client, bool enabled);
@@ -76,6 +87,7 @@ private:
   xcb_window_t support_window_{};
   xcb_cursor_t root_cursor_{};
   xcb_window_t active_{};
+  xcb_timestamp_t last_event_time_{};
   std::uint16_t screen_width_{};
   std::uint16_t screen_height_{};
   DragMode drag_mode_{DragMode::none};

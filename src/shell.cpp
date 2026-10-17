@@ -16,13 +16,16 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <ctime>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <numbers>
 #include <optional>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace midnight {
@@ -41,8 +44,70 @@ constexpr int icon_width = 90;
 constexpr int icon_height = 90;
 constexpr int folder_header = 55;
 constexpr int scrollbar_width = 18;
+constexpr int launcher_icon_size = 18;
 
 using Item = ShellItem;
+
+std::vector<std::string> icon_theme_list(GKeyFile* file, const char* group, const char* key) {
+  std::vector<std::string> values;
+  char* raw = g_key_file_get_string(file, group, key, nullptr);
+  if (!raw) return values;
+  // Icon Theme lists use commas, unlike the semicolon lists in desktop entries.
+  for (char* part = raw; part && *part;) {
+    char* next = std::strchr(part, ',');
+    if (next) *next++ = '\0';
+    if (*g_strstrip(part)) values.emplace_back(part);
+    part = next;
+  }
+  g_free(raw);
+  return values;
+}
+
+std::string selected_icon_theme() {
+  const auto settings = std::filesystem::path(g_get_user_config_dir()) / "gtk-3.0/settings.ini";
+  auto* file = g_key_file_new();
+  std::string theme;
+  if (g_key_file_load_from_file(file, settings.c_str(), G_KEY_FILE_NONE, nullptr)) {
+    char* value = g_key_file_get_string(file, "Settings", "gtk-icon-theme-name", nullptr);
+    if (value) { theme = value; g_free(value); }
+  }
+  g_key_file_unref(file);
+  if (!theme.empty()) return theme;
+
+  auto* source = g_settings_schema_source_get_default();
+  auto* schema = source ? g_settings_schema_source_lookup(source, "org.gnome.desktop.interface", TRUE) : nullptr;
+  if (schema && g_settings_schema_has_key(schema, "icon-theme")) {
+    auto* settings_object = g_settings_new_full(schema, nullptr, nullptr);
+    char* value = g_settings_get_string(settings_object, "icon-theme");
+    if (value) { theme = value; g_free(value); }
+    g_object_unref(settings_object);
+  }
+  if (schema) g_settings_schema_unref(schema);
+  return theme.empty() ? "hicolor" : theme;
+}
+
+struct IconDirectory {
+  std::filesystem::path relative;
+  int size{launcher_icon_size};
+  int min_size{launcher_icon_size};
+  int max_size{launcher_icon_size};
+  int threshold{2};
+  int scale{1};
+  std::string type{"Threshold"};
+
+  int distance(int wanted) const {
+    int low = (size - threshold) * scale;
+    int high = (size + threshold) * scale;
+    if (type == "Fixed") low = high = size * scale;
+    else if (type == "Scalable") { low = min_size * scale; high = max_size * scale; }
+    return wanted < low ? low - wanted : wanted > high ? wanted - high : 0;
+  }
+};
+
+struct IconTheme {
+  std::vector<IconDirectory> directories;
+  std::vector<std::string> inherits;
+};
 
 struct Folder {
   xcb_window_t window{};
@@ -320,11 +385,12 @@ struct Shell::Impl {
   std::vector<Item> desktop_items;
   std::vector<Task> tasks;
   std::vector<GAppInfo*> apps;
+  std::vector<std::filesystem::path> icon_roots;
+  std::unordered_map<std::string, IconTheme> icon_themes;
   std::unordered_map<std::string, std::filesystem::path> icon_files;
-  std::unordered_map<std::string, int> icon_scores;
   std::unordered_map<std::string, cairo_surface_t*> icon_surfaces;
   cairo_surface_t* logo_surface{};
-  bool icons_indexed{};
+  std::string icon_theme{selected_icon_theme()};
   std::vector<MenuEntry> menu_entries;
   std::vector<MenuEntry> submenu_entries;
   std::size_t app_page{};
@@ -412,40 +478,95 @@ struct Shell::Impl {
     });
   }
 
-  void index_icons() {
-    if (icons_indexed) return;
-    icons_indexed = true;
-    std::vector<std::filesystem::path> roots{std::filesystem::path(g_get_user_data_dir())};
+  void init_icon_roots() {
+    if (!icon_roots.empty()) return;
+    icon_roots.emplace_back(std::filesystem::path(g_get_home_dir()) / ".icons");
+    icon_roots.emplace_back(std::filesystem::path(g_get_user_data_dir()) / "icons");
     for (const char* const* dir = g_get_system_data_dirs(); dir && *dir; ++dir)
-      roots.emplace_back(*dir);
-    for (const auto& root : roots) {
-      for (const auto& branch : {"icons", "pixmaps"}) {
-        std::error_code ec;
-        const auto base = root / branch;
-        if (!std::filesystem::is_directory(base, ec)) continue;
-        for (std::filesystem::recursive_directory_iterator it(base,
-               std::filesystem::directory_options::skip_permission_denied, ec), end;
-             it != end && !ec; it.increment(ec)) {
-          if (!it->is_regular_file(ec)) { ec.clear(); continue; }
-          const auto& path = it->path();
-          const auto extension = path.extension().string();
-          if (extension != ".png" && extension != ".svg" && extension != ".xpm") continue;
-          const auto name = path.stem().string();
-          const auto full = path.string();
-          int score = branch == std::string_view{"pixmaps"} ? 35 : 0;
-          if (full.find("/hicolor/") != std::string::npos) score += 40;
-          if (full.find("/24x24/") != std::string::npos) score += 25;
-          else if (full.find("/32x32/") != std::string::npos) score += 22;
-          else if (full.find("/scalable/") != std::string::npos) score += 20;
-          else if (full.find("/16x16/") != std::string::npos) score += 18;
-          if (extension == ".png") score += 3;
-          if (!icon_scores.contains(name) || score > icon_scores.at(name)) {
-            icon_scores[name] = score;
-            icon_files[name] = path;
-          }
+      icon_roots.emplace_back(std::filesystem::path(*dir) / "icons");
+  }
+
+  const IconTheme& theme_metadata(const std::string& name) {
+    if (auto it = icon_themes.find(name); it != icon_themes.end()) return it->second;
+    init_icon_roots();
+    IconTheme theme;
+    for (const auto& root : icon_roots) {
+      auto* file = g_key_file_new();
+      const auto index = root / name / "index.theme";
+      if (!g_key_file_load_from_file(file, index.c_str(), G_KEY_FILE_NONE, nullptr)) {
+        g_key_file_unref(file);
+        continue;
+      }
+      theme.inherits = icon_theme_list(file, "Icon Theme", "Inherits");
+      auto directories = icon_theme_list(file, "Icon Theme", "Directories");
+      auto scaled = icon_theme_list(file, "Icon Theme", "ScaledDirectories");
+      directories.insert(directories.end(), scaled.begin(), scaled.end());
+      for (const auto& entry : directories) {
+        IconDirectory directory;
+        directory.relative = entry;
+        if (g_key_file_has_key(file, entry.c_str(), "Size", nullptr))
+          directory.size = g_key_file_get_integer(file, entry.c_str(), "Size", nullptr);
+        directory.min_size = directory.max_size = directory.size;
+        if (g_key_file_has_key(file, entry.c_str(), "MinSize", nullptr))
+          directory.min_size = g_key_file_get_integer(file, entry.c_str(), "MinSize", nullptr);
+        if (g_key_file_has_key(file, entry.c_str(), "MaxSize", nullptr))
+          directory.max_size = g_key_file_get_integer(file, entry.c_str(), "MaxSize", nullptr);
+        if (g_key_file_has_key(file, entry.c_str(), "Threshold", nullptr))
+          directory.threshold = g_key_file_get_integer(file, entry.c_str(), "Threshold", nullptr);
+        if (g_key_file_has_key(file, entry.c_str(), "Scale", nullptr))
+          directory.scale = std::max(1, g_key_file_get_integer(file, entry.c_str(), "Scale", nullptr));
+        char* type = g_key_file_get_string(file, entry.c_str(), "Type", nullptr);
+        if (type) { directory.type = type; g_free(type); }
+        theme.directories.push_back(std::move(directory));
+      }
+      g_key_file_unref(file);
+      break;
+    }
+    return icon_themes.emplace(name, std::move(theme)).first->second;
+  }
+
+  std::filesystem::path lookup_theme_icon(const std::string& theme_name, const std::string& icon_name,
+                                          std::unordered_set<std::string>& visited) {
+    if (!visited.insert(theme_name).second) return {};
+    const auto& theme = theme_metadata(theme_name);
+    std::filesystem::path best;
+    int best_distance = std::numeric_limits<int>::max();
+    std::error_code ec;
+    for (const auto& root : icon_roots) {
+      for (const auto& directory : theme.directories) {
+        const int distance = directory.distance(launcher_icon_size);
+        if (distance > best_distance) continue;
+        for (const char* extension : {".png", ".svg", ".xpm"}) {
+          const auto path = root / theme_name / directory.relative / (icon_name + extension);
+          if (!std::filesystem::is_regular_file(path, ec)) { ec.clear(); continue; }
+          if (distance < best_distance) { best = path; best_distance = distance; }
+          break;
         }
       }
     }
+    if (!best.empty()) return best;
+    for (const auto& inherited : theme.inherits)
+      if (auto path = lookup_theme_icon(inherited, icon_name, visited); !path.empty()) return path;
+    return {};
+  }
+
+  std::filesystem::path themed_icon_path(const std::string& name) {
+    if (auto it = icon_files.find(name); it != icon_files.end()) return it->second;
+    if (name.empty() || name.find('/') != std::string::npos) return {};
+    std::unordered_set<std::string> visited;
+    auto path = lookup_theme_icon(icon_theme, name, visited);
+    if (path.empty()) path = lookup_theme_icon("hicolor", name, visited);
+    if (path.empty()) {
+      for (const auto& root : icon_roots) {
+        for (const char* extension : {".png", ".svg", ".xpm"}) {
+          const auto candidate = root.parent_path() / "pixmaps" / (name + extension);
+          std::error_code ec;
+          if (std::filesystem::is_regular_file(candidate, ec)) { path = candidate; break; }
+        }
+        if (!path.empty()) break;
+      }
+    }
+    return icon_files.emplace(name, std::move(path)).first->second;
   }
 
   std::filesystem::path icon_path(GIcon* icon) {
@@ -458,9 +579,8 @@ struct Shell::Impl {
       return path;
     }
     if (!G_IS_THEMED_ICON(icon)) return {};
-    index_icons();
     for (const char* const* name = g_themed_icon_get_names(G_THEMED_ICON(icon)); name && *name; ++name)
-      if (const auto it = icon_files.find(*name); it != icon_files.end()) return it->second;
+      if (auto path = themed_icon_path(*name); !path.empty()) return path;
     return {};
   }
 
@@ -472,7 +592,7 @@ struct Shell::Impl {
     g_free(key_text);
     if (auto it = icon_surfaces.find(key); it != icon_surfaces.end()) return it->second;
     const auto path = icon_path(icon);
-    auto* surface = path.empty() ? nullptr : image_surface(path, 18);
+    auto* surface = path.empty() ? nullptr : image_surface(path, launcher_icon_size);
     icon_surfaces.emplace(key, surface);
     return surface;
   }

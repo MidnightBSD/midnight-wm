@@ -15,7 +15,7 @@ target_include_directories(midnight_core PUBLIC src)
 target_link_libraries(midnight_core PUBLIC PkgConfig::DEPS)
 target_compile_options(midnight_core PRIVATE -Wall -Wextra -Wpedantic)
 
-add_executable(midnight-wm src/main.cpp src/x11.cpp src/shell.cpp src/clipboard.cpp src/dnd.cpp)
+add_executable(midnight-wm src/main.cpp src/x11.cpp src/shell.cpp src/clipboard.cpp src/dnd.cpp src/autostart.cpp)
 target_link_libraries(midnight-wm PRIVATE midnight_core)
 target_compile_options(midnight-wm PRIVATE -Wall -Wextra -Wpedantic)
 
@@ -34,6 +34,9 @@ add_test(NAME store_test COMMAND store_test)
 add_executable(model_test tests/model_test.cpp)
 target_link_libraries(model_test PRIVATE midnight_core)
 add_test(NAME model_test COMMAND model_test)
+add_executable(autostart_test tests/autostart_test.cpp src/autostart.cpp)
+target_link_libraries(autostart_test PRIVATE midnight_core)
+add_test(NAME autostart_test COMMAND autostart_test)
 
 set(CPACK_PACKAGE_NAME "midnight-wm")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
