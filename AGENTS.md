@@ -36,6 +36,12 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   transients above their parents, including active fullscreen families. Update
   ALLOWED_ACTIONS after geometry hints or window state changes. Advertise only
   the EWMH states/actions actually implemented.
+  Fullscreen monitor indices use Xinerama ordering, not RandR ordering. Validate
+  all four indices and the resulting rectangle before storing or publishing a
+  selection. Clear selections after display topology changes and retain normal
+  fullscreen geometry restoration. Pager restacking must translate client XIDs
+  to root-level frames, validate sibling/mode, preserve focus, and reapply layers
+  and transient ancestry.
 - `src/display_monitors.hpp` queries RandR monitor rectangles and chooses a
   visible monitor for a point. The shell uses the primary monitor for its panel
   and desktop shortcuts while keeping the lavender background across the root.
@@ -195,6 +201,10 @@ For compatibility changes, run `python3 tests/notifications_smoke.py`,
 `python3 tests/ewmh_smoke.py`, and `python3 tests/media_smoke.py` as applicable.
 Run `python3 tests/ewmh_attention.py` for focus timestamps, helper lifecycle,
 attention/urgency, stacking layers, allowed actions, and the visible task marker.
+Run `python3 tests/ewmh_attention.py --multi-monitor` for an isolated two-screen
+Xinerama test of monitor index ordering, live fullscreen selection, mixed edges,
+invalid requests, and geometry restoration. Xvfb screens overlap at the origin;
+this does not replace real Xorg hotplug and offset-output checks.
 `x11_timestamp_test` checks wraparound at compile time, including Release builds.
 The media test restores original OSS mixer levels after slider/mute checks.
 Desktop services protocol checks are registered with CTest.

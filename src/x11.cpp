@@ -10,6 +10,7 @@
 #include <xcb/xcb_icccm.h>
 #include <xcb/xcb_keysyms.h>
 #include <xcb/randr.h>
+#include <xcb/xinerama.h>
 #include <xcb/sync.h>
 #include <xcb/xcbext.h>
 #include <X11/keysym.h>
@@ -54,12 +55,37 @@ void label(cairo_t* cr, const std::string& text, int x, int y, int width,
 }
 
 template <class T> using Reply = std::unique_ptr<T, decltype(&std::free)>;
+// EWMH fullscreen indices use Xinerama ordering, which need not match RandR.
+std::vector<DisplayMonitor> fullscreen_layout(xcb_connection_t* connection, xcb_screen_t* screen) {
+  const auto* extension = xcb_get_extension_data(connection, &xcb_xinerama_id);
+  if (extension && extension->present) {
+    Reply<xcb_xinerama_is_active_reply_t> active(xcb_xinerama_is_active_reply(connection,
+        xcb_xinerama_is_active(connection), nullptr), std::free);
+    if (active && active->state) {
+      Reply<xcb_xinerama_query_screens_reply_t> reply(xcb_xinerama_query_screens_reply(connection,
+          xcb_xinerama_query_screens(connection), nullptr), std::free);
+      if (reply) {
+        std::vector<DisplayMonitor> result;
+        auto it = xcb_xinerama_query_screens_screen_info_iterator(reply.get());
+        for (; it.rem; xcb_xinerama_screen_info_next(&it))
+          result.push_back({it.data->x_org, it.data->y_org, it.data->width, it.data->height});
+        if (!result.empty()) return result;
+      }
+    }
+  }
+  // Servers without Xinerama retain useful single-monitor fullscreen support.
+  Reply<xcb_get_geometry_reply_t> geometry(xcb_get_geometry_reply(connection,
+      xcb_get_geometry(connection, screen->root), nullptr), std::free);
+  return {{0, 0, geometry ? geometry->width : screen->width_in_pixels,
+                  geometry ? geometry->height : screen->height_in_pixels, true}};
+}
 } // namespace
 
 X11WindowManager::X11WindowManager(xcb_connection_t* connection, xcb_screen_t* screen, Shell& shell)
   : connection_(connection), screen_(screen), shell_(shell),
     screen_width_(screen->width_in_pixels), screen_height_(screen->height_in_pixels),
-    monitors_(query_display_monitors(connection, screen)) {
+    monitors_(query_display_monitors(connection, screen)),
+    fullscreen_layout_(fullscreen_layout(connection, screen)) {
   const char* synthetic = std::getenv("MIDNIGHT_WM_TEST_SYNTHETIC_RESIZE");
   accept_synthetic_root_size_ = synthetic && std::string_view(synthetic) == "1";
 }
@@ -72,6 +98,7 @@ X11WindowManager::~X11WindowManager() {
   for (auto& [client, frame] : frames_) {
     update_window_state(frame);
     xcb_delete_property(connection_, client, atom("_NET_WM_ALLOWED_ACTIONS"));
+    xcb_delete_property(connection_, client, atom("_NET_WM_FULLSCREEN_MONITORS"));
     if (frame.sync_query) xcb_discard_reply(connection_, frame.sync_query);
     if (frame.unresponsive) xcb_delete_property(connection_, client, atom("_NET_WM_VISIBLE_NAME"));
     xcb_reparent_window(connection_, client, screen_->root, frame.x, frame.y);
@@ -491,6 +518,7 @@ void X11WindowManager::set_root_properties() {
                           "_NET_WM_ACTION_MOVE", "_NET_WM_ACTION_RESIZE",
                           "_NET_FRAME_EXTENTS", "_NET_REQUEST_FRAME_EXTENTS",
                           "_NET_MOVERESIZE_WINDOW", "_NET_WM_MOVERESIZE",
+                          "_NET_RESTACK_WINDOW", "_NET_WM_FULLSCREEN_MONITORS",
                           "_NET_NUMBER_OF_DESKTOPS", "_NET_CURRENT_DESKTOP", "_NET_WORKAREA",
                           "_NET_WM_DESKTOP", "_NET_SHOWING_DESKTOP", "_NET_DESKTOP_NAMES",
                           "_NET_DESKTOP_VIEWPORT", "_NET_WM_PING",
@@ -882,6 +910,7 @@ void X11WindowManager::manage(xcb_window_t window) {
   update_title(frame);
   frame_to_client_[frame.frame] = window;
   frames_[window] = frame;
+  xcb_delete_property(connection_, window, atom("_NET_WM_FULLSCREEN_MONITORS"));
   refresh_user_time(frames_.at(window));
   update_window_state(frames_.at(window));
   client_order_.push_back(window);
@@ -908,6 +937,7 @@ void X11WindowManager::unmanage(xcb_window_t client, bool destroyed) {
     xcb_delete_property(connection_, client, atom("_NET_WM_DESKTOP"));
     xcb_delete_property(connection_, client, atom("_NET_WM_STATE"));
     xcb_delete_property(connection_, client, atom("_NET_WM_ALLOWED_ACTIONS"));
+    xcb_delete_property(connection_, client, atom("_NET_WM_FULLSCREEN_MONITORS"));
     xcb_delete_property(connection_, client, atom("_NET_FRAME_EXTENTS"));
   }
   xcb_destroy_window(connection_, frame.frame);
@@ -1059,6 +1089,27 @@ void X11WindowManager::update_stacking() {
       clients.push_back(found->second);
   xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, screen_->root, atom("_NET_CLIENT_LIST_STACKING"),
                       XCB_ATOM_WINDOW, 32, clients.size(), clients.data());
+}
+
+void X11WindowManager::restack_request(xcb_window_t client, xcb_window_t sibling,
+                                       std::uint32_t mode) {
+  const auto target = frames_.find(client);
+  if (target == frames_.end() || !target->second.visible || mode > XCB_STACK_MODE_OPPOSITE ||
+      sibling == client) return;
+  std::vector<std::uint32_t> values;
+  std::uint16_t mask = XCB_CONFIG_WINDOW_STACK_MODE;
+  if (sibling) {
+    const auto other = frames_.find(sibling);
+    if (other == frames_.end() || !other->second.visible) return;
+    mask |= XCB_CONFIG_WINDOW_SIBLING;
+    values.push_back(other->second.frame);
+  }
+  values.push_back(mode);
+  // Both XIDs are root children. Let X11 implement conditional stacking modes,
+  // then restore desktop layers and transient ancestry without changing focus.
+  xcb_configure_window(connection_, target->second.frame, mask, values.data());
+  restack_layers();
+  update_stacking();
 }
 
 void X11WindowManager::restack_layers(bool force) {
@@ -1432,6 +1483,30 @@ void X11WindowManager::set_maximized(xcb_window_t client, bool horz, bool vert) 
   else resize_frame(frame);
 }
 
+void X11WindowManager::set_fullscreen_monitors(Frame& frame,
+    const std::array<std::uint32_t, 4>& indices) {
+  if (frame.role == WindowRole::splash || !fullscreen_monitor_area(fullscreen_layout_, indices)) return;
+  frame.fullscreen_monitors = indices;
+  xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, frame.client,
+      atom("_NET_WM_FULLSCREEN_MONITORS"), XCB_ATOM_CARDINAL, 32, indices.size(), indices.data());
+  if (frame.fullscreen) {
+    update_fullscreen_geometry(frame);
+    resize_frame(frame);
+  }
+}
+
+void X11WindowManager::update_fullscreen_geometry(Frame& frame) {
+  const auto monitor = monitor_for(frame);
+  frame.monitor_name = monitor.name;
+  frame.x = monitor.x; frame.y = monitor.y;
+  frame.width = monitor.width; frame.height = monitor.height;
+  if (frame.fullscreen_monitors)
+    if (const auto area = fullscreen_monitor_area(fullscreen_layout_, *frame.fullscreen_monitors)) {
+      frame.x = area->x; frame.y = area->y;
+      frame.width = area->width; frame.height = area->height;
+    }
+}
+
 void X11WindowManager::set_fullscreen(xcb_window_t client, bool enabled) {
   auto it = frames_.find(client);
   if (it == frames_.end() || it->second.role == WindowRole::splash || it->second.fullscreen == enabled) return;
@@ -1441,10 +1516,7 @@ void X11WindowManager::set_fullscreen(xcb_window_t client, bool enabled) {
   if (enabled) {
     frame.old_x = frame.x; frame.old_y = frame.y;
     frame.old_width = frame.width; frame.old_height = frame.height;
-    const auto monitor = monitor_for(frame);
-    frame.monitor_name = monitor.name;
-    frame.x = monitor.x; frame.y = monitor.y;
-    frame.width = monitor.width; frame.height = monitor.height;
+    update_fullscreen_geometry(frame);
   } else {
     frame.monitor_name = XCB_ATOM_NONE;
     frame.x = frame.old_x; frame.y = frame.old_y;
@@ -1560,14 +1632,17 @@ void X11WindowManager::refresh_theme() {
 
 void X11WindowManager::refresh_display_layout(std::uint16_t width, std::uint16_t height) {
   auto monitors = query_display_monitors(connection_, screen_);
+  auto fullscreen_monitors = fullscreen_layout(connection_, screen_);
   if (monitors.size() == 1 && monitors.front().x == 0 && monitors.front().y == 0 &&
       (monitors.front().width != width || monitors.front().height != height)) {
     monitors.front().width = width;
     monitors.front().height = height;
   }
-  if (width == screen_width_ && height == screen_height_ && monitors == monitors_) return;
+  if (width == screen_width_ && height == screen_height_ && monitors == monitors_ &&
+      fullscreen_monitors == fullscreen_layout_) return;
   screen_width_ = width; screen_height_ = height;
   monitors_ = std::move(monitors);
+  fullscreen_layout_ = std::move(fullscreen_monitors);
   if (shell_.screen_width() != width || shell_.screen_height() != height)
     shell_.set_screen_size(width, height);
   else shell_.refresh_display_layout();
@@ -1579,11 +1654,11 @@ void X11WindowManager::refresh_display_layout(std::uint16_t width, std::uint16_t
                                   static_cast<std::uint32_t>(decorated(frame) ? border_pixels() : 0)};
     xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, client, atom("_NET_FRAME_EXTENTS"),
                         XCB_ATOM_CARDINAL, 32, 4, extents);
+    // Indices may have changed meaning after hotplug; require a fresh request.
+    frame.fullscreen_monitors.reset();
+    xcb_delete_property(connection_, client, atom("_NET_WM_FULLSCREEN_MONITORS"));
     if (frame.fullscreen) {
-      const auto monitor = monitor_for(frame);
-      frame.monitor_name = monitor.name;
-      frame.x = monitor.x; frame.y = monitor.y;
-      frame.width = monitor.width; frame.height = monitor.height;
+      update_fullscreen_geometry(frame);
       resize_frame(frame);
     } else if (frame.maximized_horz || frame.maximized_vert) {
       frame.monitor_name = monitor_for(frame).name;
@@ -1917,6 +1992,15 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
         } else set_attention(frame->second, true);
       }
     } else if (e->type == atom("_NET_CLOSE_WINDOW")) close(e->window);
+    else if (e->type == atom("_NET_RESTACK_WINDOW") && e->format == 32) {
+      if (e->data.data32[0] == 2)
+        restack_request(e->window, e->data.data32[1], e->data.data32[2]);
+    }
+    else if (e->type == atom("_NET_WM_FULLSCREEN_MONITORS") && e->format == 32) {
+      if (auto frame = frames_.find(e->window); frame != frames_.end() && e->data.data32[4] <= 2)
+        set_fullscreen_monitors(frame->second, {e->data.data32[0], e->data.data32[1],
+                                               e->data.data32[2], e->data.data32[3]});
+    }
     else if (e->type == atom("_NET_MOVERESIZE_WINDOW") && e->format == 32) {
       if (auto frame = frames_.find(e->window); frame != frames_.end()) {
         const auto flags = e->data.data32[0];

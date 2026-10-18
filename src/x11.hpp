@@ -53,6 +53,7 @@ private:
     bool maximized_horz{};
     bool maximized_vert{};
     bool fullscreen{};
+    std::optional<std::array<std::uint32_t, 4>> fullscreen_monitors;
     bool mapped{};
     bool minimized{};
     std::uint32_t desktop{};
@@ -109,6 +110,9 @@ private:
   void update_client_list();
   void update_stacking();
   void restack_layers(bool force = true);
+  void restack_request(xcb_window_t client, xcb_window_t sibling, std::uint32_t mode);
+  void update_fullscreen_geometry(Frame& frame);
+  void set_fullscreen_monitors(Frame& frame, const std::array<std::uint32_t, 4>& indices);
   void update_tasks();
   void scan_existing();
   void manage(xcb_window_t window);
@@ -177,6 +181,7 @@ private:
   std::uint16_t screen_width_{};
   std::uint16_t screen_height_{};
   std::vector<DisplayMonitor> monitors_;
+  std::vector<DisplayMonitor> fullscreen_layout_;
   std::uint8_t randr_event_base_{};
   // Test-only: accept synthetic root ConfigureNotify sizes for Xvfb, which
   // cannot change its RandR mode. Set MIDNIGHT_WM_TEST_SYNTHETIC_RESIZE=1.

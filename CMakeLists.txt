@@ -7,7 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(DEPS REQUIRED IMPORTED_TARGET
-  xcb xcb-icccm xcb-keysyms xcb-xfixes xcb-randr xcb-sync xcb-screensaver cairo-xcb pangocairo
+  xcb xcb-icccm xcb-keysyms xcb-xfixes xcb-randr xcb-xinerama xcb-sync xcb-screensaver cairo-xcb pangocairo
   gio-2.0 gio-unix-2.0 gdk-pixbuf-2.0 garcon-1 sqlite3)
 
 add_library(midnight_core src/store.cpp src/model.cpp src/config.cpp src/audio.cpp src/battery.cpp src/wallpaper.cpp
