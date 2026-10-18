@@ -1,4 +1,5 @@
 #include "autostart.hpp"
+#include "application_restore.hpp"
 
 #include <gio/gio.h>
 #include <gio/gdesktopappinfo.h>
@@ -7,6 +8,7 @@
 #include <algorithm>
 #include <iostream>
 #include <memory>
+#include <map>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -32,7 +34,8 @@ bool is_eligible(GDesktopAppInfo* info) {
 } // namespace
 
 std::vector<std::filesystem::path> find_autostart_entries(
-    const std::vector<std::filesystem::path>& config_roots) {
+    const std::vector<std::filesystem::path>& config_roots,
+    std::span<const std::string> restored_executables) {
   std::unordered_set<std::string> seen;
   std::vector<std::filesystem::path> entries;
 
@@ -55,14 +58,32 @@ std::vector<std::filesystem::path> find_autostart_entries(
       if (info && is_eligible(info.get())) entries.push_back(path);
     }
   }
+  std::map<std::string, std::size_t> restored_counts, entry_counts;
+  for (const auto& executable : restored_executables) ++restored_counts[executable];
+  std::map<std::filesystem::path, std::string> identities;
+  for (const auto& path : entries) {
+    DesktopInfo info(g_desktop_app_info_new_from_filename(path.c_str()), g_object_unref);
+    const char* executable = info ? g_app_info_get_executable(G_APP_INFO(info.get())) : nullptr;
+    if (!executable) continue;
+    if (auto identity = resolve_session_executable(executable)) {
+      identities[path] = *identity;
+      ++entry_counts[*identity];
+    }
+  }
+  // Only a unique direct executable match is unambiguous. Keep wrappers and
+  // multiple autostart profiles eligible rather than guessing their identity.
+  std::erase_if(entries, [&](const auto& path) {
+    const auto found = identities.find(path);
+    return found != identities.end() && restored_counts[found->second] == 1 && entry_counts[found->second] == 1;
+  });
   return entries;
 }
 
-void launch_autostart() {
+void launch_autostart(std::span<const std::string> restored_executables) {
   std::vector<std::filesystem::path> roots{g_get_user_config_dir()};
   for (auto dirs = g_get_system_config_dirs(); dirs && *dirs; ++dirs) roots.emplace_back(*dirs);
 
-  for (const auto& path : find_autostart_entries(roots)) {
+  for (const auto& path : find_autostart_entries(roots, restored_executables)) {
     DesktopInfo info(g_desktop_app_info_new_from_filename(path.c_str()), g_object_unref);
     if (!info) continue;
     GError* error = nullptr;

@@ -10,7 +10,7 @@ pkg_check_modules(DEPS REQUIRED IMPORTED_TARGET
   xcb xcb-icccm xcb-keysyms xcb-xfixes xcb-randr xcb-xinerama xcb-sync xcb-screensaver cairo-xcb pangocairo
   gio-2.0 gio-unix-2.0 gdk-pixbuf-2.0 garcon-1 sqlite3)
 
-add_library(midnight_core src/store.cpp src/model.cpp src/config.cpp src/session.cpp src/private_state.cpp src/session_bus.cpp src/application_session.cpp src/application_checkpoint.cpp src/audio.cpp src/battery.cpp src/network.cpp src/wallpaper.cpp
+add_library(midnight_core src/store.cpp src/model.cpp src/config.cpp src/session.cpp src/private_state.cpp src/session_bus.cpp src/application_session.cpp src/application_checkpoint.cpp src/application_restore.cpp src/audio.cpp src/battery.cpp src/network.cpp src/wallpaper.cpp
   src/desktop_launcher.cpp src/thumbnail.cpp src/recent_files.cpp
   src/startup_notification.cpp src/browser_launcher.cpp src/terminal_launcher.cpp src/task_icon.cpp)
 target_include_directories(midnight_core PUBLIC src)
@@ -113,6 +113,10 @@ add_executable(session_test tests/session_test.cpp)
 target_link_libraries(session_test PRIVATE midnight_core)
 add_test(NAME session_test COMMAND session_test)
 
+add_executable(application_restore_test tests/application_restore_test.cpp)
+target_link_libraries(application_restore_test PRIVATE midnight_core)
+add_test(NAME application_restore_test COMMAND application_restore_test)
+
 add_executable(application_checkpoint_test tests/application_checkpoint_test.cpp)
 target_link_libraries(application_checkpoint_test PRIVATE midnight_core)
 add_test(NAME application_checkpoint_test COMMAND application_checkpoint_test)
@@ -120,6 +124,8 @@ add_test(NAME application_checkpoint_test COMMAND application_checkpoint_test)
 add_executable(xsmp_properties_test tests/xsmp_properties_test.cpp)
 target_link_libraries(xsmp_properties_test PRIVATE midnight_xsmp)
 add_test(NAME xsmp_properties_test COMMAND xsmp_properties_test)
+add_executable(xsmp_restore_fixture tests/xsmp_restore_fixture.cpp)
+target_link_libraries(xsmp_restore_fixture PRIVATE PkgConfig::XSMP PkgConfig::DEPS)
 add_executable(xsmp_client_fixture tests/xsmp_client.cpp)
 target_link_libraries(xsmp_client_fixture PRIVATE PkgConfig::XSMP)
 
@@ -164,6 +170,13 @@ if(DBUS_RUN_SESSION)
       --fixture $<TARGET_FILE:xsmp_client_fixture>
       --output ${CMAKE_CURRENT_BINARY_DIR}/xsmp-test-results)
     set_tests_properties(xsmp_transport_test PROPERTIES TIMEOUT 140)
+    if(XVFB)
+      add_test(NAME application_restore_smoke COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/application_restore_smoke.py
+        --binary $<TARGET_FILE:midnightbsd-session> --fixture $<TARGET_FILE:xsmp_restore_fixture>
+        --output ${CMAKE_CURRENT_BINARY_DIR}/application-restore-results)
+      set_tests_properties(application_restore_smoke PROPERTIES TIMEOUT 100)
+    endif()
   endif()
   add_executable(desktop_services_test tests/desktop_services_test.cpp src/desktop_services.cpp)
   target_link_libraries(desktop_services_test PRIVATE midnight_core)

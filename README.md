@@ -171,9 +171,10 @@ Malformed, incomplete, oversized, or unsupported-version snapshots are ignored
 and preserved until cleared, including on logout. Write failures before atomic
 replacement retain the existing snapshot; save errors go to the session log.
 
-External applications, documents, and terminal processes are not restored yet.
-Application relaunching and placement, save prompts, and
-coordinated application logout remain follow-up work for issue #31. No restart
+Participating XSMP applications can now be reopened when application restoration
+is enabled. Applications control their own document and tab restoration; terminal
+commands and other process state are not resumed. Window placement, save prompts,
+and coordinated application logout remain follow-up work for issue #31. No restart
 commands, credentials, or bus addresses are stored in the folder snapshot.
 
 The Xsession entry now starts `midnightbsd-session`, which establishes the session
@@ -199,7 +200,7 @@ client checkpoint requests and `SIGUSR1` to the companion also request saving;
 XSMP phase-2 requests are supported. Each checkpoint has a three-second deadline,
 connections and properties have resource limits, and partial peer reads/writes
 are bounded in the separate companion process. Applications can checkpoint
-their own state, but are not yet reopened after login.
+their own state and supply the restart arguments used on the next login.
 
 Set `[Session] save_application_checkpoints=true` to persist successful global
 checkpoints, including requests through `SIGUSR1`, to
@@ -223,8 +224,32 @@ can contain private document paths, so treat this file as private session data.
 `RestartNever` is omitted; disconnected `RestartAnyway` clients retain their last
 completed metadata. Other styles require a connected client at checkpoint time;
 `RestartImmediately` does not yet trigger an immediate relaunch.
-This phase stores metadata only: application launch, saved-ID adoption, window
-placement, and coordination with autostart remain follow-up work.
+Set `[Session] restore_applications=true` to reopen the last valid application
+checkpoint through `midnightbsd-session`. This defaults to false and takes effect
+at the next login, independently of checkpoint saving and folder restoration.
+The companion copies a validated checkpoint into its private runtime directory
+for this login, then the WM launches its applications after establishing the new session
+bus and keyring services. A running external session manager keeps ownership;
+Midnight Workspace does not restore its own application snapshot under it.
+The handoff variables are cleared before starting session services or applications.
+
+Saved clients can reclaim their saved XSMP ID once during the first two minutes
+of the new companion's lifetime. Unknown, duplicate and expired IDs register as
+fresh clients. Checkpoint persistence waits until all expected IDs are claimed
+or that window expires, preserving the source snapshot during startup. Saved
+commands execute as argument lists with their saved working directories, current
+session environment and closed internal descriptors. Missing executables, invalid
+working directories and invalid executable formats are reported without stopping
+the desktop; executable text without an interpreter is never retried as a shell
+script. `RestartImmediately` participates in login restore but does not yet cause
+an immediate restart after a client exits.
+
+A single successful restore suppresses an eligible XDG autostart entry only when
+both resolve to one unique direct executable. Failed restores leave autostart
+eligible. Multiple profiles, multiple restores of the same executable and wrappers
+are left to normal autostart rather than guessing which application they represent.
+This conservative matching cannot eliminate duplicates in ambiguous cases.
+Window placement and coordinated logout remain follow-up work.
 
 The companion does not send `Die`, request save prompts, or honor client requests
 to end the desktop. Coordinated application logout will be added separately.
@@ -254,6 +279,11 @@ test is registered with CTest when Python 3 and `dbus-run-session` are available
 Run `python3 tests/session_smoke.py --binary build/midnightbsd-session` to check
 the real WM lifecycle through the companion, including an XSMP autostart client
 that verifies the session bus and inherited agent before registering.
+`python3 tests/application_restore_smoke.py` tests independent logins with a real
+XSMP client, saved-ID adoption, autostart deduplication, new bus/agent inheritance,
+literal arguments, disabled restore, corrupt-state preservation and cleanup.
+`application_restore_test` checks exact argument bytes, working directories,
+spawn failures, descriptor/signal isolation and rejection of shell fallback.
 
 Run `python3 tests/session_smoke.py --matrix` for isolated save/restore cycles at
 all five supported resolutions, including cancelled logout, window states,
