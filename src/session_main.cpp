@@ -104,7 +104,7 @@ int main(int argc, char** argv) {
   }
   // Do not send Die or signal registered applications: coordinated logout and
   // save prompts are a later phase. Only the explicitly spawned child is owned.
-  manager.checkpoint();
+  manager.checkpoint(!stop_signal && WIFEXITED(status) && WEXITSTATUS(status) == 0);
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
   while (manager.checkpoint_pending() && std::chrono::steady_clock::now() < deadline) manager.tick();
   if (WIFEXITED(status)) return WEXITSTATUS(status);

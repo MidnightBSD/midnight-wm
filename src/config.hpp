@@ -18,6 +18,7 @@ struct ThemeConfig {
   bool compositing{true};
   bool restore_session{};
   bool save_session{};
+  bool save_application_checkpoints{};
   std::string ui_font{"Sans"};
   std::string title_font{"Sans Bold"};
   std::string desktop_image;

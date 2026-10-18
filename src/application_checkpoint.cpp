@@ -1,0 +1,118 @@
+// Copyright (c) 2026 Lucas Holt
+// SPDX-License-Identifier: BSD-2-Clause
+#include "application_session.hpp"
+#include "private_state.hpp"
+
+#include <glib.h>
+#include <memory>
+#include <set>
+#include <utility>
+
+namespace midnight {
+namespace {
+constexpr std::size_t file_limit = 1024 * 1024;
+constexpr int application_limit = 128;
+using KeyFile = std::unique_ptr<GKeyFile, decltype(&g_key_file_unref)>;
+std::string encode(const std::string& text) {
+  char* encoded = g_base64_encode(reinterpret_cast<const guchar*>(text.data()), text.size());
+  std::string result(encoded);
+  g_free(encoded);
+  return result;
+}
+bool valid(const ApplicationCheckpoint& checkpoint) {
+  if (checkpoint.applications.size() > application_limit) return false;
+  std::set<std::string> ids;
+  for (const auto& application : checkpoint.applications) {
+    if (!validate_application_restart(application) || application.style == RestartStyle::never ||
+        !ids.insert(application.client_id).second) return false;
+  }
+  return true;
+}
+} // namespace
+
+ApplicationSessionStore::ApplicationSessionStore(std::filesystem::path path) : path_(std::move(path)) {}
+std::filesystem::path ApplicationSessionStore::default_path() {
+  return SessionStore::default_path().parent_path() / "applications.ini";
+}
+std::expected<std::optional<ApplicationCheckpoint>, std::string> ApplicationSessionStore::load() const {
+  auto loaded = read_private_state(path_, file_limit);
+  if (!loaded) return std::unexpected(loaded.error());
+  if (!*loaded) return std::nullopt;
+  const auto& contents = **loaded;
+  KeyFile keys(g_key_file_new(), g_key_file_unref);
+  if (contents.find('\0') != std::string::npos ||
+      !g_key_file_load_from_data(keys.get(), contents.data(), contents.size(), G_KEY_FILE_NONE, nullptr))
+    return std::unexpected("Malformed application checkpoint");
+  bool parsed = true;
+  const auto integer = [&](const char* group, const char* name) {
+    GError* error = nullptr;
+    const int value = g_key_file_get_integer(keys.get(), group, name, &error);
+    if (error) { parsed = false; g_error_free(error); }
+    return value;
+  };
+  // Base64 preserves the bytes and boundaries of XSMP arguments, including
+  // non-UTF-8 filenames. Require canonical encoding rather than silently
+  // accepting GLib's permissive decoder output for malformed input.
+  const auto text = [&](const char* group, const char* name) {
+    char* value = g_key_file_get_string(keys.get(), group, name, nullptr);
+    if (!value) { parsed = false; return std::string{}; }
+    gsize length{};
+    guchar* decoded = g_base64_decode(value, &length);
+    std::string result;
+    if (length) result.assign(reinterpret_cast<const char*>(decoded), length);
+    if (encode(result) != value) parsed = false;
+    g_free(decoded);
+    g_free(value);
+    return result;
+  };
+  if (integer("Applications", "version") != 1) return std::unexpected("Unsupported application checkpoint version");
+  const int count = integer("Applications", "count");
+  if (!parsed || count < 0 || count > application_limit) return std::unexpected("Invalid application count");
+  ApplicationCheckpoint checkpoint;
+  for (int i = 0; i < count; ++i) {
+    const auto group = "Application " + std::to_string(i);
+    ApplicationRestart application;
+    application.client_id = text(group.c_str(), "client_id");
+    application.program = text(group.c_str(), "program");
+    application.directory = text(group.c_str(), "directory");
+    const int style = integer(group.c_str(), "style");
+    if (style < 0 || style > static_cast<int>(RestartStyle::never)) parsed = false;
+    application.style = static_cast<RestartStyle>(style);
+    const int argc = integer(group.c_str(), "argc");
+    if (!parsed || argc < 1 || argc > 128) return std::unexpected("Invalid application restart fields");
+    for (int arg = 0; arg < argc; ++arg)
+      application.arguments.push_back(text(group.c_str(), ("arg" + std::to_string(arg)).c_str()));
+    checkpoint.applications.push_back(std::move(application));
+  }
+  if (!parsed || !valid(checkpoint)) return std::unexpected("Invalid application checkpoint values");
+  return checkpoint;
+}
+
+std::expected<void, std::string> ApplicationSessionStore::save(const ApplicationCheckpoint& checkpoint) const {
+  if (!valid(checkpoint)) return std::unexpected("Invalid application checkpoint values");
+  if (auto previous = load(); !previous) return std::unexpected(previous.error());
+  KeyFile keys(g_key_file_new(), g_key_file_unref);
+  g_key_file_set_integer(keys.get(), "Applications", "version", 1);
+  g_key_file_set_integer(keys.get(), "Applications", "count", static_cast<int>(checkpoint.applications.size()));
+  for (std::size_t i = 0; i < checkpoint.applications.size(); ++i) {
+    const auto group = "Application " + std::to_string(i);
+    const auto& application = checkpoint.applications[i];
+    const auto text = [&](const char* name, const std::string& value) {
+      const auto encoded = encode(value);
+      g_key_file_set_string(keys.get(), group.c_str(), name, encoded.c_str());
+    };
+    text("client_id", application.client_id);
+    text("program", application.program);
+    text("directory", application.directory);
+    g_key_file_set_integer(keys.get(), group.c_str(), "style", static_cast<int>(application.style));
+    g_key_file_set_integer(keys.get(), group.c_str(), "argc", static_cast<int>(application.arguments.size()));
+    for (std::size_t arg = 0; arg < application.arguments.size(); ++arg)
+      text(("arg" + std::to_string(arg)).c_str(), application.arguments[arg]);
+  }
+  gsize length{};
+  std::unique_ptr<gchar, decltype(&g_free)> contents(g_key_file_to_data(keys.get(), &length, nullptr), g_free);
+  if (length > file_limit) return std::unexpected("Application checkpoint is too large");
+  return write_private_state(path_, std::string_view(contents.get(), length));
+}
+std::expected<void, std::string> ApplicationSessionStore::clear() const { return clear_private_state(path_); }
+} // namespace midnight

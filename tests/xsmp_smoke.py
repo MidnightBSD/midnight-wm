@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: BSD-2-Clause
 """Exercise the XSMP companion with real libSM clients and private authority."""
 import argparse
+import base64
+import configparser
 import json
 import os
 from pathlib import Path
@@ -159,6 +161,48 @@ def main():
                     process.terminate()
                     process.wait(timeout=5)
         assert original.read_text() == "preserve original authority\n"
+        # Global checkpoints persist only when opted in. An unsuccessful wrapper
+        # exit prevents an additional final checkpoint from replacing the exact
+        # protocol result being inspected here.
+        config = root / "config/midnight-wm/config.ini"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text("[Session]\nsave_application_checkpoints=true\n")
+        snapshot = root / "state/midnight-wm/applications.ini"
+        def checkpoint(mode):
+            result = subprocess.run([str(args.binary), "--", sys.executable, "-c",
+                "import subprocess,sys; subprocess.run(sys.argv[1:],check=True); sys.exit(7)",
+                str(args.fixture), mode], env=env, capture_output=True, timeout=25)
+            assert result.returncode == 7, result.stderr.decode(errors="replace")
+        checkpoint("normal")
+        assert snapshot.is_file() and snapshot.stat().st_mode & 0o777 == 0o600
+        assert snapshot.parent.stat().st_mode & 0o777 == 0o700
+        keys = configparser.ConfigParser(interpolation=None)
+        keys.read(snapshot)
+        assert keys.getint("Applications", "count") == 1
+        assert keys.getint("Application 0", "argc") == 3
+        assert base64.b64decode(keys["Application 0"]["arg2"]) == b"literal $(not-a-command) with spaces"
+        values = [base64.b64decode(value) for key, value in keys["Application 0"].items()
+                  if key not in ("style", "argc")]
+        assert not any(b"must-not-persist" in value or b"SESSION_SECRET" in value for value in values)
+        original_checkpoint = snapshot.read_bytes()
+        checkpoint("fail-save")
+        assert snapshot.read_bytes() == original_checkpoint, "failed client save replaced checkpoint"
+        checkpoint("stall-save")
+        assert snapshot.read_bytes() == original_checkpoint, "timed-out client replaced checkpoint"
+        checkpoint("recover-save")
+        assert snapshot.read_bytes() == original_checkpoint, "late save authorized another checkpoint"
+        snapshot.write_text("invalid checkpoint: preserve me\n")
+        checkpoint("normal")
+        assert snapshot.read_text() == "invalid checkpoint: preserve me\n", "malformed state overwritten"
+        snapshot.unlink()
+        checkpoint("never")
+        keys.read(snapshot)
+        assert keys.getint("Applications", "count") == 0, "RestartNever was persisted"
+        snapshot.unlink()
+        config.write_text("[Session]\nsave_application_checkpoints=false\n")
+        checkpoint("normal")
+        assert not snapshot.exists(), "application checkpoints must default to disabled"
+        print("Application checkpoints: private persistence, literal argv, excluded properties, failures/timeouts, malformed preservation, RestartNever and opt-in passed.")
         print("XSMP local authentication, registration, checkpoints/phase 2, property round trips, timeouts, disconnects, inherited manager, bus bootstrap, argv, exit status and cleanup passed.")
 
 

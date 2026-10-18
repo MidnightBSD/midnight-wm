@@ -33,7 +33,11 @@ void properties(SmcConn connection) {
   SmProp name{const_cast<char*>(SmProgram), const_cast<char*>(SmARRAY8), 1, program_values.data()};
   SmProp command{const_cast<char*>(SmRestartCommand), const_cast<char*>(SmLISTofARRAY8), 3, arguments.data()};
   SmProp custom{const_cast<char*>("MidnightTestOpaque"), const_cast<char*>(SmARRAY8), 1, opaque.data()};
-  std::array<SmProp*, 3> values{&name, &command, &custom};
+  char secret[] = "SESSION_SECRET=must-not-persist";
+  SmPropValue sensitive{int(std::strlen(secret)), secret};
+  SmProp environment{const_cast<char*>(SmEnvironment), const_cast<char*>(SmLISTofARRAY8), 1, &sensitive};
+  SmProp discard{const_cast<char*>(SmDiscardCommand), const_cast<char*>(SmLISTofARRAY8), 1, &sensitive};
+  std::array<SmProp*, 5> values{&name, &command, &custom, &environment, &discard};
   SmcSetProperties(connection, int(values.size()), values.data());
 }
 void phase2(SmcConn connection, SmPointer) {
@@ -44,13 +48,21 @@ void save(SmcConn connection, SmPointer data, int, Bool shutdown, int interact, 
   auto& client = *static_cast<Client*>(data);
   ++client.saves;
   client.valid = client.valid && !shutdown && interact == SmInteractStyleNone;
-  if (client.mode == "hang") return;
+  if (client.mode == "hang" || (client.mode == "stall-save" && client.saves > 1) ||
+      (client.mode == "recover-save" && client.saves == 2)) return;
   if (client.mode == "phase2") {
     client.valid = client.valid && SmcRequestSaveYourselfPhase2(connection, phase2, data);
     return;
   }
   properties(connection);
-  SmcSaveYourselfDone(connection, True);
+  if (client.mode == "never" || client.mode == "anyway") {
+    unsigned char style = client.mode == "never" ? SmRestartNever : SmRestartAnyway;
+    SmPropValue value{1, &style};
+    SmProp hint{const_cast<char*>(SmRestartStyleHint), const_cast<char*>(SmCARD8), 1, &value};
+    SmProp* pointer = &hint;
+    SmcSetProperties(connection, 1, &pointer);
+  }
+  SmcSaveYourselfDone(connection, !(client.mode == "fail-save" && client.saves > 1));
 }
 void complete(SmcConn, SmPointer data) { ++static_cast<Client*>(data)->completes; }
 void die(SmcConn, SmPointer data) { static_cast<Client*>(data)->valid = false; }
@@ -137,6 +149,7 @@ int main(int argc, char** argv) {
         passed = passed && manager > 1 && kill(static_cast<pid_t>(manager), SIGUSR1) == 0;
       } else SmcRequestSaveYourself(client.connection, SmSaveBoth, False, SmInteractStyleNone, True, global);
       passed = passed && wait(client, [&] { return client.completes > before; });
+      if (!global && client.mode == "recover-save") SmcSaveYourselfDone(client.connection, True);
     }
   }
   SmcCloseConnection(client.connection, 0, nullptr);
