@@ -55,5 +55,15 @@ int main() {
                  "disconnected output recovers to remaining output");
   valid &= check(choose_display_monitor({}, 100, 100), {0, 0, 1, 1, true},
                  "empty monitor fallback");
+  using midnight::fullscreen_monitor_area;
+  const auto span = fullscreen_monitor_area(side_by_side, {0, 1, 0, 1});
+  valid &= span && check(*span, {0, 0, 5760, 2160}, "fullscreen span");
+  const auto shifted = fullscreen_monitor_area({{-1920, -400, 1920, 1080}, left}, {0, 1, 0, 1});
+  valid &= shifted && check(*shifted, {-1920, -400, 3840, 1480}, "negative fullscreen origin");
+  valid &= !fullscreen_monitor_area(side_by_side, {0, 0, 1, 0}); // empty rectangle
+  valid &= !fullscreen_monitor_area(side_by_side, {0, 0, 0, 99});
+  valid &= !fullscreen_monitor_area({}, {0, 0, 0, 0});
+  valid &= !fullscreen_monitor_area({{0, 0, 65536, 720}}, {0, 0, 0, 0});
+  valid &= !fullscreen_monitor_area({{32768, 0, 1280, 720}}, {0, 0, 0, 0});
   return valid ? 0 : 1;
 }

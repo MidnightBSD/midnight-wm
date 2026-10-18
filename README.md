@@ -6,7 +6,7 @@ MidnightBSD. The current target is MidnightBSD 4.2 with Clang 19 and C++23.
 ## Build
 
 The build needs CMake, pkg-config, XCB (including icccm, keysyms, XFixes, and
-RandR), Cairo, Pango, GLib/GIO, GdkPixbuf, Garcon, and SQLite 3.
+RandR, Xinerama), Cairo, Pango, GLib/GIO, GdkPixbuf, Garcon, and SQLite 3.
 The companion `midnightbsd-settings` application also needs GTK 3.
 Install the librsvg GdkPixbuf loader for SVG wallpapers; the mport includes
 this runtime dependency. PNG, JPEG, and GIF loaders must also be available.
@@ -136,6 +136,16 @@ publishes the read-only focused state and each window's allowed actions.
 when focus changes; modal transients remain above their parent. Focused
 fullscreen families stay above ordinary windows and docks. `SKIP_PAGER` is
 supported independently of `SKIP_TASKBAR`.
+
+Pagers can restack managed windows with `_NET_RESTACK_WINDOW` without changing
+focus; desktop layers and transient ordering still apply. Applications can
+request fullscreen across selected monitors with `_NET_WM_FULLSCREEN_MONITORS`.
+Its four indices follow Xinerama ordering (top, bottom, left, right); servers
+without active Xinerama expose the root screen as index zero. Requests apply
+on fullscreen entry or immediately while fullscreen. Invalid indices or empty
+rectangles are ignored. Monitor configuration changes clear the selection and
+return windows to ordinary single-monitor fullscreen; applications can then
+request a new selection.
 
 Optional portal integration uses `deskutils/xdg-desktop-portal` and
 `x11/xdg-desktop-portal-gtk`. The installed MidnightWorkspace portal configuration

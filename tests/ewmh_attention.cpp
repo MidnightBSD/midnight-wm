@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-2-Clause
 // Run only in the isolated server provided by ewmh_attention.py.
 #include <xcb/xcb.h>
+#include <xcb/xinerama.h>
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -31,9 +32,11 @@ std::vector<std::uint32_t> property(xcb_window_t w, const char* name) {
 void set(xcb_window_t w, const char* name, xcb_atom_t type, std::uint32_t value) {
   xcb_change_property(connection, XCB_PROP_MODE_REPLACE, w, atom(name), type, 32, 1, &value); xcb_flush(connection);
 }
-void message(xcb_window_t w, const char* name, std::uint32_t a, std::uint32_t b = 0, std::uint32_t c = 0) {
+void message(xcb_window_t w, const char* name, std::uint32_t a, std::uint32_t b = 0, std::uint32_t c = 0,
+             std::uint32_t d = 0, std::uint32_t f = 0) {
   xcb_client_message_event_t e{}; e.response_type = XCB_CLIENT_MESSAGE; e.format = 32;
   e.window = w; e.type = atom(name); e.data.data32[0] = a; e.data.data32[1] = b; e.data.data32[2] = c;
+  e.data.data32[3] = d; e.data.data32[4] = f;
   xcb_send_event(connection, 0, root, XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY, reinterpret_cast<char*>(&e)); xcb_flush(connection);
 }
 template<class F> void await(F f, const char* error) {
@@ -61,6 +64,162 @@ bool above(xcb_window_t a, xcb_window_t b) {
   auto ai = std::find(p.begin(), p.end(), a), bi = std::find(p.begin(), p.end(), b);
   return ai != p.end() && bi != p.end() && ai > bi;
 }
+// These requests must change stacking without changing the active client.
+void protocol_requests() {
+  check(has(root, "_NET_SUPPORTED", "_NET_RESTACK_WINDOW"), "RESTACK_WINDOW not advertised");
+  check(has(root, "_NET_SUPPORTED", "_NET_WM_FULLSCREEN_MONITORS"), "FULLSCREEN_MONITORS not advertised");
+  auto a = create(), b = create(), guard = create(); focus(guard);
+  auto restack = [&](xcb_window_t target, xcb_window_t sibling, std::uint32_t mode,
+                     std::uint32_t source = 2) {
+    message(target, "_NET_RESTACK_WINDOW", source, sibling, mode);
+  };
+  auto order = [&](bool a_above, const char* error) {
+    await([&]{ return a_above ? above(a, b) : above(b, a); }, error);
+    check(active(guard), "restacking changed focus");
+  };
+  restack(a, b, XCB_STACK_MODE_ABOVE); order(true, "restack Above");
+  restack(a, b, XCB_STACK_MODE_BELOW); order(false, "restack Below");
+  // Both fixture windows overlap, making the conditional modes observable.
+  restack(a, b, XCB_STACK_MODE_TOP_IF); order(true, "restack TopIf");
+  restack(a, b, XCB_STACK_MODE_BOTTOM_IF); order(false, "restack BottomIf");
+  restack(a, b, XCB_STACK_MODE_OPPOSITE); order(true, "restack Opposite raises");
+  restack(a, b, XCB_STACK_MODE_OPPOSITE); order(false, "restack Opposite lowers");
+  auto unmanaged = create(false);
+  auto ignored = [&](xcb_window_t target, xcb_window_t sibling, std::uint32_t mode,
+                     std::uint32_t source) {
+    auto before = property(root, "_NET_CLIENT_LIST_STACKING");
+    restack(target, sibling, mode, source); std::this_thread::sleep_for(100ms);
+    check(property(root, "_NET_CLIENT_LIST_STACKING") == before && active(guard),
+          "invalid restack changed stacking or focus");
+  };
+  ignored(a, b, 5, 2);
+  for (auto source : {0U, 1U, 3U}) ignored(a, b, XCB_STACK_MODE_ABOVE, source);
+  ignored(a, unmanaged, XCB_STACK_MODE_ABOVE, 2);
+  ignored(unmanaged, b, XCB_STACK_MODE_ABOVE, 2);
+  ignored(a, a, XCB_STACK_MODE_ABOVE, 2);
+  change(b, 1, "_NET_WM_STATE_ABOVE");
+  await([&]{ return state(b, "_NET_WM_STATE_ABOVE") && above(b, a); }, "restack ABOVE setup");
+  restack(a, b, XCB_STACK_MODE_ABOVE); std::this_thread::sleep_for(100ms);
+  check(above(b, a) && active(guard), "restack escaped ABOVE layer");
+  change(b, 0, "_NET_WM_STATE_ABOVE");
+  change(a, 1, "_NET_WM_STATE_BELOW");
+  await([&]{ return state(a, "_NET_WM_STATE_BELOW") && above(b, a); }, "restack BELOW setup");
+  restack(a, b, XCB_STACK_MODE_ABOVE); std::this_thread::sleep_for(100ms);
+  check(above(b, a) && active(guard), "restack escaped BELOW layer");
+  change(a, 0, "_NET_WM_STATE_BELOW");
+  auto child = create(false); set(child, "WM_TRANSIENT_FOR", XCB_ATOM_WINDOW, a);
+  xcb_map_window(connection, child); xcb_flush(connection);
+  await([&]{ return above(child, a); }, "restack transient setup"); focus(guard);
+  restack(a, child, XCB_STACK_MODE_ABOVE); std::this_thread::sleep_for(100ms);
+  check(above(child, a) && active(guard), "restack placed parent above transient");
+
+  auto fullscreen = create();
+  auto monitors = [&]{ return property(fullscreen, "_NET_WM_FULLSCREEN_MONITORS"); };
+  auto request_monitors = [&](std::uint32_t top, std::uint32_t bottom,
+                              std::uint32_t left, std::uint32_t right) {
+    message(fullscreen, "_NET_WM_FULLSCREEN_MONITORS", top, bottom, left, right, 2);
+  };
+  const std::vector<std::uint32_t> single{0, 0, 0, 0};
+  request_monitors(0, 0, 0, 0);
+  await([&]{ return monitors() == single; }, "valid fullscreen monitors not published");
+  auto* published = xcb_get_property_reply(connection,
+      xcb_get_property(connection, 0, fullscreen, atom("_NET_WM_FULLSCREEN_MONITORS"),
+                       XCB_GET_PROPERTY_TYPE_ANY, 0, 8), nullptr);
+  check(published && published->type == XCB_ATOM_CARDINAL && published->format == 32 &&
+        published->value_len == 4 && published->bytes_after == 0,
+        "fullscreen monitor property must contain exactly four CARDINAL/32 words");
+  std::free(published);
+  auto geometry = [&]{
+    auto* g = xcb_get_geometry_reply(connection, xcb_get_geometry(connection, fullscreen), nullptr);
+    auto* position = xcb_translate_coordinates_reply(connection,
+        xcb_translate_coordinates(connection, fullscreen, root, 0, 0), nullptr);
+    bool ok = g && position && g->width == 1280 && g->height == 720 &&
+              position->dst_x == 0 && position->dst_y == 0;
+    std::free(g); std::free(position); return ok;
+  };
+  change(fullscreen, 1, "_NET_WM_STATE_FULLSCREEN");
+  await(geometry, "fullscreen monitor request not used on fullscreen entry");
+  request_monitors(0, 0, 0, 0); await(geometry, "live fullscreen monitor geometry");
+  for (int index = 0; index < 4; ++index) {
+    std::uint32_t invalid[4]{}; invalid[index] = 0xffffffffU;
+    request_monitors(invalid[0], invalid[1], invalid[2], invalid[3]);
+    std::this_thread::sleep_for(100ms);
+    check(monitors() == single && geometry(), "invalid fullscreen monitor index accepted");
+  }
+  change(fullscreen, 0, "_NET_WM_STATE_FULLSCREEN");
+  for (auto w : {a, b, guard, child, unmanaged, fullscreen}) xcb_destroy_window(connection, w);
+  xcb_flush(connection);
+  await([&]{ return property(root, "_NET_CLIENT_LIST").empty(); }, "protocol fixtures cleanup");
+  std::cout << "Restack and fullscreen monitor protocol checks passed.\n";
+}
+
+void multiple_monitor_requests() {
+  auto* reply = xcb_xinerama_query_screens_reply(connection,
+      xcb_xinerama_query_screens(connection), nullptr);
+  check(reply && xcb_xinerama_query_screens_screen_info_length(reply) == 2,
+        "multi-monitor fixture requires two Xinerama screens");
+  const auto* screens = xcb_xinerama_query_screens_screen_info(reply);
+  check(screens[0].x_org == 0 && screens[0].y_org == 0 &&
+        screens[0].width == 1280 && screens[0].height == 720 &&
+        screens[1].x_org == 0 && screens[1].y_org == 0 &&
+        screens[1].width == 800 && screens[1].height == 600,
+        "unexpected Xinerama screen index ordering");
+  std::free(reply);
+  auto window = create();
+  auto geometry = [&]{
+    auto* g = xcb_get_geometry_reply(connection, xcb_get_geometry(connection, window), nullptr);
+    auto* p = xcb_translate_coordinates_reply(connection,
+        xcb_translate_coordinates(connection, window, root, 0, 0), nullptr);
+    check(g && p, "multi-monitor geometry query");
+    std::vector<int> result{p->dst_x, p->dst_y, g->width, g->height};
+    std::free(g); std::free(p); return result;
+  };
+  const auto original = geometry();
+  auto property_value = [&]{ return property(window, "_NET_WM_FULLSCREEN_MONITORS"); };
+  auto request = [&](std::uint32_t top, std::uint32_t bottom, std::uint32_t left,
+                     std::uint32_t right, std::uint32_t source = 2) {
+    message(window, "_NET_WM_FULLSCREEN_MONITORS", top, bottom, left, right, source);
+  };
+  request(0, 0, 0, 0);
+  await([&]{ return property_value() == std::vector<std::uint32_t>{0, 0, 0, 0}; }, "multi-monitor initial property");
+  check(geometry() == original, "monitor preference resized ordinary window");
+  change(window, 1, "_NET_WM_STATE_FULLSCREEN");
+  await([&]{ return geometry() == std::vector<int>{0, 0, 1280, 720}; }, "first monitor fullscreen geometry");
+  request(1, 1, 1, 1);
+  await([&]{ return geometry() == std::vector<int>{0, 0, 800, 600}; }, "live second monitor fullscreen geometry");
+  request(0, 1, 0, 0);
+  const std::vector<std::uint32_t> edges{0, 1, 0, 0};
+  await([&]{ return property_value() == edges && geometry() == std::vector<int>{0, 0, 1280, 600}; },
+        "fullscreen top bottom left right edge selection");
+  request(1, 1, 1, 1, 3); std::this_thread::sleep_for(100ms);
+  check(property_value() == edges && geometry() == std::vector<int>{0, 0, 1280, 600},
+        "invalid fullscreen request source accepted");
+  xcb_client_message_event_t malformed{};
+  malformed.response_type = XCB_CLIENT_MESSAGE; malformed.format = 8;
+  malformed.window = window; malformed.type = atom("_NET_WM_FULLSCREEN_MONITORS");
+  malformed.data.data32[0] = malformed.data.data32[1] = 1;
+  malformed.data.data32[2] = malformed.data.data32[3] = 1;
+  malformed.data.data32[4] = 2;
+  xcb_send_event(connection, 0, root, XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT |
+      XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY, reinterpret_cast<const char*>(&malformed));
+  xcb_flush(connection); std::this_thread::sleep_for(100ms);
+  check(property_value() == edges, "invalid fullscreen request format accepted");
+  for (int index = 0; index < 4; ++index) {
+    auto invalid = edges; invalid[index] = 2;
+    request(invalid[0], invalid[1], invalid[2], invalid[3]);
+    std::this_thread::sleep_for(100ms);
+    check(property_value() == edges && geometry() == std::vector<int>{0, 0, 1280, 600},
+          "out-of-range multi-monitor index accepted");
+  }
+  change(window, 0, "_NET_WM_STATE_FULLSCREEN");
+  await([&]{ return geometry() == original; }, "fullscreen exit did not restore ordinary geometry");
+  check(property_value() == edges, "fullscreen exit removed monitor preference");
+  change(window, 1, "_NET_WM_STATE_FULLSCREEN");
+  await([&]{ return geometry() == std::vector<int>{0, 0, 1280, 600}; }, "fullscreen reentry lost monitor preference");
+  xcb_destroy_window(connection, window); xcb_flush(connection);
+  std::cout << "Xinerama fullscreen monitor edge and live geometry checks passed.\n";
+}
+
 // PropertyNotify supplies the server clock, avoiding guesses from wall time.
 xcb_timestamp_t server_time(xcb_window_t w) {
   const std::uint32_t mask = XCB_EVENT_MASK_PROPERTY_CHANGE;
@@ -84,6 +243,9 @@ int main(int argc, char** argv) {
  try {
   connection = xcb_connect(nullptr, nullptr); check(!xcb_connection_has_error(connection), "X connection");
   root = xcb_setup_roots_iterator(xcb_get_setup(connection)).data->root;
+  if (argc > 1 && std::string(argv[1]) == "--monitors-only") {
+    multiple_monitor_requests(); xcb_disconnect(connection); return 0;
+  }
   if (argc > 1 && std::string(argv[1]) == "--visual") {
     for (const auto* title : {"Attention example", "Foreground example"}) {
       auto window = create(false);
@@ -99,6 +261,7 @@ int main(int argc, char** argv) {
     xcb_disconnect(connection);
     return 0;
   }
+  protocol_requests();
   auto a = create(), b = create(); focus(b);
   await([&]{ return state(b, "_NET_WM_STATE_FOCUSED") && !state(a, "_NET_WM_STATE_FOCUSED"); }, "FOCUSED publication");
   change(a, 1, "_NET_WM_STATE_FOCUSED"); std::this_thread::sleep_for(100ms);

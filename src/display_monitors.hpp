@@ -4,6 +4,8 @@
 #include <xcb/randr.h>
 
 #include <algorithm>
+#include <array>
+#include <optional>
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
@@ -18,6 +20,23 @@ struct DisplayMonitor {
   xcb_atom_t name{};
   bool operator==(const DisplayMonitor&) const = default;
 };
+
+// X11 coordinates are signed 16-bit and dimensions are unsigned 16-bit.
+inline std::optional<DisplayMonitor> fullscreen_monitor_area(
+    const std::vector<DisplayMonitor>& monitors, const std::array<std::uint32_t, 4>& indices) {
+  if (std::ranges::any_of(indices, [&](auto index) { return index >= monitors.size(); }))
+    return std::nullopt;
+  const auto& top = monitors[indices[0]];
+  const auto& bottom = monitors[indices[1]];
+  const auto& left = monitors[indices[2]];
+  const auto& right = monitors[indices[3]];
+  const auto width = std::int64_t(right.x) + right.width - left.x;
+  const auto height = std::int64_t(bottom.y) + bottom.height - top.y;
+  if (width <= 0 || height <= 0 || width > 65535 || height > 65535 ||
+      left.x < -32768 || left.x > 32767 || top.y < -32768 || top.y > 32767)
+    return std::nullopt;
+  return DisplayMonitor{left.x, top.y, int(width), int(height)};
+}
 
 inline DisplayMonitor choose_display_monitor(const std::vector<DisplayMonitor>& monitors,
                                              int x, int y) {
