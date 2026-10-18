@@ -509,7 +509,7 @@ void X11WindowManager::set_root_properties() {
   std::vector<xcb_atom_t> supported;
   for (const auto* key : {"_NET_SUPPORTED", "_NET_SUPPORTING_WM_CHECK", "_NET_CLIENT_LIST",
                           "_NET_CLIENT_LIST_STACKING",
-                          "_NET_ACTIVE_WINDOW", "_NET_CLOSE_WINDOW", "_NET_WM_NAME", "_NET_WM_VISIBLE_NAME",
+                          "_NET_ACTIVE_WINDOW", "_NET_CLOSE_WINDOW", "_NET_WM_ICON", "_NET_WM_NAME", "_NET_WM_VISIBLE_NAME",
                           "_NET_WM_STATE", "_NET_WM_STATE_FULLSCREEN",
                           "_NET_WM_STATE_MAXIMIZED_VERT", "_NET_WM_STATE_MAXIMIZED_HORZ",
                           "_NET_WM_STATE_SHADED", "_NET_WM_ACTION_SHADE",
@@ -928,6 +928,7 @@ void X11WindowManager::manage(xcb_window_t window) {
                   XCB_GRAB_MODE_SYNC, XCB_GRAB_MODE_ASYNC, XCB_WINDOW_NONE,
                   XCB_CURSOR_NONE, XCB_BUTTON_INDEX_ANY, XCB_MOD_MASK_ANY);
   update_title(frame);
+  update_icon(frame);
   frame_to_client_[frame.frame] = window;
   frames_[window] = frame;
   xcb_delete_property(connection_, window, atom("_NET_WM_FULLSCREEN_MONITORS"));
@@ -1225,8 +1226,32 @@ void X11WindowManager::update_tasks() {
   std::vector<Task> tasks;
   for (auto& [client, frame] : frames_)
     if (!frame.skip_taskbar && (frame.desktop == current_desktop_ || frame.desktop == all_desktops_))
-      tasks.push_back({client, frame.title + (frame.unresponsive ? " (Not responding)" : ""), client == active_, frame.attention || frame.urgent});
+      tasks.push_back({client, frame.title + (frame.unresponsive ? " (Not responding)" : ""), client == active_, frame.attention || frame.urgent, frame.icon});
   shell_.set_tasks(std::move(tasks));
+}
+
+void X11WindowManager::update_icon(Frame& frame) {
+  frame.icon = {};
+  const auto cookie = xcb_get_property(connection_, false, frame.client, atom("_NET_WM_ICON"),
+                                       XCB_ATOM_CARDINAL, 0, 1024 * 1024);
+  Reply<xcb_get_property_reply_t> reply(xcb_get_property_reply(connection_, cookie, nullptr), std::free);
+  if (reply && reply->type == XCB_ATOM_CARDINAL && reply->format == 32) {
+    const auto count = static_cast<std::size_t>(xcb_get_property_value_length(reply.get())) / 4;
+    frame.icon.image = decode_task_icon({static_cast<const std::uint32_t*>(xcb_get_property_value(reply.get())), count});
+  }
+  const auto class_cookie = xcb_get_property(connection_, false, frame.client, XCB_ATOM_WM_CLASS,
+                                             XCB_ATOM_STRING, 0, 256);
+  Reply<xcb_get_property_reply_t> cls(xcb_get_property_reply(connection_, class_cookie, nullptr), std::free);
+  if (!cls || cls->type != XCB_ATOM_STRING || cls->format != 8 || cls->bytes_after) return;
+  std::string_view bytes(static_cast<const char*>(xcb_get_property_value(cls.get())),
+                         xcb_get_property_value_length(cls.get()));
+  const auto separator = bytes.find('\0');
+  if (separator == std::string_view::npos) return;
+  const auto tail = bytes.substr(separator + 1);
+  const auto end = tail.find('\0');
+  if (end == std::string_view::npos) return;
+  frame.icon.instance = bytes.substr(0, separator);
+  frame.icon.wm_class = tail.substr(0, end);
 }
 
 void X11WindowManager::update_title(Frame& frame) {
@@ -1867,6 +1892,9 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
     if (auto it = frames_.find(e->window); it != frames_.end()) {
       if (e->atom == atom("_NET_WM_NAME") || e->atom == XCB_ATOM_WM_NAME) {
         update_title(it->second); draw_frame(it->second); update_tasks();
+      } else if (e->atom == atom("_NET_WM_ICON") || e->atom == XCB_ATOM_WM_CLASS) {
+        update_icon(it->second);
+        update_tasks();
       } else if (e->atom == XCB_ATOM_WM_NORMAL_HINTS || e->atom == XCB_ATOM_WM_HINTS ||
                  e->atom == atom("WM_PROTOCOLS") || e->atom == XCB_ATOM_WM_TRANSIENT_FOR) {
         update_icccm_hints(it->second);

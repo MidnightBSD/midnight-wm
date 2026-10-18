@@ -4,6 +4,7 @@
 #include <xcb/xcb_icccm.h>
 #include "display_monitors.hpp"
 #include "desktop_layout.hpp"
+#include "task_icon.hpp"
 
 #include <cstdint>
 #include <chrono>
@@ -41,6 +42,7 @@ private:
   enum class WindowRole { normal, dialog, utility, splash };
   struct Frame {
     xcb_window_t client{};
+    TaskIcon icon;
     xcb_window_t frame{};
     int x{};
     int y{};
@@ -117,6 +119,7 @@ private:
   void update_fullscreen_geometry(Frame& frame);
   void set_fullscreen_monitors(Frame& frame, const std::array<std::uint32_t, 4>& indices);
   void update_tasks();
+  void update_icon(Frame& frame);
   void scan_existing();
   void manage(xcb_window_t window);
   void unmanage(xcb_window_t client, bool destroyed);

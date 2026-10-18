@@ -679,6 +679,7 @@ struct Shell::Impl {
   std::vector<std::filesystem::path> icon_roots;
   std::unordered_map<std::string, IconTheme> icon_themes;
   std::unordered_map<std::string, std::filesystem::path> icon_files;
+  std::unordered_map<std::string, std::string> task_app_icons;
   // Bounded by trim_icon_caches(): thumbnails, the icon chooser, and icon names
   // from D-Bus peers can each add entries for the whole session.
   std::unordered_map<std::string, cairo_surface_t*> icon_surfaces;
@@ -914,6 +915,7 @@ struct Shell::Impl {
   }
 
   void reload_apps() {
+    task_app_icons.clear();
     for (auto* app : apps) g_object_unref(app);
     apps.clear();
     app_categories.clear();
@@ -1343,6 +1345,7 @@ struct Shell::Impl {
       if (entry.second) cairo_surface_destroy(entry.second);
     icon_surfaces.clear();
     icon_files.clear();
+    task_app_icons.clear();
     file_icon_cache.clear();
     file_content_types.clear();
   }
@@ -1437,6 +1440,77 @@ struct Shell::Impl {
     }
   }
 
+  cairo_surface_t* task_icon_surface(const Task& task) {
+    if (task.icon.image) return task.icon.image.get();
+    if (!task.icon.theme_name.empty()) return themed_icon_surface(task.icon.theme_name);
+    if (task.icon.wm_class.empty() && task.icon.instance.empty()) return nullptr;
+    const auto key = task.icon.wm_class + "\n" + task.icon.instance;
+    std::string icon_name;
+    const auto found = task_app_icons.find(key);
+    if (found != task_app_icons.end()) icon_name = found->second;
+    else {
+      if (task_app_icons.size() >= 256) return nullptr;
+      GList* applications = g_app_info_get_all();
+      for (auto* node = applications; node; node = node->next) {
+        auto* app = G_APP_INFO(node->data);
+        const auto matches = [&](const char* candidate) {
+          return candidate && *candidate &&
+              ((!task.icon.wm_class.empty() && !g_ascii_strcasecmp(candidate, task.icon.wm_class.c_str())) ||
+               (!task.icon.instance.empty() && !g_ascii_strcasecmp(candidate, task.icon.instance.c_str())));
+        };
+        std::string id = g_app_info_get_id(app) ? g_app_info_get_id(app) : "";
+        if (id.ends_with(".desktop")) id.resize(id.size() - 8);
+        const char* startup_class = G_IS_DESKTOP_APP_INFO(app) ?
+            g_desktop_app_info_get_startup_wm_class(G_DESKTOP_APP_INFO(app)) : nullptr;
+        if (!matches(id.c_str()) && !matches(startup_class)) continue;
+        if (auto* app_icon = g_app_info_get_icon(app)) {
+          char* value = g_icon_to_string(app_icon);
+          if (value && std::strlen(value) <= max_icon_value) icon_name = value;
+          g_free(value);
+        }
+        if (!icon_name.empty()) break;
+      }
+      g_list_free_full(applications, g_object_unref);
+      task_app_icons.emplace(key, icon_name);
+    }
+    if (icon_name.empty()) return nullptr;
+    auto* app_icon = g_icon_new_for_string(icon_name.c_str(), nullptr);
+    auto* surface = gio_icon_surface(app_icon, 48);
+    if (app_icon) g_object_unref(app_icon);
+    return surface;
+  }
+
+  void draw_task_icon(cairo_t* cr, const Task& task, int x, int y) {
+    cairo_save(cr);
+    cairo_rectangle(cr, x, y, 16, 16);
+    cairo_clip(cr);
+    if (auto* surface = task_icon_surface(task)) {
+      const int w = cairo_image_surface_get_width(surface);
+      const int h = cairo_image_surface_get_height(surface);
+      if (w > 0 && h > 0) {
+        const double factor = 16.0 / std::max(w, h);
+        cairo_translate(cr, x + (16 - w * factor) / 2, y + (16 - h * factor) / 2);
+        cairo_scale(cr, factor, factor);
+        cairo_set_source_surface(cr, surface, 0, 0);
+        cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_BILINEAR);
+        cairo_paint(cr);
+      }
+    } else if (task.icon.theme_name == "user-trash") {
+      cairo_translate(cr, x, y);
+      cairo_scale(cr, 16.0 / 48, 16.0 / 48);
+      trash_icon(cr, 0, 0);
+    } else if (task.icon.theme_name == "folder") {
+      fill(cr, .99, .88, .51, x, y + 2, 8, 5);
+      fill(cr, .95, .78, .35, x, y + 5, 16, 10);
+      draw_bevel(cr, x, y + 5, 16, 10);
+    } else {
+      themed_fill(cr, config.field_color, .96, .96, .92, x, y + 1, 16, 14);
+      draw_bevel(cr, x, y + 1, 16, 14, false, &config);
+      fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2], x + 2, y + 3, 12, 3);
+    }
+    cairo_restore(cr);
+  }
+
   void draw_panel() {
     const auto all_tasks = panel_tasks();
     const auto layout = task_layout(all_tasks.size());
@@ -1479,8 +1553,10 @@ struct Shell::Impl {
           cairo_stroke(cr);
           text(cr, "!", x + 4, 8, 8, 11, false, true);
         }
-        text(cr, task.title, x + (task.attention && !task.active ? 14 : 7), 8,
-             task.attention && !task.active ? 88 : 95, 11, task.active);
+        const int icon_x = x + (task.attention && !task.active ? 14 : 5);
+        draw_task_icon(cr, task, icon_x, 9);
+        const int label_x = icon_x + 20;
+        text(cr, task.title, label_x, 8, x + task_button_width - 5 - label_x, 11, task.active);
       }
       if (layout.overflow) {
         bevel(cr, layout.overflow_x, 5, task_overflow_width, 24);
@@ -1521,8 +1597,9 @@ struct Shell::Impl {
     std::ranges::sort(ids);
     for (const auto window : ids) {
       const auto& folder = folders.at(window);
-      result.push_back({window, folder.trash ? "Trash" : basename(folder.path),
-                        window == focused_folder});
+      Task task{window, folder.trash ? "Trash" : basename(folder.path), window == focused_folder};
+      task.icon.theme_name = folder.trash ? "user-trash" : "folder";
+      result.push_back(std::move(task));
     }
     if (focused_folder)
       for (auto& task : result)
@@ -1829,6 +1906,10 @@ struct Shell::Impl {
             cairo_set_source_surface(cr, surface, 8, y + 3);
             cairo_paint(cr);
           }
+        } else if (entry.action == MenuAction::activate_task) {
+          const auto all_tasks = panel_tasks();
+          const auto task = std::ranges::find(all_tasks, entry.window, &Task::window);
+          if (task != all_tasks.end()) draw_task_icon(cr, *task, 9, y + 4);
         } else if (entry.action == MenuAction::open_trash) {
           if (auto* surface = themed_icon_surface("user-trash")) {
             cairo_set_source_surface(cr, surface, 8, y + 3);

@@ -116,6 +116,10 @@ The mouse wheel changes volume in 5% steps. With the popup open, Left/Right
 adjust volume and Space or M toggles mute. The control uses MidnightBSD's default
 OSS `/dev/mixer`, falling back to PCM when master volume is unavailable.
 The popup reports when no usable mixer is available.
+Running programs show their window icon beside the task title, including in
+the overflow menu. If a program supplies no usable icon, its installed desktop
+entry is matched by window class, with a generic application icon as fallback.
+Built-in folders use folder and Trash icons. Window icon changes apply live.
 
 On systems with an ACPI battery, a battery icon and remaining percentage appear
 next to the speaker button. Charging displays a lightning marker; low battery
