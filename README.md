@@ -373,6 +373,13 @@ literal arguments, disabled restore, corrupt-state preservation and cleanup.
 Add `--placements` for window geometry/workspace/state checks, duplicate and
 malformed roles, stalled-WM preservation, final shutdown capture and offscreen
 recovery. Add `--matrix` to repeat those checks at all five supported resolutions.
+Add `--changed-resolution-matrix` to save on a real 3840×2160 Xvfb screen,
+restart the isolated X server, and restore onto each of the five supported sizes.
+This checks recovery into the new work area and scale, including normal geometry
+behind shading, maximization and fullscreen. The default CTest changed-resolution
+case restores 4K sessions at 1280×720. These are actual screen sizes across logins,
+not synthetic root resize events; they do not prove live RandR hotplug or offset
+multi-monitor behavior. See [session validation](docs/session-validation.md).
 `application_restore_test` checks exact argument bytes, working directories,
 spawn failures, descriptor/signal isolation and rejection of shell fallback.
 

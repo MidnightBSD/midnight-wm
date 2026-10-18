@@ -210,6 +210,12 @@ if(DBUS_RUN_SESSION)
           ${CMAKE_CURRENT_SOURCE_DIR}/tests/logout_smoke.py
           --binary $<TARGET_FILE:midnightbsd-session> --fixture $<TARGET_FILE:xsmp_logout_fixture>)
         set_tests_properties(coordinated_logout_smoke PROPERTIES TIMEOUT 100)
+        add_test(NAME application_changed_resolution_smoke COMMAND ${Python3_EXECUTABLE}
+          ${CMAKE_CURRENT_SOURCE_DIR}/tests/application_restore_smoke.py --placements
+          --width 3840 --height 2160 --restore-width 1280 --restore-height 720
+          --binary $<TARGET_FILE:midnightbsd-session> --fixture $<TARGET_FILE:xsmp_restore_fixture>
+          --output ${CMAKE_CURRENT_BINARY_DIR}/application-changed-resolution-results)
+        set_tests_properties(application_changed_resolution_smoke PROPERTIES TIMEOUT 100)
         add_test(NAME application_placement_smoke COMMAND ${Python3_EXECUTABLE}
           ${CMAKE_CURRENT_SOURCE_DIR}/tests/application_restore_smoke.py --placements
           --binary $<TARGET_FILE:midnightbsd-session> --fixture $<TARGET_FILE:xsmp_restore_fixture>
