@@ -14,7 +14,7 @@ import sys
 import tempfile
 import time
 sys.dont_write_bytecode = True
-from settings_smoke import run, until, window_for_size, window_position
+from settings_smoke import run, until, window_for_size, window_position, visible_window
 
 
 def pixel(image, x, y):
@@ -45,12 +45,12 @@ def session(args):
             other = subprocess.run([str(args.binary)], capture_output=True, text=True, timeout=5, env=other_env)
             assert other.returncode != 0, "second WM took over"
 
-            # At 1280x720 with no tray items, the battery fill starts at (1078,12).
+            # At 1280x720 with no tray items, the battery fill starts at (1086,12).
             until(lambda: pixel_snapshot(args) == (51, 133, 76), "initial battery did not render")
             run("import", "-window", "root", str(args.output / "battery-75.png"))
-            full_fill = pixel(args.output / "battery-75.png", 1087, 12)
+            full_fill = pixel(args.output / "battery-75.png", 1095, 12)
             assert full_fill == (51, 133, 76), f"75% battery fill missing at expected panel coordinate: {full_fill}"
-            assert pixel(args.output / "battery-75.png", 1089, 12) != (51, 133, 76), \
+            assert pixel(args.output / "battery-75.png", 1097, 12) != (51, 133, 76), \
                 "battery fill length did not match 75 percent"
 
             run("xdotool", "mousemove", "1107", "16", "click", "1")
@@ -60,28 +60,53 @@ def session(args):
             notice_x, notice_y = window_position(notice)
             run("xdotool", "mousemove", str(notice_x + 210), str(notice_y + 80), "click", "1")
 
+            config = Path(os.environ["XDG_CONFIG_HOME"]) / "midnight-wm/config.ini"
+            settings_env = os.environ.copy()
+            # GTK needs the installed loaders, MIME data, and settings schemas.
+            # HOME/config remain isolated; the WM retains its empty data dirs.
+            settings_env.update(XDG_DATA_DIRS="/usr/local/share:/usr/share", NO_AT_BRIDGE="1")
+            settings = subprocess.Popen([str(args.binary.parent / "midnightbsd-settings")], env=settings_env)
+            try:
+                settings_window = until(lambda: visible_window("Midnight Workspace Settings"),
+                                        "settings window did not appear")
+                run("xdotool", "windowactivate", "--sync", settings_window)
+                run("xdotool", "key", "--clearmodifiers", "ctrl+Page_Down")
+                run("xdotool", "key", "--clearmodifiers", "alt+b")
+                run("xdotool", "key", "--clearmodifiers", "alt+a")
+                until(lambda: "show_battery=false" in config.read_text(), "checkbox did not save disabled state")
+                until(lambda: hidden_now(args), "battery did not hide immediately after Apply", timeout=5)
+                run("import", "-window", "root", str(args.output / "battery-disabled.png"))
+                run("xdotool", "key", "--clearmodifiers", "alt+b")
+                run("xdotool", "key", "--clearmodifiers", "alt+a")
+                until(lambda: "show_battery=true" in config.read_text(), "checkbox did not save enabled state")
+                until(lambda: pixel_snapshot(args) == (51, 133, 76),
+                      "battery did not return immediately after Apply", timeout=5)
+            finally:
+                settings.terminate()
+                settings.wait(timeout=5)
+
             # The panel polls every 30 seconds. Removing the fixture battery must
             # remove its complete group and let the speaker occupy the old gap.
             set_fixture(args.fixture_data, (0, 0, -1, 7, 0))
             until(lambda: hidden_now(args), "battery remained visible after removal", timeout=35)
             run("import", "-window", "root", str(args.output / "battery-absent.png"))
-            absent_pixel = pixel(args.output / "battery-absent.png", 1087, 12)
+            absent_pixel = pixel(args.output / "battery-absent.png", 1095, 12)
             assert absent_pixel != (51, 133, 76), f"battery fill remained after removal: {absent_pixel}"
 
             set_fixture(args.fixture_data, (1, 25, 0, 2, 1))
             until(lambda: pixel_snapshot(args) == (51, 133, 76),
                   "charging battery did not return after fixture change", timeout=35)
             run("import", "-window", "root", str(args.output / "battery-charging-25.png"))
-            quarter_fill = pixel(args.output / "battery-charging-25.png", 1080, 12)
+            quarter_fill = pixel(args.output / "battery-charging-25.png", 1088, 12)
             assert quarter_fill == (51, 133, 76), f"25% charging fill missing: {quarter_fill}"
-            assert pixel(args.output / "battery-charging-25.png", 1083, 12) != (51, 133, 76), \
+            assert pixel(args.output / "battery-charging-25.png", 1091, 12) != (51, 133, 76), \
                 "battery fill length did not match 25 percent"
 
             run("xdotool", "mousemove", "1159", "16", "click", "1")
             popup = until(lambda: window_for_size(260, 230),
                           "speaker popup did not open alongside battery status")
             run("import", "-window", popup, str(args.output / "speaker-popup.png"))
-            print("Battery fill, notice click, disappearance, charging update and speaker popup passed.")
+            print("Battery fill, Settings hide/show, notice click, disappearance, charging update and speaker popup passed.")
         finally:
             wm.terminate()
             try:
@@ -94,14 +119,14 @@ def session(args):
 def pixel_snapshot(args):
     screenshot = args.output / "battery-current.png"
     run("import", "-window", "root", str(screenshot))
-    return pixel(screenshot, 1078, 12)
+    return pixel(screenshot, 1086, 12)
 
 
 def hidden_now(args):
     # An absent battery leaves the panel background at the old fill coordinate.
     screenshot = args.output / "battery-current.png"
     run("import", "-window", "root", str(screenshot))
-    return pixel(screenshot, 1087, 12) != (51, 133, 76)
+    return pixel(screenshot, 1095, 12) != (51, 133, 76)
 
 
 def main():

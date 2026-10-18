@@ -82,6 +82,7 @@ class Settings {
     gtk_label_set_line_wrap(GTK_LABEL(hint), TRUE);
     gtk_label_set_max_width_chars(GTK_LABEL(hint), 55);
     gtk_grid_attach(GTK_GRID(workspace), hint, 0, row_++, 2, 1);
+    checkbox(workspace, "Show _battery indicator", "Workspace", "show_battery", true);
     checkbox(workspace, "Show Documents", "Desktop", "show_documents", true);
     checkbox(workspace, "Show Pictures", "Desktop", "show_pictures", true);
     checkbox(workspace, "Show Music", "Desktop", "show_music", false);
