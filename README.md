@@ -453,3 +453,11 @@ The experimental MidnightBSD mport is in
 archive. Unreleased source changes may require additional installed files or
 dependencies reflected in the bundled port. Generate source distributions with
 `cpack --config build/CPackSourceConfig.cmake -G TGZ`.
+
+The magnifying glass beside the panel clock opens Search Files. Enter a file
+name or path and press Enter or Find to show the first 20 case-insensitive
+literal substring matches from MidnightBSD's locate database, in database
+order. Click a result to open it with its default application. Close dismisses
+the window. Results reflect the system database's last update, so recently
+created files may be missing and deleted files may still appear. An unavailable
+database or failed file launch is reported in the search window.
