@@ -1,6 +1,7 @@
 #pragma once
 
 #include <xcb/xcb.h>
+#include "task_icon.hpp"
 
 #include <array>
 #include <cairo/cairo.h>
@@ -23,6 +24,7 @@ struct Task {
   std::string title;
   bool active{};
   bool attention{};
+  TaskIcon icon{};
 };
 
 class Shell {

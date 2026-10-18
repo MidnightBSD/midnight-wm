@@ -12,7 +12,7 @@ pkg_check_modules(DEPS REQUIRED IMPORTED_TARGET
 
 add_library(midnight_core src/store.cpp src/model.cpp src/config.cpp src/audio.cpp src/battery.cpp src/wallpaper.cpp
   src/desktop_launcher.cpp src/thumbnail.cpp src/recent_files.cpp
-  src/startup_notification.cpp src/browser_launcher.cpp src/terminal_launcher.cpp)
+  src/startup_notification.cpp src/browser_launcher.cpp src/terminal_launcher.cpp src/task_icon.cpp)
 target_include_directories(midnight_core PUBLIC src)
 target_link_libraries(midnight_core PUBLIC PkgConfig::DEPS)
 target_compile_options(midnight_core PRIVATE -Wall -Wextra -Wpedantic)
@@ -76,6 +76,9 @@ endif()
 add_executable(wallpaper_test tests/wallpaper_test.cpp)
 target_link_libraries(wallpaper_test PRIVATE midnight_core)
 add_test(NAME wallpaper_test COMMAND wallpaper_test)
+add_executable(task_icon_test tests/task_icon_test.cpp)
+target_link_libraries(task_icon_test PRIVATE midnight_core)
+add_test(NAME task_icon_test COMMAND task_icon_test)
 add_executable(config_test tests/config_test.cpp)
 target_link_libraries(config_test PRIVATE midnight_core)
 add_test(NAME config_test COMMAND config_test)
