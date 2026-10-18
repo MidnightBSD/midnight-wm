@@ -2,6 +2,7 @@
 #include "x11_timestamp.hpp"
 #include "shell.hpp"
 #include "ui_theme.hpp"
+#include "window_controls.hpp"
 #include "startup_notification.hpp"
 #include "display_scale.hpp"
 
@@ -1283,15 +1284,20 @@ void X11WindowManager::draw_frame(Frame& frame) {
     const int x = width - scaled_pixel(scale, 74) + i * scaled_pixel(scale, 23);
     const int button_width = scaled_pixel(scale, 20);
     const int button_height = scaled_pixel(scale, 17);
-    themed_box(x, button_y, button_width, button_height, theme.button_color, .88, .88, .86);
-    themed_box(x, button_y, button_width, 1, theme.highlight_color, 1, 1, 1);
-    themed_box(x + button_width - 1, button_y, 1, button_height, theme.shadow_color, .2, .2, .2);
-    themed_box(x, button_y + button_height - 1, button_width, 1, theme.shadow_color, .2, .2, .2);
-    if (theme.dark_mode)
-      cairo_set_source_rgb(cr, theme.text_color[0], theme.text_color[1], theme.text_color[2]);
-    else cairo_set_source_rgb(cr, .12, .12, .12);
-    label(cr, i == 0 ? "_" : i == 1 ? "□" : "×", x + scaled_pixel(scale, 5),
-          button_y - scaled_pixel(scale, 2), scaled_pixel(scale, 16), scale, theme, true);
+    // Warp-style raised controls with font-independent, beveled vector symbols.
+    const int edge = scaled_pixel(scale, 1);
+    themed_box(x, button_y, button_width, button_height, theme.button_color, .78, .79, .80);
+    themed_box(x, button_y, button_width, edge, theme.highlight_color, 1, 1, 1);
+    themed_box(x, button_y, edge, button_height, theme.highlight_color, 1, 1, 1);
+    themed_box(x + button_width - edge, button_y, edge, button_height, theme.shadow_color, .35, .36, .37);
+    themed_box(x, button_y + button_height - edge, button_width, edge, theme.shadow_color, .35, .36, .37);
+    // Snap the symbol's bounds to device pixels, including fractional UI scales.
+    const int symbol_size = scaled_pixel(scale, 10);
+    const auto control = i == 0 ? WindowControl::minimize :
+                         i == 1 ? WindowControl::maximize : WindowControl::close;
+    draw_window_control(cr, control, x + (button_width - symbol_size) / 2,
+                        button_y + (button_height - symbol_size) / 2, symbol_size,
+                        theme, frame.maximized_horz && frame.maximized_vert);
   }
   cairo_destroy(cr);
   cairo_surface_flush(surface);
