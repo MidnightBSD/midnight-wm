@@ -159,7 +159,9 @@ saved workspace; disable restoration to start fresh independently of saving.
 Missing folders are skipped, and geometry is adjusted to the current monitors
 and UI scale so restored windows remain reachable. Double-click a built-in
 folder's title to maximize/restore it; middle-click to shade/expand it. Activating
-its task expands a shaded folder.
+its task expands a shaded folder. The title-bar minimize button hides a folder
+while retaining its taskbar entry; click that task to restore it. Minimized
+folders remain hidden across workspace and Show Desktop changes.
 
 The equivalent configuration is `[Session]` with `restore_folders=false` and
 `save_on_logout=false` by default. Settings apply saving changes live; restoration
