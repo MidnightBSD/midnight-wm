@@ -1939,10 +1939,11 @@ struct Shell::Impl {
       const auto launcher = trusted_launcher(items[i]);
       icon(cr, items[i], x + 14, y + 3,
            item_icon_surface(items[i], launcher ? &*launcher : nullptr));
-      const int label_offset = on_desktop ? 2 : 18;
-      text(cr, launcher ? launcher->name : items[i].object.title,
-           x + label_offset, y + 50, 78 - label_offset, 10,
-           selected == static_cast<int>(i) || on_desktop);
+      // The folder icon is centered at x + 38; use the same center for its label.
+      draw_text(cr, launcher ? launcher->name : items[i].object.title,
+                x + (on_desktop ? 2 : 0), y + 50, 76, 10,
+                selected == static_cast<int>(i) || on_desktop, false, config,
+                on_desktop ? PANGO_ALIGN_LEFT : PANGO_ALIGN_CENTER);
     }
   }
 
