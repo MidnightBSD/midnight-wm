@@ -524,7 +524,7 @@ struct SessionManager::Impl {
     if (load_config().restore_applications) {
       auto saved = store.load();
       if (!saved) std::cerr << "Application restore skipped: " << saved.error() << '\n';
-      else if (*saved && !(**saved).applications.empty()) {
+      else if (*saved && (!(**saved).applications.empty() || !(**saved).desktop_entries.empty())) {
         restore_plan = directory / "restore.ini";
         if (auto copied = ApplicationSessionStore(restore_plan).save(**saved); !copied)
           std::cerr << "Application restore skipped: " << copied.error() << '\n';
@@ -579,9 +579,10 @@ struct SessionManager::Impl {
       auto windows = window_channel->result();
       if (!windows) checkpoint_ok = false;
       else {
+        checkpoint.desktop_entries = std::move(windows->desktop_entries);
         std::set<std::string> ids;
         for (const auto& application : checkpoint.applications) ids.insert(application.client_id);
-        for (auto& window : *windows)
+        for (auto& window : windows->windows)
           if (ids.contains(window.client_id)) checkpoint.windows.push_back(std::move(window));
       }
     }

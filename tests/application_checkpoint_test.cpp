@@ -31,6 +31,7 @@ int main() {
   checkpoint.windows = {
     {"client-id", std::string("editor\nbyte-\xff", 13), {-1200, 90, 800, 600}, 3, true, false, false, true},
     {"client-id", "preview", {100, 80, 400, 300}, 1, false, false, true, false}};
+  checkpoint.desktop_entries = {"org.example.Editor.desktop"};
   check(bool(store.save(checkpoint)), "checkpoint save failed");
   loaded = store.load();
   check(loaded && *loaded && **loaded == checkpoint, "argument bytes or boundaries changed");
@@ -52,6 +53,27 @@ int main() {
   loaded = store.load();
   check(loaded && *loaded && (**loaded).applications == checkpoint.applications && (**loaded).windows.empty(), "version 1 compatibility failed");
   check(bool(store.save(checkpoint)), "upgrade to placement format failed");
+  auto* version2 = g_key_file_new();
+  g_key_file_load_from_data(version2, original.data(), original.size(), G_KEY_FILE_NONE, nullptr);
+  g_key_file_set_integer(version2, "Applications", "version", 2);
+  g_key_file_remove_key(version2, "Applications", "desktop_entries", nullptr);
+  g_key_file_remove_group(version2, "Desktop Applications", nullptr);
+  gsize version2_length{};
+  char* version2_text = g_key_file_to_data(version2, &version2_length, nullptr);
+  std::ofstream(path, std::ios::trunc).write(version2_text, version2_length);
+  g_free(version2_text); g_key_file_unref(version2);
+  loaded = store.load();
+  check(loaded && *loaded && (**loaded).windows == checkpoint.windows && (**loaded).desktop_entries.empty(), "version 2 compatibility failed");
+  check(bool(store.save(checkpoint)), "upgrade from version 2 failed");
+  for (const auto& id : {"../bad.desktop", "bad/entry.desktop", "org.example.NoSuffix", ".hidden.desktop", "bad..desktop"}) {
+    auto rejected = checkpoint; rejected.desktop_entries = {id};
+    check(!store.save(rejected) && read() == original, "unsafe desktop identifier persisted");
+  }
+  auto rejected = checkpoint;
+  rejected.desktop_entries.push_back(rejected.desktop_entries.front());
+  check(!store.save(rejected), "duplicate desktop identifier persisted");
+  rejected.desktop_entries.resize(129, "org.example.App.desktop");
+  check(!store.save(rejected), "unbounded desktop identifiers persisted");
   auto invalid = checkpoint;
   invalid.windows[0].client_id = "not-in-checkpoint";
   check(!store.save(invalid) && read() == original, "orphan window accepted");
@@ -86,7 +108,7 @@ int main() {
   loaded = store.load();
   check(loaded && *loaded && **loaded == checkpoint, "interrupted write changed checkpoint");
   auto malformed = original;
-  malformed.replace(malformed.find("version=2"), 9, "version=9");
+  malformed.replace(malformed.find("version=3"), 9, "version=9");
   auto bad_encoding = original;
   bad_encoding.insert(bad_encoding.find("client_id=") + 10, "!");
   auto missing_windows = original;

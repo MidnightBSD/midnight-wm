@@ -15,13 +15,16 @@ public:
   ApplicationRestorer& operator=(const ApplicationRestorer&) = delete;
   // Caller supplies an explicitly authorized, validated plan after services are
   // ready. Spawn success is used for conservative autostart deduplication.
-  std::vector<std::string> restore(const ApplicationCheckpoint& checkpoint);
+  std::vector<std::string> restore(const ApplicationCheckpoint& checkpoint, bool reopen_desktop_applications = false);
   void tick();
+  // In-memory registry commands for exact autostart matching; never persisted.
+  const std::vector<std::string>& launched_desktop_commands() const { return desktop_commands_; }
   const std::vector<std::string>& launched_executables() const { return launched_; }
 private:
   bool started_{};
   std::vector<pid_t> children_;
   std::vector<std::string> launched_;
+  std::vector<std::string> desktop_commands_;
 };
 // Consume only the owning companion's private, per-login plan. Clear handoff
 // variables before any application or autostart process can inherit them.

@@ -40,9 +40,12 @@ std::expected<void, std::string> validate_application_window(const ApplicationWi
 
 // No process execution or backend-specific window IDs. Window placement is
 // associated with the restart client ID and an unambiguous window role.
+bool valid_desktop_application_id(std::string_view id);
+
 struct ApplicationCheckpoint {
   std::vector<ApplicationRestart> applications;
   std::vector<ApplicationWindow> windows;
+  std::vector<std::string> desktop_entries;
   bool operator==(const ApplicationCheckpoint&) const = default;
 };
 class ApplicationSessionStore {

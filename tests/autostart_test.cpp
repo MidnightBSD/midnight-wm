@@ -58,6 +58,18 @@ int main() {
   write_entry(single, "two.desktop", "");
   if (midnight::find_autostart_entries({single}, restored).size() != 2) return 1;
   if (midnight::find_autostart_entries({single}, {}).size() != 2) return 1;
+  const auto profiles = root / "profiles";
+  std::filesystem::create_directories(profiles / "autostart");
+  for (const char* profile : {"one", "two"})
+    std::ofstream(profiles / "autostart" / (std::string(profile) + ".desktop")) <<
+      "[Desktop Entry]\nType=Application\nName=Profile\nExec=/usr/bin/true --profile=" << profile << '\n';
+  const std::vector<std::string> desktop_commands{"/usr/bin/true --profile=one"};
+  auto remaining = midnight::find_autostart_entries({profiles}, {}, desktop_commands);
+  if (remaining.size() != 1 || remaining.front().filename() != "two.desktop") return 1;
+  const std::vector<std::string> repeated_commands{desktop_commands[0], desktop_commands[0]};
+  if (midnight::find_autostart_entries({profiles}, {}, repeated_commands).size() != 2) return 1;
+  std::filesystem::copy_file(profiles / "autostart/one.desktop", profiles / "autostart/duplicate.desktop");
+  if (midnight::find_autostart_entries({profiles}, {}, desktop_commands).size() != 3) return 1;
   std::filesystem::remove_all(root);
 
   if (names != std::set<std::string>{"nodisplay.desktop", "regular.desktop", "system.desktop"}) {

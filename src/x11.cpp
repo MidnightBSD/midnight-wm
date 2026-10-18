@@ -8,6 +8,7 @@
 #include "display_scale.hpp"
 
 #include <cairo/cairo-xcb.h>
+#include <gio/gdesktopappinfo.h>
 #include <pango/pangocairo.h>
 #include <xcb/xcb_icccm.h>
 #include <xcb/xcb_keysyms.h>
@@ -708,10 +709,44 @@ std::optional<std::pair<std::string, std::string>> X11WindowManager::application
 
 WindowReport X11WindowManager::application_windows() {
   if (frames_.size() > 512) return std::unexpected("Too many managed windows for checkpoint");
+  std::set<std::string> desktops, session_desktops;
+  const auto desktop_id = [&](xcb_window_t window) -> std::string {
+    Reply<xcb_get_property_reply_t> reply(xcb_get_property_reply(connection_,
+      xcb_get_property(connection_, 0, window, atom("_GTK_APPLICATION_ID"), atom("UTF8_STRING"), 0, 64), nullptr), std::free);
+    if (!reply || reply->type != atom("UTF8_STRING") || reply->format != 8 || reply->bytes_after) return {};
+    const auto length = xcb_get_property_value_length(reply.get());
+    if (length <= 0 || length > 247) return {};
+    const std::string id(static_cast<const char*>(xcb_get_property_value(reply.get())), length);
+    if (id.find('\0') != std::string::npos || !g_application_id_is_valid(id.c_str()) ||
+        !valid_desktop_application_id(id + ".desktop")) return {};
+    return id + ".desktop";
+  };
+  const auto has_session = [&](xcb_window_t window) {
+    const auto present = [&](xcb_window_t target) {
+      Reply<xcb_get_property_reply_t> id(xcb_get_property_reply(connection_,
+        xcb_get_property(connection_, 0, target, atom("SM_CLIENT_ID"), XCB_GET_PROPERTY_TYPE_ANY, 0, 0), nullptr), std::free);
+      return !id || id->type != XCB_ATOM_NONE;
+    };
+    if (present(window)) return true;
+    Reply<xcb_get_property_reply_t> leader(xcb_get_property_reply(connection_,
+      xcb_get_property(connection_, 0, window, atom("WM_CLIENT_LEADER"), XCB_GET_PROPERTY_TYPE_ANY, 0, 2), nullptr), std::free);
+    if (!leader) return true;
+    if (leader->type == XCB_ATOM_NONE) return false;
+    if (leader->type != XCB_ATOM_WINDOW || leader->format != 32 || leader->bytes_after ||
+        xcb_get_property_value_length(leader.get()) != 4) return true;
+    return present(*static_cast<xcb_window_t*>(xcb_get_property_value(leader.get())));
+  };
   std::vector<ApplicationWindow> windows;
   std::map<std::pair<std::string, std::string>, std::size_t> counts;
   for (const auto& [client, frame] : frames_) {
     if (frame.role == WindowRole::splash || frame.desktop >= desktop_count_) continue;
+    if (shell_.theme().restore_desktop_applications) {
+      const auto id = desktop_id(client);
+      if (!id.empty()) {
+        if (has_session(client)) session_desktops.insert(id);
+        else desktops.insert(id);
+      }
+    }
     const auto identity = application_identity(client);
     if (!identity) continue;
     ApplicationWindow saved{identity->first, identity->second,
@@ -725,7 +760,14 @@ WindowReport X11WindowManager::application_windows() {
     windows.push_back(std::move(saved));
   }
   std::erase_if(windows, [&](const auto& window) { return counts[{window.client_id, window.role}] != 1; });
-  return windows;
+  WindowCapture capture(std::move(windows));
+  for (const auto& id : desktops) {
+    if (session_desktops.contains(id)) continue;
+    std::unique_ptr<GDesktopAppInfo, decltype(&g_object_unref)> info(g_desktop_app_info_new(id.c_str()), g_object_unref);
+    if (info && g_app_info_should_show(G_APP_INFO(info.get()))) capture.desktop_entries.push_back(id);
+  }
+  if (capture.desktop_entries.size() > 128) return std::unexpected("Too many desktop applications");
+  return capture;
 }
 
 void X11WindowManager::restore_application_windows(std::vector<ApplicationWindow> windows) {

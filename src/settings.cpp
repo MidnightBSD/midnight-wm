@@ -96,11 +96,12 @@ class Settings {
     checkbox(session, "_Restore folders at login", "Session", "restore_folders", false);
     checkbox(session, "_Save folders on logout", "Session", "save_on_logout", false);
     checkbox(session, "Restore applications at _login", "Session", "restore_applications", false);
+    checkbox(session, "Also reopen identified apps _without session support", "Session", "restore_desktop_applications", false);
     checkbox(session, "Save application chec_kpoints", "Session", "save_application_checkpoints", false);
     auto* session_hint = gtk_label_new(
       "Disable both restore options to start fresh at the next login.\n"
       "Restores participating apps through the Midnight session companion.\n"
-      "Apps choose which documents and tabs to restore.\n"
+      "Fallback starts one copy; document restoration depends on the app.\n"
       "Saving changes apply after Apply; restore changes apply at next login.");
     gtk_label_set_line_wrap(GTK_LABEL(session_hint), TRUE);
     gtk_label_set_max_width_chars(GTK_LABEL(session_hint), 50);

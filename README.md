@@ -264,9 +264,10 @@ both resolve to one unique direct executable. Failed restores leave autostart
 eligible. Multiple profiles, multiple restores of the same executable and wrappers
 are left to normal autostart rather than guessing which application they represent.
 This conservative matching cannot eliminate duplicates in ambiguous cases.
-Version 2 application checkpoints include window placement: normal geometry,
+Version 3 application checkpoints retain the version 2 window placement: normal geometry,
 workspace, maximized axes, fullscreen and shaded state, keyed by XSMP client ID
-and window role. Version 1 snapshots remain readable without placements. The WM
+and window role. Version 1 snapshots remain readable without placements; version 2 snapshots retain
+their placements. Older builds reject version 3 snapshots rather than loading them. The WM
 reads `SM_CLIENT_ID` from the window or its `WM_CLIENT_LEADER` and reads
 `WM_WINDOW_ROLE` from the window itself. Missing or malformed identities and
 ambiguous roles are omitted; a role-less window must be unique for its client.
@@ -288,6 +289,30 @@ and frame decorations; maximized/fullscreen state then uses the current monitor.
 Shading preserves normal client dimensions. Sticky placement and minimized state
 are not restored, and windows without XSMP identity are not matched by title or
 class.
+
+Settings → Session also offers **Also reopen identified apps without session
+support**, off by default (`restore_desktop_applications=false`). With application
+checkpoint saving enabled, this option records installed desktop-entry IDs for
+managed non-XSMP windows advertising a valid `_GTK_APPLICATION_ID`. At the next
+login, both this option and **Restore applications at login** must be enabled to
+reopen them. It starts each recognized application once using its current desktop
+entry through GIO, without copying `WM_COMMAND`, process arguments, working
+directories, document paths, window placement, or process state. Multiple windows
+of the same application collapse into one launch. These apps do not participate
+in the companion's XSMP save prompts.
+
+The fallback is deliberately limited to visible installed applications with a
+valid direct executable. Hidden/missing entries, malformed IDs, and windows with
+an XSMP identity (including a leader identity) are excluded. Relaunch revalidates
+the registry entry, skips executable identities already represented by XSMP, and
+omits ambiguous desktop entries sharing one executable. Successful relaunches
+suppress only a unique autostart entry with the same complete installed command,
+so wrappers and different profiles sharing an executable remain independent. X11 application
+IDs are hints, not authenticated process identities; apps lacking a recognized
+ID are omitted instead of guessing from titles or classes. Registry changes can
+change which installed entry an ID resolves to. Version 3 snapshots store at most
+128 unique desktop-entry IDs within the existing one-MiB private snapshot limit;
+**Clear saved application session** clears both kinds of application data.
 
 Confirming **Exit X11 session…** with `midnightbsd-session` starts coordinated
 logout while the desktop continues dispatching input and drawing. Participating

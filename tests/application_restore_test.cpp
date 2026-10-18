@@ -36,6 +36,11 @@ int main(int argc, char** argv) {
   const auto check = [&](bool value, const char* message) {
     if (!value) { passed = false; std::cerr << message << '\n'; }
   };
+  // GLib caches XDG data roots, including during wallpaper config parsing.
+  const auto data = root / "data";
+  std::filesystem::create_directories(data / "applications");
+  g_setenv("XDG_DATA_HOME", data.c_str(), true);
+  g_setenv("XDG_DATA_DIRS", (root / "empty-system").c_str(), true);
   const auto executable = std::filesystem::canonical(argv[0]).string();
   const int extra = open("/dev/null", O_RDONLY);
   g_setenv("MIDNIGHT_RESTORE_TEST_FD", std::to_string(extra).c_str(), true);
@@ -87,6 +92,42 @@ int main(int argc, char** argv) {
   g_setenv("MIDNIGHT_WM_RESTORE_PLAN", plan.c_str(), true);
   taken = midnight::take_application_restore_plan(true);
   check(taken && *taken && (**taken).applications == std::vector{good}, "private handoff failed");
+  const auto desktop_report = root / "desktop-report";
+  const auto entry = data / "applications/org.example.Restore.desktop";
+  const auto write_entry = [&](const auto& path, const std::string& extra = "") {
+    std::ofstream(path) << "[Desktop Entry]\nType=Application\nName=Restore fixture\nExec=" << executable
+      << " --report " << desktop_report.string() << " literal-from-registry\n" << extra;
+  };
+  write_entry(entry);
+  write_entry(data / "applications/org.example.Alias.desktop");
+  midnight::ApplicationCheckpoint desktops;
+  desktops.desktop_entries = {"org.example.Restore.desktop", "../unsafe.desktop", "org.example.Missing.desktop"};
+  midnight::ApplicationRestorer disabled;
+  disabled.restore(desktops);
+  check(disabled.launched_executables().empty() && !std::filesystem::exists(desktop_report), "desktop relaunch lacks separate opt-in");
+  midnight::ApplicationRestorer desktop_restore;
+  check(desktop_restore.restore(desktops, true).empty() && desktop_restore.launched_desktop_commands().size() == 1,
+        "desktop registry launch failed");
+  const auto desktop_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (!std::filesystem::exists(desktop_report) && std::chrono::steady_clock::now() < desktop_deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  check(std::filesystem::exists(desktop_report), "desktop launch did not execute registry command");
+  desktops.desktop_entries = {"org.example.Restore.desktop", "org.example.Alias.desktop"};
+  midnight::ApplicationRestorer ambiguous;
+  ambiguous.restore(desktops, true);
+  check(ambiguous.launched_desktop_commands().empty(), "ambiguous desktop executables relaunched");
+  desktops.applications = {good};
+  midnight::ApplicationRestorer overlapping;
+  overlapping.restore(desktops, true);
+  check(overlapping.launched_executables().size() == 1 && overlapping.launched_desktop_commands().empty(), "desktop relaunch duplicated XSMP executable");
+  desktops.applications.clear(); desktops.desktop_entries = {"org.example.Restore.desktop"};
+  write_entry(entry, "Hidden=true\n");
+  midnight::ApplicationRestorer hidden;
+  hidden.restore(desktops, true);
+  check(hidden.launched_desktop_commands().empty(), "hidden desktop entry relaunched");
+  auto fallback = midnight::parse_config("[Session]\nrestore_desktop_applications=true\n");
+  check(defaults && !defaults->restore_desktop_applications && fallback && fallback->restore_desktop_applications,
+        "desktop relaunch must be separately opt-in");
   std::this_thread::sleep_for(std::chrono::milliseconds(20));
   restorer.tick();
   std::filesystem::remove_all(root);
