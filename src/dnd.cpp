@@ -231,6 +231,13 @@ bool X11Dnd::begin_drag(xcb_window_t source, std::vector<std::filesystem::path> 
   hover_accepted_ = waiting_status_ = release_pending_ = dropped_ = false;
   deadline_ = {};
   xcb_set_selection_owner(connection_, source_, atoms_.selection, XCB_CURRENT_TIME);
+  if (feedback_) {
+    auto* pointer = xcb_query_pointer_reply(connection_, xcb_query_pointer(connection_, root_), nullptr);
+    if (pointer) {
+      feedback_(source_files_.front(), source_move_, pointer->root_x, pointer->root_y);
+      std::free(pointer);
+    }
+  }
   xcb_flush(connection_);
   return true;
 }
@@ -239,6 +246,9 @@ void X11Dnd::motion(int root_x, int root_y, xcb_timestamp_t time) {
   last_x_ = root_x;
   last_y_ = root_y;
   last_time_ = time;
+  // Move feedback away from the pointer before querying the destination.
+  if (feedback_ && !release_pending_)
+    feedback_(source_files_.front(), source_move_, root_x, root_y);
   xcb_window_t proxy{};
   const xcb_window_t target = aware_window(root_x, root_y, proxy);
   if (target != hover_ || proxy != hover_proxy_) {
@@ -262,6 +272,7 @@ void X11Dnd::send_position() {
 }
 
 void X11Dnd::finish_source(bool accepted, bool moved) {
+  if (feedback_) feedback_({}, false, 0, 0);
   xcb_ungrab_pointer(connection_, XCB_CURRENT_TIME);
   if (source_) xcb_set_selection_owner(connection_, XCB_WINDOW_NONE, atoms_.selection, XCB_CURRENT_TIME);
   source_ = hover_ = hover_proxy_ = XCB_WINDOW_NONE;
@@ -540,6 +551,7 @@ bool X11Dnd::handle(xcb_generic_event_t* event) {
     const auto* release = reinterpret_cast<xcb_button_release_event_t*>(event);
     if (release->event == source_) {
       motion(release->root_x, release->root_y, release->time);
+      if (feedback_) feedback_({}, false, 0, 0);
       xcb_ungrab_pointer(connection_, release->time);
       deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(3);
       if (!hover_) finish_source(false, false);

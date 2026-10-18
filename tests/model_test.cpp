@@ -97,6 +97,25 @@ int main() {
              fs::read_symlink(destination / "linked.txt") == renamed,
              "file copy dereferenced a symlink")) return 1;
 
+  // Persisted physical metadata must not resurrect icons after a file move.
+  const auto saved_path = home / "saved-folder";
+  fs::create_directory(saved_path);
+  midnight::Object saved{midnight::Store::new_id(), midnight::ObjectKind::folder,
+                         "saved-folder", saved_path.string(), "", home.string(), 0, 0};
+  if (!check(store.put(saved).has_value(), "save folder metadata failed")) return 1;
+  const auto has_saved = [&] {
+    const auto current = model.items(home, false);
+    return std::ranges::any_of(current, [&](const auto& item) { return item.object.id == saved.id; });
+  };
+  if (!check(has_saved(), "existing saved folder missing")) return 1;
+  if (!check(model.transfer({saved_path}, destination, true).has_value(), "saved folder move failed")) return 1;
+  if (!check(!has_saved(), "moved folder retained its old icon")) return 1;
+  fs::create_directory(saved_path);
+  if (!check(has_saved(), "restored folder lost its metadata")) return 1;
+  fs::remove(saved_path);
+  fs::create_symlink(home / "missing-target", saved_path);
+  if (!check(has_saved(), "dangling symlink hidden by stale metadata check")) return 1;
+
   const auto trash_candidate = home / "trash-me.txt";
   { std::ofstream stream(trash_candidate); stream << "restore me\n"; }
   midnight::ShellItem physical{{"", midnight::ObjectKind::file, "trash-me.txt", trash_candidate.string(), "", home.string(), 0, 0},

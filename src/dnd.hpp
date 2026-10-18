@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <utility>
 
 namespace midnight {
 
@@ -31,6 +32,10 @@ public:
   X11Dnd& operator=(const X11Dnd&) = delete;
 
   [[nodiscard]] bool initialize();
+  // Empty path hides feedback. Coordinates are physical root pixels.
+  void set_drag_feedback(std::function<void(const std::filesystem::path&, bool, int, int)> callback) {
+    feedback_ = std::move(callback);
+  }
   // Publishes XdndAware on top-level desktop/folder windows, including
   // override-redirect windows. The callback is invoked only after data arrives.
   void register_target(xcb_window_t window, DropCallback callback);
@@ -91,6 +96,7 @@ private:
   xcb_timestamp_t last_time_{};
   std::chrono::steady_clock::time_point deadline_{};
   DragFinished finished_;
+  std::function<void(const std::filesystem::path&, bool, int, int)> feedback_;
 
   [[nodiscard]] xcb_atom_t intern(const char* name) const;
   [[nodiscard]] xcb_window_t aware_window(int root_x, int root_y, xcb_window_t& proxy) const;

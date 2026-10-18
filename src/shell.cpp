@@ -652,6 +652,9 @@ struct Shell::Impl {
   int transfers_in_progress{};
   xcb_visualtype_t* visual{};
   xcb_window_t desktop{}, panel{}, menu{}, submenu{}, app_menu{}, exit_dialog{};
+  xcb_window_t drag_preview{};
+  Item drag_preview_item{};
+  bool drag_preview_move{};
   xcb_window_t notice{};
   std::string notice_text;
   std::optional<Properties> properties;
@@ -836,6 +839,7 @@ struct Shell::Impl {
     if (app_menu) xcb_destroy_window(connection, app_menu);
     if (exit_dialog) xcb_destroy_window(connection, exit_dialog);
     if (audio_popup) xcb_destroy_window(connection, audio_popup);
+    if (drag_preview) xcb_destroy_window(connection, drag_preview);
     if (notice) xcb_destroy_window(connection, notice);
     if (icon_chooser) xcb_destroy_window(connection, icon_chooser->window);
     if (open_with_dialog) {
@@ -1398,9 +1402,97 @@ struct Shell::Impl {
     g_object_unref(task);
   }
 
-  void dropped(xcb_window_t target, std::vector<std::filesystem::path> paths, bool move, Shell::DropFinish finish) {
+  void draw_drag_preview() {
+    if (!drag_preview) return;
+    paint(drag_preview, 210, 58, [&](cairo_t* cr) {
+      fill(cr, config.panel_color[0], config.panel_color[1], config.panel_color[2], 0, 0, 210, 58);
+      bevel(cr, 0, 0, 210, 58);
+      icon(cr, drag_preview_item, 3, 5, item_icon_surface(drag_preview_item));
+      text(cr, drag_preview_item.object.title, 57, 8, 145, 11, false, true);
+      text(cr, drag_preview_move ? "Move" : "Copy (+)", 57, 31, 145, 9);
+    });
+  }
+
+  void update_drag_feedback(const std::filesystem::path& path, bool move, int root_x, int root_y) {
+    if (path.empty()) {
+      if (drag_preview) xcb_destroy_window(connection, drag_preview);
+      drag_preview = 0;
+      drag_preview_item = {};
+      return;
+    }
+    if (!drag_preview) {
+      std::error_code ec;
+      drag_preview_item.path = path;
+      drag_preview_item.physical = true;
+      drag_preview_item.object.title = basename(path);
+      drag_preview_item.object.kind = std::filesystem::is_directory(path, ec) ? ObjectKind::folder : ObjectKind::file;
+      // Preserve any custom desktop/folder icon for the source item.
+      auto find_item = [&](const auto& items) {
+        const auto item = std::ranges::find_if(items, [&](const Item& candidate) { return candidate.path == path && candidate.physical; });
+        if (item != items.end()) drag_preview_item = *item;
+      };
+      find_item(desktop_items);
+      for (const auto& [window, folder] : folders) find_item(folder.items);
+      drag_preview_move = move;
+      drag_preview = create_window(0, 0, 210, 58);
+      const char name[] = "Midnight drag preview";
+      xcb_change_property(connection, XCB_PROP_MODE_REPLACE, drag_preview, XCB_ATOM_WM_NAME,
+                          XCB_ATOM_STRING, 8, sizeof(name) - 1, name);
+      draw_drag_preview();
+    }
+    // Place the preview on the other side near an edge, always leaving a gap
+    // so its window never covers the pointer or intercepts the drop target.
+    const int gap = scaled_pixel(scale, 18);
+    const int w = scaled_pixel(scale, 210), h = scaled_pixel(scale, 58);
+    const int x = root_x + gap + w <= physical_width ? root_x + gap : root_x - gap - w;
+    const int y = root_y + gap + h <= physical_height ? root_y + gap : root_y - gap - h;
+    const std::uint32_t values[]{static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y), XCB_STACK_MODE_ABOVE};
+    xcb_configure_window(connection, drag_preview, XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y | XCB_CONFIG_WINDOW_STACK_MODE, values);
+    xcb_map_window(connection, drag_preview);
+  }
+
+  void dropped(xcb_window_t target, std::vector<std::filesystem::path> paths, bool move, int root_x, int root_y, Shell::DropFinish finish) {
     const auto folder = folders.find(target);
-    const auto destination = target == desktop ? Store::desktop_path() : folder == folders.end() ? std::filesystem::path{} : folder->second.path;
+    auto destination = target == desktop ? Store::desktop_path() : folder == folders.end() ? std::filesystem::path{} : folder->second.path;
+    // XDND coordinates are physical root pixels; icon layout uses logical pixels
+    // relative to the primary desktop area or the folder's client window.
+    auto* position = xcb_translate_coordinates_reply(connection,
+      xcb_translate_coordinates(connection, screen->root, target, root_x, root_y), nullptr);
+    if (!position) { finish(false); return; }
+    int x = static_cast<int>(std::lround(position->dst_x / scale));
+    int y = static_cast<int>(std::lround(position->dst_y / scale));
+    std::free(position);
+    int index = -1;
+    const std::vector<ShellItem>* items = nullptr;
+    if (target == desktop) {
+      const auto area = primary_area();
+      x -= area.x;
+      y -= area.y + panel_height;
+      items = &desktop_items;
+      if (x >= 0 && x < desktop_width && y >= 0 && y < desktop_height)
+        index = item_index(x, y, 13, desktop_width, items->size(), desktop_scroll_columns, true);
+    } else if (folder != folders.end()) {
+      const auto& view = folder->second;
+      const auto scroll = folder_scroll(view);
+      items = &view.items;
+      if (x < 0 || x >= scroll.view_width || y < folder_header || y >= view.height - 22) {
+        finish(false);
+        return;
+      }
+      // Trash contents are not individual drop destinations.
+      if (!view.trash)
+        index = item_index(x, y, folder_header + 11, scroll.view_width, items->size(), view.scroll_rows);
+    }
+    if (items && index >= 0) {
+      const auto& item = (*items)[index];
+      if (item.object.kind == ObjectKind::trash) destination = "trash:///";
+      else {
+        std::error_code ec;
+        if (!item.trashed && !item.path.empty() && std::filesystem::is_directory(item.path, ec))
+          destination = item.path;
+        else { finish(false); return; }
+      }
+    }
     if (destination.empty()) { finish(false); return; }
     transfer_async(std::move(paths), destination, move,
       [this, finish = std::move(finish)](std::expected<void, std::string> result) mutable {
@@ -1414,8 +1506,8 @@ struct Shell::Impl {
 
   void register_drop(xcb_window_t window) {
     if (dnd_register) dnd_register(window, [this](xcb_window_t target, std::vector<std::filesystem::path> paths,
-                                                  bool move, int, int, Shell::DropFinish finish) {
-      dropped(target, std::move(paths), move, std::move(finish));
+                                                  bool move, int root_x, int root_y, Shell::DropFinish finish) {
+      dropped(target, std::move(paths), move, root_x, root_y, std::move(finish));
     });
   }
 
@@ -3403,8 +3495,12 @@ struct Shell::Impl {
         auto* items = pending_icon_window == desktop ? &desktop_items :
           folders.contains(pending_icon_window) ? &folders.at(pending_icon_window).items : nullptr;
         if (items && pending_icon_index >= 0 && static_cast<std::size_t>(pending_icon_index) < items->size()) {
-          const auto path = (*items)[pending_icon_index].path;
-          if (!path.empty()) dnd_begin(pending_icon_window, {path}, true);
+          const auto& item = (*items)[pending_icon_index];
+          // Virtual desktop shortcuts name their targets, not movable files.
+          if (item.physical && !item.trashed && !item.path.empty()) {
+            dnd_begin(pending_icon_window, {item.path}, !(event->state & XCB_MOD_MASK_CONTROL));
+            last_click_time = 0;
+          }
         }
         pending_icon_window = 0;
       }
@@ -3501,7 +3597,7 @@ bool Shell::owns(xcb_window_t window) const {
   const auto& p = *impl_;
   return window && (window == p.desktop || window == p.panel || window == p.menu ||
                     window == p.submenu || window == p.app_menu || window == p.notice ||
-                    window == p.exit_dialog || window == p.audio_popup ||
+                    window == p.exit_dialog || window == p.audio_popup || window == p.drag_preview ||
                     (p.icon_chooser && window == p.icon_chooser->window) ||
                     (p.open_with_dialog && window == p.open_with_dialog->window) ||
                     (p.properties && window == p.properties->window) || p.folders.contains(window));
@@ -3535,7 +3631,8 @@ bool Shell::handle(xcb_generic_event_t* event) {
     p.focused_folder = 0;
     p.draw_panel();
   } else if (type == XCB_EXPOSE) {
-    if (window == p.panel) p.draw_panel();
+    if (window == p.drag_preview) p.draw_drag_preview();
+    else if (window == p.panel) p.draw_panel();
     else if (window == p.audio_popup) {}
     else if (window == p.desktop) {
       if (!p.desktop_pixmap) p.draw_desktop();
@@ -3855,3 +3952,7 @@ void Shell::set_dnd_handlers(std::function<void(xcb_window_t, DropHandler)> regi
 }
 
 } // namespace midnight
+
+void midnight::Shell::update_drag_feedback(const std::filesystem::path& path, bool move, int root_x, int root_y) {
+  impl_->update_drag_feedback(path, move, root_x, root_y);
+}

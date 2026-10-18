@@ -75,6 +75,7 @@ public:
       std::function<void(std::function<void(std::vector<std::filesystem::path>, bool)>)> request);
   using DropFinish = std::function<void(bool)>;
   using DropHandler = std::function<void(xcb_window_t, std::vector<std::filesystem::path>, bool, int, int, DropFinish)>;
+  void update_drag_feedback(const std::filesystem::path& path, bool move, int root_x, int root_y);
   void set_dnd_handlers(std::function<void(xcb_window_t, DropHandler)> register_target,
                         std::function<void(xcb_window_t)> unregister_target,
                         std::function<void(xcb_window_t, std::vector<std::filesystem::path>, bool)> begin_drag);
