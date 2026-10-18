@@ -1750,6 +1750,15 @@ struct Shell::Impl {
         const auto label = battery_state->percent ? std::to_string(*battery_state->percent) + "%" : "?";
         text(cr, label, x + 27, 8, battery_group_width - 31, 11, false, true);
       }
+      bevel(cr, search_x(), 4, 28, 24);
+      cairo_save(cr);
+      cairo_set_source_rgb(cr, config.text_color[0], config.text_color[1], config.text_color[2]);
+      cairo_set_line_width(cr, 1.8);
+      cairo_arc(cr, search_x() + 11, 14, 6, 0, 2 * std::numbers::pi);
+      cairo_move_to(cr, search_x() + 15, 18);
+      cairo_line_to(cr, search_x() + 22, 24);
+      cairo_stroke(cr);
+      cairo_restore(cr);
       bevel(cr, clock_x, 5, clock_width, 24, true);
       text(cr, clock_text(config.clock_format), clock_x + 6, 8, clock_width - 12, 11, false, true);
     });
@@ -1775,15 +1784,17 @@ struct Shell::Impl {
 
   int clock_x() const { return std::max(140, panel_width - panel_edge - clock_width); }
 
+  int search_x() const { return clock_x() - 32; }
+
   int tray_width() const {
     // Leave room for the task overflow button even when every task is hidden.
     return std::clamp(requested_tray_width, 0,
-                      std::max(0, clock_x() - task_start_x - task_overflow_width - 4 -
+                      std::max(0, search_x() - task_start_x - task_overflow_width - 4 -
                           network_group_width - network_gap - volume_group_width - volume_clock_gap -
                           (config.show_battery && battery_state ? battery_group_width + battery_gap : 0)));
   }
 
-  int tray_x() const { return clock_x() - tray_width(); }
+  int tray_x() const { return search_x() - tray_width(); }
 
   int volume_x() const { return tray_x() - volume_group_width - volume_clock_gap; }
 
@@ -3444,6 +3455,19 @@ struct Shell::Impl {
       return;
     }
     if (event->event == panel) {
+      if (event->event_x >= search_x() && event->event_x < search_x() + 28) {
+        if (event->detail == 1) {
+          GError* error = nullptr;
+          const auto sibling = std::filesystem::path(settings_program).parent_path() / "midnightbsd-search";
+          const auto program = std::filesystem::is_regular_file(sibling) ? sibling.string() :
+              std::string(MIDNIGHT_WM_SEARCH_PROGRAM);
+          auto* process = g_subprocess_new(G_SUBPROCESS_FLAGS_NONE, &error, program.c_str(), nullptr);
+          if (process) g_object_unref(process);
+          else show_notice("Could not open Search Files.");
+          if (error) g_error_free(error);
+        }
+        return;
+      }
       if (show_network() && event->event_x >= network_x() && event->event_x < network_x() + network_group_width) {
         if (event->detail == 1) toggle_network_popup();
         return;
