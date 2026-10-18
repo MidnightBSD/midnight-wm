@@ -40,12 +40,29 @@ def main():
     parser.add_argument('--placements', action='store_true')
     parser.add_argument('--width', type=int, default=1280)
     parser.add_argument('--height', type=int, default=720)
+    parser.add_argument('--restore-width', type=int)
+    parser.add_argument('--restore-height', type=int)
+    parser.add_argument('--changed-resolution-matrix', action='store_true')
     parser.add_argument('--matrix', action='store_true')
     args = parser.parse_args()
+    if bool(args.restore_width) != bool(args.restore_height):
+        parser.error('provide both --restore-width and --restore-height')
+    if any(value is not None and not 640 <= value <= 8192 for value in
+           (args.width, args.height, args.restore_width, args.restore_height)):
+        parser.error('screen dimensions must be between 640 and 8192')
+    if args.restore_width and not args.placements:
+        parser.error('changed-resolution checks require --placements')
     args.binary, args.fixture = args.binary.resolve(), args.fixture.resolve()
     output = (args.output or Path(tempfile.mkdtemp(prefix='midnight-restore-results-'))).resolve()
     output.mkdir(parents=True, exist_ok=True)
     print(f'Results: {output}', flush=True)
+    if args.changed_resolution_matrix:
+        for width, height in ((1280,720),(1920,1080),(2560,1440),(3440,1440),(3840,2160)):
+            subprocess.run([sys.executable, str(Path(__file__).resolve()), '--placements',
+                '--binary', str(args.binary), '--fixture', str(args.fixture), '--width', '3840', '--height', '2160',
+                '--restore-width', str(width), '--restore-height', str(height),
+                '--output', str(output / f'3840x2160-to-{width}x{height}')], check=True, timeout=100)
+        return
     if args.matrix:
         for width, height in ((1280,720),(1920,1080),(2560,1440),(3440,1440),(3840,2160)):
             subprocess.run([sys.executable, str(Path(__file__).resolve()), '--placements',
@@ -72,13 +89,20 @@ def main():
                    XDG_CONFIG_DIRS=str(root / 'config-system'), XDG_DATA_HOME=str(root / 'data'),
                    XDG_DATA_DIRS=str(root / 'data-system'), XDG_STATE_HOME=str(root / 'state'),
                    XDG_RUNTIME_DIR=str(root / 'runtime'), XDG_CURRENT_DESKTOP='MidnightWorkspace', NO_AT_BRIDGE='1')
-        read_fd, write_fd = os.pipe()
-        with (output / 'xvfb.log').open('w') as log:
-            xvfb = subprocess.Popen(['Xvfb', '-displayfd', str(write_fd), '-screen', '0', f'{args.width}x{args.height}x24', '-nolisten', 'tcp'],
-                                    pass_fds=(write_fd,), stdout=log, stderr=subprocess.STDOUT)
-        os.close(write_fd)
-        with os.fdopen(read_fd) as display:
-            env['DISPLAY'] = ':' + display.readline().strip()
+        def server(width, height):
+            read_fd, write_fd = os.pipe()
+            with (output / f'xvfb-{width}x{height}.log').open('w') as log:
+                display_server = subprocess.Popen(['Xvfb', '-displayfd', str(write_fd), '-screen', '0',
+                    f'{width}x{height}x24', '-nolisten', 'tcp'], pass_fds=(write_fd,), stdout=log, stderr=subprocess.STDOUT)
+            os.close(write_fd)
+            with os.fdopen(read_fd) as display:
+                number = display.readline().strip()
+            if not number:
+                display_server.terminate(); display_server.wait(timeout=5)
+                raise RuntimeError('Xvfb did not publish a display')
+            env['DISPLAY'] = ':' + number
+            return display_server
+        xvfb = server(args.width, args.height)
         process = None
         known = set()
         owned_clients = set()
@@ -181,7 +205,7 @@ def main():
                 # though the companion requests client saves after the WM exits.
                 time.sleep(1.2)
                 window = original_handles['normal']
-                command('wmctrl','-ir',window,'-e','0,180,150,430,310')
+                command('wmctrl','-ir',window,'-e',f'0,{args.width-520 if args.restore_width else 180},{args.height-440 if args.restore_height else 150},430,310')
                 time.sleep(.1)
                 base['normal'] = geometry(window)
                 stop(first, normal=True)
@@ -191,6 +215,16 @@ def main():
                 assert tuple(item.getint(key) for key in ('x','y','width','height')) == base['normal'], 'final geometry was not captured'
             else:
                 stop(first)
+            if args.restore_width:
+                source = (args.width, args.height)
+                for pid in owned_clients:
+                    try: os.kill(pid, signal.SIGTERM)
+                    except ProcessLookupError: pass
+                owned_clients.clear()
+                xvfb.terminate(); xvfb.wait(timeout=5)
+                args.width, args.height = args.restore_width, args.restore_height
+                xvfb = server(args.width, args.height)
+                print(f'Restarting display for login: {source[0]}x{source[1]} -> {args.width}x{args.height}', flush=True)
             configure(True)
             start()
             restored = client()
@@ -198,6 +232,18 @@ def main():
             assert restored['literal'] == literal and restored['cwd'] == str(root / 'home')
             if args.placements:
                 restored_handles = handles(restored)
+                if args.restore_width:
+                    until(lambda: '=' in command('xprop','-id',restored_handles['normal'],'_NET_FRAME_EXTENTS'), 'restored frame missing')
+                    left, right, top, bottom = map(int, command('xprop','-id',restored_handles['normal'],
+                        '_NET_FRAME_EXTENTS').split('=',1)[1].split(','))
+                    area = list(map(int, command('xprop','-root','_NET_WORKAREA').split('=',1)[1].split(',')))[:4]
+                    x, y, width, height = area
+                    for name, (old_x, old_y, old_w, old_h) in base.items():
+                        w, h = min(old_w, width-left-right), min(old_h, height-top-bottom)
+                        base[name] = (max(x, min(old_x, x+width-left-right-w)),
+                                      max(y, min(old_y, y+height-top-bottom-h)), w, h)
+                    (output / 'changed-resolution.txt').write_text(
+                        f'Current work area: {area}\nFrame extents: {(left,right,top,bottom)}\nExpected normal geometry: {base}\n')
                 until(lambda: geometry(restored_handles['normal']) == base['normal'], 'normal placement not restored')
                 for name, value in states.items():
                     for flag in value.split(','):
