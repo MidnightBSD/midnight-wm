@@ -4268,6 +4268,8 @@ const std::array<double, 3>& Shell::accent_color() const {
   return impl_->config.accent_color;
 }
 
+void Shell::show_session_notice(const std::string& message) { impl_->show_notice(message); }
+
 void Shell::set_exit_handler(std::function<void()> handler) {
   impl_->exit_handler = std::move(handler);
 }

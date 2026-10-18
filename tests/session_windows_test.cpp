@@ -41,6 +41,18 @@ int main() {
     reporter.tick([&] { return midnight::WindowReport(windows); });
     channel.tick(); loaded = channel.result();
     check(!channel.pending() && loaded && *loaded == windows, "capture transaction failed");
+    check(reporter.request_logout(), "logout request fell back to standalone");
+    channel.tick();
+    check(channel.take_logout_request() && !channel.take_logout_request(), "logout request not consumed once");
+    channel.logout_reply(false);
+    reporter.tick([&] { return midnight::WindowReport(windows); });
+    check(reporter.logout_result() == false, "logout cancellation not delivered");
+    check(!reporter.logout_result(), "logout result not consumed once");
+    reporter.request_logout(); channel.tick();
+    check(channel.take_logout_request(), "logout retry not delivered");
+    channel.logout_reply(true);
+    reporter.tick([&] { return midnight::WindowReport(windows); });
+    check(reporter.logout_result() == true, "logout approval not delivered");
     channel.request();
     std::this_thread::sleep_for(std::chrono::milliseconds(800));
     // A reply queued after the deadline must fail even when the parent has

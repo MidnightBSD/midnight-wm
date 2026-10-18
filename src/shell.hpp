@@ -70,6 +70,7 @@ public:
   // and do not keep it.
   [[nodiscard]] cairo_surface_t* themed_icon_surface(const std::string& name);
   [[nodiscard]] const std::array<double, 3>& accent_color() const;
+  void show_session_notice(const std::string& message);
   void set_exit_handler(std::function<void()> handler);
   void set_startup_notification(StartupNotification* startup);
   [[nodiscard]] bool owns(xcb_window_t window) const;

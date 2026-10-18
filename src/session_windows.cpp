@@ -106,12 +106,23 @@ void SessionWindowChannel::tick() {
   for (int i = 0; parent_ >= 0 && i < 16; ++i) {
     char byte{};
     const auto count = recv(parent_, &byte, 1, MSG_DONTWAIT);
+    if (count == 0) disconnected_ = true;
     if (count <= 0) break;
-    if (byte == 'R') ready_ = true;
+    if (byte == 'L') { logout_requested_ = true; logout_aborted_ = false; }
+    else if (byte == 'X') logout_aborted_ = true;
+    else if (byte == 'R') ready_ = true;
     else if ((byte == 'D' && waiting_) || byte == 'F') {
       fresh_ = true; waiting_ = false; finished_ = byte == 'F';
     } else if (byte == 'E') { fresh_ = false; waiting_ = false; }
   }
+}
+bool SessionWindowChannel::take_logout_request() {
+  const bool requested = logout_requested_;
+  logout_requested_ = false;
+  return requested;
+}
+void SessionWindowChannel::logout_reply(bool approved) {
+  (void)send_byte(parent_, approved ? 'A' : 'C');
 }
 void SessionWindowChannel::request() {
   tick();
@@ -145,16 +156,43 @@ SessionWindowReporter::SessionWindowReporter() {
 }
 SessionWindowReporter::~SessionWindowReporter() { if (fd_ >= 0) close(fd_); }
 void SessionWindowReporter::ready() { if (fd_ >= 0) (void)send_byte(fd_, 'R'); }
+bool SessionWindowReporter::request_logout() {
+  if (fd_ < 0) return false;
+  if (logout_failed_) { logout_result_ = false; return true; }
+  if (logout_pending_) return true;
+  if (!send_byte(fd_, 'L')) { logout_result_ = false; return true; }
+  logout_pending_ = true;
+  logout_deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(75);
+  return true;
+}
+std::optional<bool> SessionWindowReporter::logout_result() {
+  const auto result = logout_result_;
+  logout_result_.reset();
+  return result;
+}
 void SessionWindowReporter::publish(const WindowReport& windows, char success) {
   if (fd_ < 0) return;
   const auto saved = write_window_report(path_, windows);
   (void)send_byte(fd_, saved ? success : 'E');
 }
 void SessionWindowReporter::tick(const std::function<WindowReport()>& capture) {
+  if (logout_pending_ && std::chrono::steady_clock::now() >= logout_deadline_) {
+    (void)send_byte(fd_, 'X');
+    logout_pending_ = false;
+    logout_failed_ = true; // Never accept an approval queued after the deadline.
+    logout_result_ = false;
+  }
   bool requested{};
   for (int i = 0; fd_ >= 0 && i < 16; ++i) {
     char byte{};
-    if (recv(fd_, &byte, 1, MSG_DONTWAIT) != 1) break;
+    const auto count = recv(fd_, &byte, 1, MSG_DONTWAIT);
+    if (count == 0 && logout_pending_) {
+      logout_pending_ = false; logout_failed_ = true; logout_result_ = false;
+    }
+    if (count != 1) break;
+    if ((byte == 'A' || byte == 'C') && logout_pending_) {
+      logout_pending_ = false; logout_result_ = byte == 'A';
+    }
     if (byte == 'Q') requested = true;
   }
   if (requested) publish(capture(), 'D');
