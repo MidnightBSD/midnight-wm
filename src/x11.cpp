@@ -3,6 +3,7 @@
 #include "shell.hpp"
 #include "ui_theme.hpp"
 #include "window_controls.hpp"
+#include "title_bar.hpp"
 #include "startup_notification.hpp"
 #include "display_scale.hpp"
 
@@ -1271,11 +1272,8 @@ void X11WindowManager::draw_frame(Frame& frame) {
   themed_box(width - 2, 0, 2, height, theme.shadow_color, .25, .27, .29);
   themed_box(0, height - 2, width, 2, theme.shadow_color, .25, .27, .29);
   const bool selected = active_ == frame.client;
-  const auto& accent = shell_.accent_color();
-  box(cr, border, border, width - 2 * border, title_height - border,
-      selected ? accent[0] : accent[0] * .65 + .18,
-      selected ? accent[1] : accent[1] * .65 + .18,
-      selected ? accent[2] : accent[2] * .65 + .18);
+  draw_title_bar(cr, border, border, width - 2 * border, title_height - border,
+                 theme, selected);
   cairo_set_source_rgb(cr, 1, 1, 1);
   label(cr, frame.title + (frame.unresponsive ? " (Not responding)" : ""), border + scaled_pixel(scale, 9), border + scaled_pixel(scale, 4),
         std::max(1, width - scaled_pixel(scale, 124)), scale, theme, true);
