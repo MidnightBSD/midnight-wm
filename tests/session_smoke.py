@@ -5,6 +5,7 @@
 import argparse
 import configparser
 import contextlib
+import json
 import os
 from pathlib import Path
 import signal
@@ -78,8 +79,40 @@ def session(args):
         assert wm.wait(timeout=10) == 0, "WM failed on logout"
 
     configure()
+    autostart = None
+    if args.binary.name == "midnightbsd-session":
+        # A real autostart application must inherit the already authenticated
+        # manager, bus, and reachable agent before it tries to register.
+        probe = root / "autostart-probe.py"
+        probe.write_text("""import json, os, socket, subprocess, sys
+from pathlib import Path
+authority = Path(os.environ['ICEAUTHORITY'])
+assert authority.stat().st_mode & 0o777 == 0o600
+assert os.environ['SESSION_MANAGER']
+subprocess.run(['gdbus', 'call', '--session', '--dest', 'org.freedesktop.DBus',
+ '--object-path', '/org/freedesktop/DBus', '--method', 'org.freedesktop.DBus.ListNames'],
+ check=True, stdout=subprocess.DEVNULL)
+agent = os.environ.get('SSH_AUTH_SOCK')
+if agent:
+ with socket.socket(socket.AF_UNIX) as peer: peer.connect(agent)
+subprocess.run([sys.argv[1], 'normal'], check=True, timeout=15)
+Path(sys.argv[2]).write_text(json.dumps({'manager': os.environ['SESSION_MANAGER'],
+ 'authority': str(authority), 'agent': bool(agent)}))
+""")
+        directory = Path(os.environ["XDG_CONFIG_HOME"]) / "autostart"
+        directory.mkdir()
+        autostart = directory / "midnight-xsmp-probe.desktop"
+        autostart.write_text('[Desktop Entry]\nType=Application\nName=XSMP probe\nExec="' + sys.executable +
+            '" "' + str(probe) + '" "' + str(args.binary.parent / "xsmp_client_fixture") +
+            '" "' + str(root / "autostart-ready.json") + '"\nOnlyShowIn=MidnightWorkspace;\n')
     wm = start()
     try:
+        if autostart:
+            ready = root / "autostart-ready.json"
+            until(ready.exists, "autostart did not inherit a working XSMP manager/bus/agent", timeout=20)
+            info = json.loads(ready.read_text())
+            assert Path(info["authority"]).is_file()
+            autostart.unlink()
         second = subprocess.run([str(args.binary)], capture_output=True, timeout=5)
         assert second.returncode != 0, "second WM took over"
         normal = open_folder(paths[0])
@@ -247,12 +280,13 @@ def main():
                 if not display:
                     raise RuntimeError("Xvfb did not start")
                 env = os.environ.copy()
-                for name in ("DBUS_SESSION_BUS_ADDRESS", "SSH_AUTH_SOCK", "SSH_AGENT_PID", "LD_PRELOAD"):
+                for name in ("DBUS_SESSION_BUS_ADDRESS", "DBUS_SESSION_BUS_PID", "SSH_AUTH_SOCK", "SSH_AGENT_PID",
+                             "SESSION_MANAGER", "ICEAUTHORITY", "LD_PRELOAD"):
                     env.pop(name, None)
                 env.update(DISPLAY=":" + display, HOME=str(root / "home"), XDG_CONFIG_HOME=str(root / "config"),
                            XDG_CONFIG_DIRS=str(root / "config-system"), XDG_DATA_HOME=str(root / "data"),
                            XDG_DATA_DIRS=str(root / "data-system"), XDG_STATE_HOME=str(root / "state"),
-                           XDG_RUNTIME_DIR=str(root / "runtime"), NO_AT_BRIDGE="1")
+                           XDG_RUNTIME_DIR=str(root / "runtime"), XDG_CURRENT_DESKTOP="MidnightWorkspace", NO_AT_BRIDGE="1")
                 process = subprocess.Popen(["dbus-run-session", "--", sys.executable, str(Path(__file__).resolve()),
                                             "--session", "--binary", str(args.binary), "--output", str(args.output),
                                             "--width", str(width), "--height", str(height)], env=env, start_new_session=True)

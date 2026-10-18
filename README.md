@@ -8,7 +8,7 @@ MidnightBSD. The current target is MidnightBSD 4.2 with Clang 19 and C++23.
 The build needs CMake, pkg-config, XCB (including icccm, keysyms, XFixes, and
 RandR, Xinerama), Cairo, Pango, GLib/GIO, GdkPixbuf, Garcon, and SQLite 3.
 The companion `midnightbsd-settings` application also needs GTK 3.
-The phase 2 XSMP metadata adapter and its tests need libSM and libICE.
+The `midnightbsd-session` launcher and XSMP tests also need libSM and libICE.
 Install the librsvg GdkPixbuf loader for SVG wallpapers; the mport includes
 this runtime dependency. PNG, JPEG, and GIF loaders must also be available.
 
@@ -171,24 +171,62 @@ Malformed, incomplete, oversized, or unsupported-version snapshots are ignored
 and preserved until cleared, including on logout. Write failures before atomic
 replacement retain the existing snapshot; save errors go to the session log.
 
-This implements the built-in folder phase of issue #31. External applications,
-documents, and terminal processes are not restored. XSMP application registration,
-a session companion, save prompts, and coordinated application logout remain
-separate follow-up work. No restart commands, credentials, or bus addresses are
-stored in the folder snapshot.
+External applications, documents, and terminal processes are not restored yet.
+Application checkpoint persistence, relaunching and placement, save prompts, and
+coordinated application logout remain follow-up work for issue #31. No restart
+commands, credentials, or bus addresses are stored in the folder snapshot.
 
-Phase 2 development has started with a separate XSMP metadata adapter and a
-display-independent application/window model. The adapter follows the
+The Xsession entry now starts `midnightbsd-session`, which establishes the session
+bus and then starts an XSMP manager before launching `midnight-wm`. For `.xinitrc`
+sessions use `exec midnightbsd-session`; running `midnight-wm` directly continues
+to work without starting a session manager. A nonempty inherited `SESSION_MANAGER`
+is preserved, along with its authority configuration, so an existing manager is
+never replaced. The companion chooses its sibling `midnight-wm` executable when
+available, then the configured installation path. `midnightbsd-session -- program
+argument ...` can wrap another explicit argument list without shell expansion.
+
+The companion accepts local Unix-domain ICE connections only and uses fresh
+MIT-MAGIC-COOKIE-1 authentication for ICE and XSMP, with host-based authentication
+disabled. Its separate private authority file lives in a temporary 0700 directory
+under the user's private XDG runtime directory (or `/tmp` when unavailable) and
+is removed when the companion exits. It does not modify the user's `.ICEauthority`.
+It establishes `SESSION_MANAGER` and `ICEAUTHORITY` before the WM initializes the
+keyring and launches XDG autostart applications. An existing reachable D-Bus bus
+is retained; `dbus-run-session` owns a new bus when one is needed.
+
+Registered clients receive an initial noninteractive checkpoint. Local/global
+client checkpoint requests and `SIGUSR1` to the companion also request saving;
+XSMP phase-2 requests are supported. Each checkpoint has a three-second deadline,
+connections and properties have resource limits, and partial peer reads/writes
+are bounded in the separate companion process. Successful restart metadata is
+currently held in memory only. This lets participating applications checkpoint
+their own state, but does not yet reopen them after login.
+
+The companion does not send `Die`, request save prompts, or honor client requests
+to end the desktop. Coordinated application logout will be added separately.
+It watches the WM it launched, propagates that child's exit status, and removes
+its owned sockets and authority file. A termination signal is forwarded only to
+its owned child, with a bounded wait; registered applications are not signalled.
+
+The separate XSMP metadata adapter and display-independent application/window
+model follow the
 [X.Org SMlib property types](https://xorg.freedesktop.org/releases/X11R7.7/doc/libSM/SMlib.html),
-preserves restart argument boundaries, bounds incoming properties and argument
-data, handles property deletion and restart-style hints, and excludes environment
-and discard/shutdown commands from its retained metadata. Placement matching
-requires an unambiguous session client ID and window role. This is groundwork:
-it does not yet publish `SESSION_MANAGER`, start a companion, persist application
-metadata, launch applications, or change the running desktop. Those connections
-will be added with authenticated ICE transport and isolated client fixtures.
+with the adapter preserving restart argument boundaries, bounding properties and
+argument data, handling property deletion and restart-style hints, and excluding environment
+and discard/shutdown commands from restart metadata. The manager separately
+retains bounded protocol properties in memory for `GetProperties`, including
+unknown properties; these are not written to a checkpoint file. Placement matching
+requires an unambiguous session client ID and window role.
 `xsmp_properties_test` exercises the adapter and window matching in Release
 builds, including malformed properties and transactional rejection.
+`python3 tests/xsmp_smoke.py` exercises real libSM clients, authentication failure,
+initial/local/global checkpoints, phase-2 saves, unknown properties, deletion,
+malformed updates, unresponsive clients, partial pre-auth frames, disconnections,
+inherited managers, bus bootstrapping, argument boundaries and lifecycle cleanup.
+It is registered with CTest when Python 3 and `dbus-run-session` are available.
+Run `python3 tests/session_smoke.py --binary build/midnightbsd-session` to check
+the real WM lifecycle through the companion, including an XSMP autostart client
+that verifies the session bus and inherited agent before registering.
 
 Run `python3 tests/session_smoke.py --matrix` for isolated save/restore cycles at
 all five supported resolutions, including cancelled logout, window states,

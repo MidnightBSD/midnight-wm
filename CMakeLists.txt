@@ -10,12 +10,17 @@ pkg_check_modules(DEPS REQUIRED IMPORTED_TARGET
   xcb xcb-icccm xcb-keysyms xcb-xfixes xcb-randr xcb-xinerama xcb-sync xcb-screensaver cairo-xcb pangocairo
   gio-2.0 gio-unix-2.0 gdk-pixbuf-2.0 garcon-1 sqlite3)
 
-add_library(midnight_core src/store.cpp src/model.cpp src/config.cpp src/session.cpp src/application_session.cpp src/audio.cpp src/battery.cpp src/network.cpp src/wallpaper.cpp
+add_library(midnight_core src/store.cpp src/model.cpp src/config.cpp src/session.cpp src/session_bus.cpp src/application_session.cpp src/audio.cpp src/battery.cpp src/network.cpp src/wallpaper.cpp
   src/desktop_launcher.cpp src/thumbnail.cpp src/recent_files.cpp
   src/startup_notification.cpp src/browser_launcher.cpp src/terminal_launcher.cpp src/task_icon.cpp)
 target_include_directories(midnight_core PUBLIC src)
 target_link_libraries(midnight_core PUBLIC PkgConfig::DEPS)
 target_compile_options(midnight_core PRIVATE -Wall -Wextra -Wpedantic)
+
+pkg_check_modules(XSMP REQUIRED IMPORTED_TARGET sm ice)
+add_library(midnight_xsmp STATIC src/xsmp_properties.cpp)
+target_link_libraries(midnight_xsmp PUBLIC midnight_core PkgConfig::XSMP)
+target_compile_options(midnight_xsmp PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(midnight-wm src/main.cpp src/x11.cpp src/shell.cpp src/clipboard.cpp src/dnd.cpp
   src/tray.cpp src/status_notifier.cpp src/status_panel.cpp src/dbus_menu.cpp
@@ -43,7 +48,14 @@ target_compile_definitions(midnight-wm PRIVATE
   MIDNIGHT_WM_SETTINGS_PROGRAM="${CMAKE_INSTALL_FULL_BINDIR}/midnightbsd-settings"
   MIDNIGHT_WM_DATA_DIR="${CMAKE_INSTALL_FULL_DATADIR}/midnight-wm"
   MIDNIGHT_WM_VERSION="${PROJECT_VERSION}")
-install(TARGETS midnight-wm midnightbsd-settings RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+add_executable(midnightbsd-session src/session_main.cpp src/session_manager.cpp)
+find_package(Threads REQUIRED)
+target_link_libraries(midnightbsd-session PRIVATE midnight_xsmp Threads::Threads)
+target_compile_options(midnightbsd-session PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_definitions(midnightbsd-session PRIVATE
+  MIDNIGHT_WM_VERSION="${PROJECT_VERSION}"
+  MIDNIGHT_WM_PROGRAM="${CMAKE_INSTALL_FULL_BINDIR}/midnight-wm")
+install(TARGETS midnight-wm midnightbsd-settings midnightbsd-session RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES data/midnightbsd-settings.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 install(FILES data/midnight-wm.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/xsessions)
 install(FILES data/config.ini data/MidnightBSDLogo.svg data/MidnightBSDLogo22x22.png
@@ -101,14 +113,11 @@ add_executable(session_test tests/session_test.cpp)
 target_link_libraries(session_test PRIVATE midnight_core)
 add_test(NAME session_test COMMAND session_test)
 
-# XSMP-specific metadata adapter; the shared session model has no X11 types.
-pkg_check_modules(XSMP REQUIRED IMPORTED_TARGET sm ice)
-add_library(midnight_xsmp STATIC src/xsmp_properties.cpp)
-target_link_libraries(midnight_xsmp PUBLIC midnight_core PkgConfig::XSMP)
-target_compile_options(midnight_xsmp PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(xsmp_properties_test tests/xsmp_properties_test.cpp)
 target_link_libraries(xsmp_properties_test PRIVATE midnight_xsmp)
 add_test(NAME xsmp_properties_test COMMAND xsmp_properties_test)
+add_executable(xsmp_client_fixture tests/xsmp_client.cpp)
+target_link_libraries(xsmp_client_fixture PRIVATE PkgConfig::XSMP)
 
 add_executable(model_test tests/model_test.cpp)
 target_link_libraries(model_test PRIVATE midnight_core)
@@ -144,6 +153,14 @@ target_link_libraries(recent_files_test PRIVATE midnight_core)
 add_test(NAME recent_files_test COMMAND recent_files_test)
 find_program(DBUS_RUN_SESSION dbus-run-session)
 if(DBUS_RUN_SESSION)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME xsmp_transport_test COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests/xsmp_smoke.py
+      --binary $<TARGET_FILE:midnightbsd-session>
+      --fixture $<TARGET_FILE:xsmp_client_fixture>
+      --output ${CMAKE_CURRENT_BINARY_DIR}/xsmp-test-results)
+    set_tests_properties(xsmp_transport_test PROPERTIES TIMEOUT 100)
+  endif()
   add_executable(desktop_services_test tests/desktop_services_test.cpp src/desktop_services.cpp)
   target_link_libraries(desktop_services_test PRIVATE midnight_core)
   add_test(NAME desktop_services_test COMMAND ${DBUS_RUN_SESSION} -- $<TARGET_FILE:desktop_services_test>)
