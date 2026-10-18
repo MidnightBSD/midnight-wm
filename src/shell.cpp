@@ -48,8 +48,29 @@
 #include <unordered_set>
 #include <utility>
 
+#if defined(__FreeBSD__) || defined(__MidnightBSD__)
+#include <libutil.h>
+#endif
+
 namespace midnight {
 namespace {
+std::string network_bytes(const std::optional<std::uint64_t>& bytes) {
+  if (!bytes) return "unavailable";
+#if defined(__FreeBSD__) || defined(__MidnightBSD__)
+  // Leave room for three digits, a decimal, and the unit; scale larger totals.
+  std::array<char, 8> text{};
+  if (*bytes <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) &&
+      humanize_number(text.data(), text.size(), static_cast<std::int64_t>(*bytes),
+          "B", HN_AUTOSCALE, HN_DECIMAL | HN_DIVISOR_1000) >= 0)
+    return text.data();
+#endif
+  // GLib also handles counters outside humanize_number's signed range.
+  gchar* fallback = g_format_size(*bytes);
+  std::string result(fallback);
+  g_free(fallback);
+  return result;
+}
+
 constexpr int volume_group_width = 24;
 constexpr int battery_group_width = 64;
 constexpr int network_group_width = 24;
@@ -2135,8 +2156,8 @@ struct Shell::Impl {
         }
         rows.push_back("Link speed: " + speed);
       }
-      rows.push_back("Received: " + (item.received ? std::to_string(*item.received) + " bytes" : "unavailable"));
-      rows.push_back("Transmitted: " + (item.transmitted ? std::to_string(*item.transmitted) + " bytes" : "unavailable"));
+      rows.push_back("Received: " + network_bytes(item.received));
+      rows.push_back("Transmitted: " + network_bytes(item.transmitted));
       rows.emplace_back();
     }
     return rows;

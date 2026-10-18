@@ -23,6 +23,9 @@ add_executable(midnight-wm src/main.cpp src/x11.cpp src/shell.cpp src/clipboard.
   src/file_manager1.cpp src/keyring_session.cpp src/media_player.cpp src/desktop_services.cpp
   src/compositor.cpp)
 target_link_libraries(midnight-wm PRIVATE midnight_core)
+if(CMAKE_SYSTEM_NAME MATCHES "^(MidnightBSD|FreeBSD)$")
+  target_link_libraries(midnight-wm PRIVATE util)
+endif()
 target_compile_options(midnight-wm PRIVATE -Wall -Wextra -Wpedantic)
 
 pkg_check_modules(GTK3 REQUIRED IMPORTED_TARGET gtk+-3.0)
