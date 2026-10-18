@@ -17,6 +17,7 @@
 #include "thumbnail.hpp"
 #include "ui_theme.hpp"
 #include "window_controls.hpp"
+#include "title_bar.hpp"
 
 #include <cairo/cairo-xcb.h>
 #include <gio/gio.h>
@@ -1698,8 +1699,7 @@ struct Shell::Impl {
     paint(folder.window, folder.width, folder.height, [&](cairo_t* cr) {
       themed_fill(cr, config.surface_color, .73, .73, .73, 0, 0, folder.width, folder.height);
       bevel(cr, 0, 0, folder.width, folder.height);
-      fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
-           4, 4, folder.width - 8, 26);
+      draw_title_bar(cr, 4, 4, folder.width - 8, 26, config);
       text(cr, folder.trash ? "Trash" : basename(folder.path), 12, 7, folder.width - 65, 13, true, true);
       themed_fill(cr, config.surface_color, .73, .73, .73, folder.width - 30, 7, 20, 19);
       bevel(cr, folder.width - 30, 7, 20, 19);
@@ -2007,8 +2007,7 @@ struct Shell::Impl {
     paint(dialog.window, open_with_width, open_with_height, [&](cairo_t* cr) {
       themed_fill(cr, config.surface_color, .75, .75, .75, 0, 0, open_with_width, open_with_height);
       bevel(cr, 0, 0, open_with_width, open_with_height);
-      fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
-           4, 4, open_with_width - 8, 26);
+      draw_title_bar(cr, 4, 4, open_with_width - 8, 26, config);
       text(cr, "Open With", 12, 7, open_with_width - 24, 12, true, true);
       text(cr, basename(dialog.path), 12, 36, open_with_width - 24, 11);
       themed_fill(cr, config.field_color, .96, .96, .92, 10, 56, open_with_width - 20, 282);
@@ -2133,8 +2132,7 @@ struct Shell::Impl {
     paint(properties->window, 500, 220, [&](cairo_t* cr) {
       themed_fill(cr, config.surface_color, .75, .75, .75, 0, 0, 500, 220);
       bevel(cr, 0, 0, 500, 220);
-      fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
-           4, 4, 492, 27);
+      draw_title_bar(cr, 4, 4, 492, 27, config);
       text(cr, "Properties", 13, 8, 450, 12, true, true);
       constexpr std::array<std::string_view, 3> labels{"Name", "Icon", "Target"};
       for (int i = 0; i < 3; ++i) {
@@ -2191,8 +2189,7 @@ struct Shell::Impl {
     paint(chooser.window, icon_chooser_width, icon_chooser_height, [&](cairo_t* cr) {
       themed_fill(cr, config.surface_color, .75, .75, .75, 0, 0, icon_chooser_width, icon_chooser_height);
       bevel(cr, 0, 0, icon_chooser_width, icon_chooser_height);
-      fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
-           4, 4, icon_chooser_width - 8, 27);
+      draw_title_bar(cr, 4, 4, icon_chooser_width - 8, 27, config);
       text(cr, "Choose an icon", 13, 8, 520, 12, true, true);
       text(cr, "Search", 12, 49, 58, 11);
       themed_fill(cr, config.field_color, 1, 1, 1, 72, 42, 496, 30);
@@ -2285,8 +2282,7 @@ struct Shell::Impl {
     paint(notice, 420, 100, [&](cairo_t* cr) {
       themed_fill(cr, config.surface_color, .75, .75, .75, 0, 0, 420, 100);
       bevel(cr, 0, 0, 420, 100);
-      fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
-           4, 4, 412, 25);
+      draw_title_bar(cr, 4, 4, 412, 25, config);
       text(cr, "Workspace", 12, 7, 390, 12, true, true);
       text(cr, notice_text, 14, 42, 390, 11);
       bevel(cr, 170, 70, 80, 22);
@@ -2299,8 +2295,7 @@ struct Shell::Impl {
     paint(exit_dialog, exit_dialog_width, exit_dialog_height, [&](cairo_t* cr) {
       themed_fill(cr, config.surface_color, .75, .75, .75, 0, 0, exit_dialog_width, exit_dialog_height);
       bevel(cr, 0, 0, exit_dialog_width, exit_dialog_height);
-      fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
-           4, 4, exit_dialog_width - 8, 25);
+      draw_title_bar(cr, 4, 4, exit_dialog_width - 8, 25, config);
       text(cr, "Exit X11 session", 12, 7, 350, 12, true, true);
       themed_fill(cr, config.button_color, .87, .83, .93, 16, 42, 66, 66);
       bevel(cr, 16, 42, 66, 66, true);
