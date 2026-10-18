@@ -16,6 +16,8 @@ struct ThemeConfig {
   bool dark_mode{};
   bool show_battery{true};
   bool compositing{true};
+  bool restore_session{};
+  bool save_session{};
   std::string ui_font{"Sans"};
   std::string title_font{"Sans Bold"};
   std::string desktop_image;

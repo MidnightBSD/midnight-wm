@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-2-Clause
 
 #include "config.hpp"
+#include "session.hpp"
 
 #include <gtk/gtk.h>
 #include <glib/gstdio.h>
@@ -89,6 +90,23 @@ class Settings {
     checkbox(workspace, "Show Music", "Desktop", "show_music", false);
     checkbox(workspace, "Show Videos", "Desktop", "show_videos", false);
     checkbox(workspace, "Show Public Share", "Desktop", "show_public_share", false);
+    auto* session = page(notebook, "Session");
+    row_ = 0;
+    checkbox(session, "_Restore folders at login", "Session", "restore_folders", false);
+    checkbox(session, "_Save folders on logout", "Session", "save_on_logout", false);
+    auto* session_hint = gtk_label_new("Restores built-in folders and workspaces only. Applications are not reopened.\nDisable restoration to start fresh; saving takes effect at the next logout.");
+    gtk_label_set_line_wrap(GTK_LABEL(session_hint), TRUE);
+    gtk_label_set_max_width_chars(GTK_LABEL(session_hint), 50);
+    gtk_label_set_xalign(GTK_LABEL(session_hint), 0);
+    gtk_grid_attach(GTK_GRID(session), session_hint, 0, row_++, 2, 1);
+    auto* clear = gtk_button_new_with_mnemonic("Clear saved _folder session");
+    gtk_grid_attach(GTK_GRID(session), clear, 0, row_++, 2, 1);
+    g_signal_connect(clear, "clicked", G_CALLBACK(+[](GtkButton*, gpointer data) {
+      auto* self = static_cast<Settings*>(data);
+      const auto result = midnight::SessionStore{}.clear();
+      gtk_label_set_text(GTK_LABEL(self->status_), result ?
+        "Saved folder session cleared. Saving on logout may create a new snapshot." : result.error().c_str());
+    }), this);
     status_ = gtk_label_new("Apply saves your settings and updates the running desktop.");
     gtk_label_set_line_wrap(GTK_LABEL(status_), TRUE);
     gtk_label_set_max_width_chars(GTK_LABEL(status_), 65);

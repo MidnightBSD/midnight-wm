@@ -2,6 +2,7 @@
 
 #include <xcb/xcb.h>
 #include "task_icon.hpp"
+#include "session.hpp"
 
 #include <array>
 #include <cairo/cairo.h>
@@ -40,6 +41,8 @@ public:
   [[nodiscard]] bool menu_animation_active() const;
   void set_tasks(std::vector<Task> tasks);
   void set_workspace(std::uint32_t desktop, bool showing_desktop);
+  [[nodiscard]] SessionSnapshot session_snapshot() const;
+  void restore_session(const SessionSnapshot& snapshot);
   void set_screen_size(std::uint16_t width, std::uint16_t height);
   void refresh_display_layout();
   void apply_config(ThemeConfig config);

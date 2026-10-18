@@ -10,7 +10,7 @@ pkg_check_modules(DEPS REQUIRED IMPORTED_TARGET
   xcb xcb-icccm xcb-keysyms xcb-xfixes xcb-randr xcb-xinerama xcb-sync xcb-screensaver cairo-xcb pangocairo
   gio-2.0 gio-unix-2.0 gdk-pixbuf-2.0 garcon-1 sqlite3)
 
-add_library(midnight_core src/store.cpp src/model.cpp src/config.cpp src/audio.cpp src/battery.cpp src/network.cpp src/wallpaper.cpp
+add_library(midnight_core src/store.cpp src/model.cpp src/config.cpp src/session.cpp src/audio.cpp src/battery.cpp src/network.cpp src/wallpaper.cpp
   src/desktop_launcher.cpp src/thumbnail.cpp src/recent_files.cpp
   src/startup_notification.cpp src/browser_launcher.cpp src/terminal_launcher.cpp src/task_icon.cpp)
 target_include_directories(midnight_core PUBLIC src)
@@ -97,6 +97,9 @@ add_test(NAME store_test COMMAND store_test)
 add_executable(network_test tests/network_test.cpp)
 target_link_libraries(network_test PRIVATE midnight_core)
 add_test(NAME network_test COMMAND network_test)
+add_executable(session_test tests/session_test.cpp)
+target_link_libraries(session_test PRIVATE midnight_core)
+add_test(NAME session_test COMMAND session_test)
 
 add_executable(model_test tests/model_test.cpp)
 target_link_libraries(model_test PRIVATE midnight_core)

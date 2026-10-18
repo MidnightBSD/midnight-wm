@@ -126,6 +126,8 @@ std::optional<ThemeConfig> parse_config(std::string_view contents) {
   read_desktop_bool("show_music", config.show_music);
   read_desktop_bool("show_videos", config.show_videos);
   read_desktop_bool("show_public_share", config.show_public_share);
+  config.restore_session = g_key_file_get_boolean(keyfile, "Session", "restore_folders", nullptr);
+  config.save_session = g_key_file_get_boolean(keyfile, "Session", "save_on_logout", nullptr);
   g_key_file_unref(keyfile);
   return config;
 }
