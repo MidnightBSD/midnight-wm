@@ -42,6 +42,17 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   fullscreen geometry restoration. Pager restacking must translate client XIDs
   to root-level frames, validate sibling/mode, preserve focus, and reapply layers
   and transient ancestry.
+  Shading clips a mapped client behind its collapsed title bar without changing
+  the client's logical size or publishing HIDDEN. Preserve full geometry across
+  shading, minimize, workspace switches, and live theme changes; cancel pending
+  resize synchronization when changing shade state. Explicit task/Alt+Tab
+  activation, fullscreen, and maximize expand shaded windows. Middle-clicking
+  the title toggles shading. Reject shading for undecorated fullscreen/splash
+  windows and keep ALLOWED_ACTIONS accurate.
+  Read the external pager's _NET_DESKTOP_LAYOUT at startup and after root
+  property changes. Validate CARDINAL/32 dimensions, orientation, and corner;
+  preserve pager ownership and never overwrite the property. Ctrl+Alt arrow
+  navigation follows physical grid directions with bounded empty-cell skipping.
 - `src/display_monitors.hpp` queries RandR monitor rectangles and chooses a
   visible monitor for a point. The shell uses the primary monitor for its panel
   and desktop shortcuts while keeping the lavender background across the root.
@@ -201,6 +212,11 @@ For compatibility changes, run `python3 tests/notifications_smoke.py`,
 `python3 tests/ewmh_smoke.py`, and `python3 tests/media_smoke.py` as applicable.
 Run `python3 tests/ewmh_attention.py` for focus timestamps, helper lifecycle,
 attention/urgency, stacking layers, allowed actions, and the visible task marker.
+It also verifies shade geometry, title-bar input, client mapping, state
+transitions, and task activation expanding a shaded window. Run
+`python3 tests/pager_smoke.py` for pager startup/live/deleted layouts and real
+Ctrl+Alt arrow input; `desktop_layout_test` covers grid math and malformed
+dimensions at compile time in Release builds.
 Run `python3 tests/ewmh_attention.py --multi-monitor` for an isolated two-screen
 Xinerama test of monitor index ordering, live fullscreen selection, mixed edges,
 invalid requests, and geometry restoration. Xvfb screens overlap at the origin;

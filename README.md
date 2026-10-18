@@ -121,6 +121,20 @@ supporting `_NET_WM_PING` are marked unresponsive after a timeout, and clients
 supporting `_NET_WM_SYNC_REQUEST` can acknowledge interactive resize updates.
 Resize timeouts allow interaction to continue when an application stops responding.
 
+Middle-click an application's title bar to shade it to the title bar, and
+middle-click again to expand it. The application remains mapped at its original
+size; shading does not minimize it. Task activation, Alt+Tab selection, maximize,
+and fullscreen expand shaded windows. EWMH clients can also request
+`_NET_WM_STATE_SHADED`; allowed actions reflect whether shading and resizing are
+currently available.
+
+An external pager can set `_NET_DESKTOP_LAYOUT` to describe its workspace grid.
+Ctrl+Alt+Left/Right/Up/Down follows that grid's physical directions, including
+orientation and starting corner, wrapping within rows or columns and skipping
+empty cells. Layout updates apply immediately. Missing or malformed layouts
+use the default four horizontal workspaces; the WM does not overwrite the
+pager's layout property.
+
 EWMH activation requests use interaction timestamps to reject stale background
 focus requests. `_NET_WM_USER_TIME=0` prevents initial focus; user-time helper
 windows are supported. Clients without an initial user-time hint retain legacy

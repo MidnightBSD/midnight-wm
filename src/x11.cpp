@@ -299,6 +299,7 @@ void X11WindowManager::update_window_state(const Frame& frame) {
   if (frame.maximized_vert) states.push_back(atom("_NET_WM_STATE_MAXIMIZED_VERT"));
   if (frame.maximized_horz) states.push_back(atom("_NET_WM_STATE_MAXIMIZED_HORZ"));
   if (frame.fullscreen) states.push_back(atom("_NET_WM_STATE_FULLSCREEN"));
+  if (frame.shaded) states.push_back(atom("_NET_WM_STATE_SHADED"));
   if (frame.minimized) states.push_back(atom("_NET_WM_STATE_HIDDEN"));
   if (frame.skip_taskbar) states.push_back(atom("_NET_WM_STATE_SKIP_TASKBAR"));
   if (frame.skip_pager) states.push_back(atom("_NET_WM_STATE_SKIP_PAGER"));
@@ -324,11 +325,12 @@ void X11WindowManager::update_allowed_actions(const Frame& frame) {
   if (frame.role != WindowRole::splash) {
     actions.push_back(atom("_NET_WM_ACTION_FULLSCREEN"));
     if (!frame.fullscreen) {
+      actions.push_back(atom("_NET_WM_ACTION_SHADE"));
       actions.push_back(atom("_NET_WM_ACTION_MAXIMIZE_HORZ"));
       actions.push_back(atom("_NET_WM_ACTION_MAXIMIZE_VERT"));
       if (!frame.maximized_horz && !frame.maximized_vert) {
         actions.push_back(atom("_NET_WM_ACTION_MOVE"));
-        if (!(fixed_w && fixed_h)) actions.push_back(atom("_NET_WM_ACTION_RESIZE"));
+        if (!frame.shaded && !(fixed_w && fixed_h)) actions.push_back(atom("_NET_WM_ACTION_RESIZE"));
       }
     }
   }
@@ -508,6 +510,7 @@ void X11WindowManager::set_root_properties() {
                           "_NET_ACTIVE_WINDOW", "_NET_CLOSE_WINDOW", "_NET_WM_NAME", "_NET_WM_VISIBLE_NAME",
                           "_NET_WM_STATE", "_NET_WM_STATE_FULLSCREEN",
                           "_NET_WM_STATE_MAXIMIZED_VERT", "_NET_WM_STATE_MAXIMIZED_HORZ",
+                          "_NET_WM_STATE_SHADED", "_NET_WM_ACTION_SHADE",
                           "_NET_WM_STATE_HIDDEN", "_NET_WM_STATE_SKIP_TASKBAR", "_NET_WM_STATE_MODAL",
                           "_NET_WM_STATE_SKIP_PAGER", "_NET_WM_STATE_ABOVE", "_NET_WM_STATE_BELOW",
                           "_NET_WM_STATE_DEMANDS_ATTENTION", "_NET_WM_STATE_FOCUSED",
@@ -521,7 +524,7 @@ void X11WindowManager::set_root_properties() {
                           "_NET_RESTACK_WINDOW", "_NET_WM_FULLSCREEN_MONITORS",
                           "_NET_NUMBER_OF_DESKTOPS", "_NET_CURRENT_DESKTOP", "_NET_WORKAREA",
                           "_NET_WM_DESKTOP", "_NET_SHOWING_DESKTOP", "_NET_DESKTOP_NAMES",
-                          "_NET_DESKTOP_VIEWPORT", "_NET_WM_PING",
+                          "_NET_DESKTOP_VIEWPORT", "_NET_DESKTOP_LAYOUT", "_NET_WM_PING",
                           "_NET_DESKTOP_GEOMETRY", "_NET_WM_WINDOW_TYPE", "_NET_WM_WINDOW_TYPE_DOCK",
                           "_NET_WM_WINDOW_TYPE_DIALOG", "_NET_WM_WINDOW_TYPE_UTILITY",
                           "_NET_WM_WINDOW_TYPE_TOOLBAR", "_NET_WM_WINDOW_TYPE_MENU",
@@ -548,6 +551,20 @@ void X11WindowManager::set_root_properties() {
   xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, screen_->root, atom("_NET_DESKTOP_VIEWPORT"),
                       XCB_ATOM_CARDINAL, 32, viewports.size(), viewports.data());
   update_geometry_properties();
+  refresh_desktop_layout();
+}
+
+void X11WindowManager::refresh_desktop_layout() {
+  desktop_layout_ = DesktopLayout{};
+  const auto cookie = xcb_get_property(connection_, 0, screen_->root, atom("_NET_DESKTOP_LAYOUT"),
+                                       XCB_ATOM_CARDINAL, 0, 4);
+  Reply<xcb_get_property_reply_t> reply(xcb_get_property_reply(connection_, cookie, nullptr), std::free);
+  if (!reply || reply->type != XCB_ATOM_CARDINAL || reply->format != 32 || reply->bytes_after) return;
+  const auto length = xcb_get_property_value_length(reply.get());
+  if (length != 12 && length != 16) return;
+  const auto* values = static_cast<const std::uint32_t*>(xcb_get_property_value(reply.get()));
+  if (auto layout = DesktopLayout::parse({values, static_cast<std::size_t>(length / 4)}, desktop_count_))
+    desktop_layout_ = *layout;
 }
 
 void X11WindowManager::refresh_visibility() {
@@ -862,7 +879,7 @@ void X11WindowManager::manage(xcb_window_t window) {
   fit_dialog(frame);
   auto state_cookie = xcb_get_property(connection_, 0, window, atom("_NET_WM_STATE"), XCB_ATOM_ATOM, 0, 32);
   Reply<xcb_get_property_reply_t> initial_states(xcb_get_property_reply(connection_, state_cookie, nullptr), std::free);
-  bool initial_horz = false, initial_vert = false, initial_fullscreen = false;
+  bool initial_horz = false, initial_vert = false, initial_fullscreen = false, initial_shaded = false;
   if (initial_states && initial_states->type == XCB_ATOM_ATOM && initial_states->format == 32) {
     auto* states = static_cast<xcb_atom_t*>(xcb_get_property_value(initial_states.get()));
     for (int i = 0; i < xcb_get_property_value_length(initial_states.get()) / 4; ++i) {
@@ -873,6 +890,7 @@ void X11WindowManager::manage(xcb_window_t window) {
       if (states[i] == atom("_NET_WM_STATE_DEMANDS_ATTENTION")) frame.attention = true;
       if (states[i] == atom("_NET_WM_STATE_MODAL")) frame.modal = true;
       if (states[i] == atom("_NET_WM_STATE_FULLSCREEN")) initial_fullscreen = true;
+      if (states[i] == atom("_NET_WM_STATE_SHADED")) initial_shaded = true;
       if (states[i] == atom("_NET_WM_STATE_MAXIMIZED_VERT")) initial_vert = true;
       if (states[i] == atom("_NET_WM_STATE_MAXIMIZED_HORZ")) initial_horz = true;
     }
@@ -916,6 +934,7 @@ void X11WindowManager::manage(xcb_window_t window) {
   client_order_.push_back(window);
   if (initial_fullscreen) set_fullscreen(window, true);
   else if (initial_horz || initial_vert) set_maximized(window, initial_horz, initial_vert);
+  if (initial_shaded && !initial_fullscreen) set_shaded(window, true);
   if (frame.mapped) map(window);
   update_client_list();
   update_tasks();
@@ -1234,7 +1253,8 @@ void X11WindowManager::draw_frame(Frame& frame) {
   const int title_height = title_height_pixels();
   const double scale = shell_.ui_scale();
   const int width = (frame.sync_waiting ? frame.sync_width : frame.width) + 2 * border;
-  const int height = (frame.sync_waiting ? frame.sync_height : frame.height) + title_height + border;
+  const int height = frame.shaded ? title_height :
+      (frame.sync_waiting ? frame.sync_height : frame.height) + title_height + border;
   auto* surface = cairo_xcb_surface_create(connection_, frame.frame, visual, width, height);
   auto* cr = cairo_create(surface);
   const auto& theme = shell_.theme();
@@ -1299,7 +1319,8 @@ void X11WindowManager::resize_frame(Frame& frame) {
   const bool has_decoration = decorated(frame);
   const std::uint32_t position[] = {static_cast<std::uint32_t>(frame.x), static_cast<std::uint32_t>(frame.y),
                                     static_cast<std::uint32_t>(frame.width + (has_decoration ? 2 * border_pixels() : 0)),
-                                    static_cast<std::uint32_t>(frame.height + (has_decoration ? title_height_pixels() + border_pixels() : 0))};
+                                    static_cast<std::uint32_t>(frame.shaded ? title_height_pixels() :
+                                        frame.height + (has_decoration ? title_height_pixels() + border_pixels() : 0))};
   xcb_configure_window(connection_, frame.frame, XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y |
                        XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, position);
   const std::uint32_t dimensions[] = {static_cast<std::uint32_t>(has_decoration ? border_pixels() : 0),
@@ -1373,6 +1394,7 @@ void X11WindowManager::configure_frame(Frame& frame, std::uint16_t mask, std::in
 void X11WindowManager::begin_drag(Frame& frame, DragMode mode, int root_x, int root_y,
                                   std::uint8_t direction, std::uint8_t button) {
   if (frame.fullscreen || frame.maximized_horz || frame.maximized_vert) return;
+  if (frame.shaded && mode != DragMode::move && mode != DragMode::keyboard_move) return;
   if (drag_mode_ != DragMode::none) end_drag(false);
   auto cookie = xcb_grab_pointer(connection_, 0, frame.frame,
                                 XCB_EVENT_MASK_BUTTON_RELEASE | XCB_EVENT_MASK_POINTER_MOTION,
@@ -1459,6 +1481,7 @@ void X11WindowManager::set_maximized(xcb_window_t client, bool horz, bool vert) 
   auto it = frames_.find(client);
   if (it == frames_.end() || it->second.fullscreen) return;
   auto& frame = it->second;
+  if (frame.shaded) set_shaded(client, false);
   if (frame.maximized_horz == horz && frame.maximized_vert == vert) return;
   if (horz && !frame.maximized_horz) {
     frame.old_x = frame.x;
@@ -1507,9 +1530,28 @@ void X11WindowManager::update_fullscreen_geometry(Frame& frame) {
     }
 }
 
+void X11WindowManager::set_shaded(xcb_window_t client, bool enabled) {
+  auto it = frames_.find(client);
+  if (it == frames_.end() || it->second.shaded == enabled ||
+      (enabled && !decorated(it->second))) return;
+  if (drag_client_ == client) end_drag(false);
+  auto& frame = it->second;
+  // Shading clips the still-mapped client; do not iconify it or resize its
+  // contents to the title bar. Finish any pending interactive resize first.
+  if (frame.sync_query) xcb_discard_reply(connection_, frame.sync_query);
+  frame.sync_query = 0;
+  frame.sync_waiting = false;
+  frame.sync_deferred = false;
+  frame.shaded = enabled;
+  resize_frame(frame);
+  send_configure_notify(frame);
+  update_window_state(frame);
+}
+
 void X11WindowManager::set_fullscreen(xcb_window_t client, bool enabled) {
   auto it = frames_.find(client);
   if (it == frames_.end() || it->second.role == WindowRole::splash || it->second.fullscreen == enabled) return;
+  if (enabled && it->second.shaded) set_shaded(client, false);
   if (enabled && (it->second.maximized_horz || it->second.maximized_vert))
     set_maximized(client, false, false);
   auto& frame = it->second;
@@ -1557,6 +1599,7 @@ void X11WindowManager::minimize(xcb_window_t client) {
 void X11WindowManager::restore(xcb_window_t client) {
   auto it = frames_.find(client);
   if (it == frames_.end()) return;
+  set_shaded(client, false);
   if (it->second.desktop != all_desktops_) set_current_desktop(it->second.desktop);
   set_showing_desktop(false);
   map(client, false);
@@ -1585,13 +1628,15 @@ void X11WindowManager::install_key_grabs() {
   };
   grab(XK_Left, XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1);
   grab(XK_Right, XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1);
+  grab(XK_Up, XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1);
+  grab(XK_Down, XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1);
   grab(XK_d, XCB_MOD_MASK_4);
   grab(XK_Tab, XCB_MOD_MASK_1);
   grab(XK_F4, XCB_MOD_MASK_1);
   xcb_key_symbols_free(symbols);
 }
 
-void X11WindowManager::cycle_focus() {
+void X11WindowManager::cycle_focus(bool expand_shaded) {
   if (frames_.empty()) return;
   auto it = frames_.upper_bound(active_);
   if (it == frames_.end()) it = frames_.begin();
@@ -1600,6 +1645,7 @@ void X11WindowManager::cycle_focus() {
     if (++it == frames_.end()) it = frames_.begin();
     if (it == first) return;
   }
+  if (expand_shaded) set_shaded(it->first, false);
   focus(it->first);
 }
 
@@ -1795,6 +1841,8 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
   }
   case XCB_PROPERTY_NOTIFY: {
     auto* e = reinterpret_cast<xcb_property_notify_event_t*>(event);
+    if (e->window == screen_->root && e->atom == atom("_NET_DESKTOP_LAYOUT"))
+      refresh_desktop_layout();
     if (!(event->response_type & 0x80)) last_event_time_ = e->time;
     if (e->atom == atom("_NET_WM_USER_TIME") || e->atom == atom("_NET_WM_USER_TIME_WINDOW")) {
       for (auto& [client, frame] : frames_) {
@@ -1848,6 +1896,11 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
     }
     auto& f = frames_.at(client);
     focus(client, e->time);
+    if (e->detail == 2 && decorated(f) && e->event_y >= border_pixels() &&
+        e->event_y < title_height_pixels()) {
+      set_shaded(client, !f.shaded);
+      break;
+    }
     if (e->detail != 1) break;
     if (!decorated(f)) break;
     const int x = e->event_x, y = e->event_y;
@@ -1943,12 +1996,14 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
       set_showing_desktop(!showing_desktop_); break;
     }
     if ((e->state & (XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1)) ==
-        (XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1) && (key == XK_Left || key == XK_Right)) {
-      set_current_desktop((current_desktop_ + (key == XK_Right ? 1 : desktop_count_ - 1)) % desktop_count_);
+        (XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1) &&
+        (key == XK_Left || key == XK_Right || key == XK_Up || key == XK_Down)) {
+      set_current_desktop(desktop_layout_.neighbor(current_desktop_, desktop_count_,
+                          key == XK_Left || key == XK_Right, key == XK_Right || key == XK_Down));
       break;
     }
     if (!(e->state & XCB_MOD_MASK_1)) break;
-    if (key == XK_Tab) cycle_focus();
+    if (key == XK_Tab) cycle_focus(true);
     else if (key == XK_F4 && active_) close(active_);
     break;
   }
@@ -2040,6 +2095,8 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
       if (change_vert || change_horz)
         set_maximized(e->window, change_horz ? next(it->second.maximized_horz) : it->second.maximized_horz,
                       change_vert ? next(it->second.maximized_vert) : it->second.maximized_vert);
+      if (first == atom("_NET_WM_STATE_SHADED") || second == atom("_NET_WM_STATE_SHADED"))
+        set_shaded(e->window, next(it->second.shaded));
       for (const auto state : {first, second == first ? xcb_atom_t(XCB_ATOM_NONE) : second}) {
         if (state == atom("_NET_WM_STATE_ABOVE")) {
           it->second.above = next(it->second.above);
