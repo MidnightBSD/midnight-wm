@@ -7,6 +7,7 @@
 #include "browser_launcher.hpp"
 #include "config.hpp"
 #include "content_size.hpp"
+#include "folder_view.hpp"
 #include "desktop_launcher.hpp"
 #include "display_scale.hpp"
 #include "display_monitors.hpp"
@@ -199,7 +200,8 @@ struct Folder {
   int scroll_rows{};
   std::vector<Item> items;
   bool trash{};
-  bool sort_by_type{};
+  FolderView view{FolderView::grid};
+  FolderSort sort{FolderSort::name_ascending};
   std::shared_ptr<ContentSize> content_size{std::make_shared<ContentSize>()};
 };
 
@@ -221,9 +223,9 @@ FolderScroll folder_scroll(const Folder& folder) {
   scroll.x = folder.width - 5 - scrollbar_width;
   scroll.view_width = folder.width - 10 - scrollbar_width;
   scroll.view_height = folder.height - folder_header - 22;
-  const int columns = std::max(1, scroll.view_width / icon_width);
+  const int columns = folder_columns(folder.view, scroll.view_width);
   const int rows = static_cast<int>((folder.items.size() + columns - 1) / columns);
-  scroll.visible_rows = std::max(1, (scroll.view_height - 11) / icon_height);
+  scroll.visible_rows = folder_visible_rows(folder.view, scroll.view_height);
   scroll.max_scroll = std::max(0, rows - scroll.visible_rows);
   scroll.track_y = folder_header + scrollbar_width;
   scroll.track_height = std::max(1, scroll.view_height - 2 * scrollbar_width);
@@ -316,7 +318,7 @@ enum class MenuAction { noop, open_home, open_desktop, open_trash, new_folder, p
                         launch, launch_action, desktop_action, next_apps, previous_apps,
                         open_item, open_with, copy, cut, create_shadow, create_template, properties, trash,
                         restore, delete_permanently, empty_trash, close_folder, exit_session, refresh_folder,
-                        sort_by_name, sort_by_type, activate_task, next_tasks, previous_tasks };
+                        set_folder_view, set_folder_sort, activate_task, next_tasks, previous_tasks };
 struct MenuEntry { std::string label; MenuAction action; std::size_t index{}; xcb_window_t window{}; std::string action_id{}; };
 
 std::string basename(const std::filesystem::path& path) {
@@ -1369,15 +1371,43 @@ struct Shell::Impl {
     return items;
   }
 
+  void reveal_folder_selection(Folder& folder) {
+    const auto scroll = folder_scroll(folder);
+    if (folder.selected >= 0) {
+      const int row = folder.selected / folder_columns(folder.view, scroll.view_width);
+      if (row < folder.scroll_rows) folder.scroll_rows = row;
+      else if (row >= folder.scroll_rows + scroll.visible_rows)
+        folder.scroll_rows = row - scroll.visible_rows + 1;
+    }
+    folder.scroll_rows = std::clamp(folder.scroll_rows, 0, scroll.max_scroll);
+  }
+
   void sort_folder(Folder& folder) {
-    if (!folder.sort_by_type) return;
-    std::ranges::stable_sort(folder.items, [](const Item& a, const Item& b) {
-      const auto category = [](const Item& item) {
-        return item.object.kind == ObjectKind::folder ? 0 :
-               item.object.kind == ObjectKind::file ? 1 : 2;
-      };
-      return category(a) < category(b);
-    });
+    std::optional<Item> selected;
+    if (folder.selected >= 0 && static_cast<std::size_t>(folder.selected) < folder.items.size())
+      selected = folder.items[folder.selected];
+    sort_folder_items(folder.items, folder.sort);
+    folder.selected = -1;
+    if (selected)
+      for (std::size_t i = 0; i < folder.items.size(); ++i)
+        if (folder.items[i].path == selected->path && folder.items[i].uri == selected->uri &&
+            folder.items[i].object.id == selected->object.id) {
+          folder.selected = static_cast<int>(i);
+          break;
+        }
+    folder.scroll_rows = 0;
+    reveal_folder_selection(folder);
+    last_click_window = 0;
+    pending_icon_window = 0;
+  }
+
+  void change_folder_view(Folder& folder, FolderView view) {
+    folder.view = view;
+    folder.scroll_rows = 0;
+    reveal_folder_selection(folder);
+    last_click_window = 0;
+    pending_icon_window = 0;
+    draw_folder(folder);
   }
 
   // Drops every cached icon surface and the lookups that alias them. Callers
@@ -1436,7 +1466,10 @@ struct Shell::Impl {
       if (folder.selected >= 0 && static_cast<std::size_t>(folder.selected) < folder.items.size())
         selected = folder.items[folder.selected];
       folder.items = list_items(folder.path, false);
+      folder.selected = -1;
+      const int previous_scroll = folder.scroll_rows;
       sort_folder(folder);
+      folder.scroll_rows = previous_scroll;
       folder.selected = -1;
       if (selected) {
         for (std::size_t i = 0; i < folder.items.size(); ++i)
@@ -1446,6 +1479,7 @@ struct Shell::Impl {
             break;
           }
       }
+      reveal_folder_selection(folder);
       folder.content_size->request(folder_size_uri(folder), true);
       draw_folder(folder);
     }
@@ -1560,7 +1594,7 @@ struct Shell::Impl {
       }
       // Trash contents are not individual drop destinations.
       if (!view.trash)
-        index = item_index(x, y, folder_header + 11, scroll.view_width, items->size(), view.scroll_rows);
+        index = folder_item_at(view.view, x, y, scroll.view_width, scroll.view_height, items->size(), view.scroll_rows);
     }
     if (items && index >= 0) {
       const auto& item = (*items)[index];
@@ -2015,6 +2049,54 @@ struct Shell::Impl {
     return std::max(0, columns - desktop_visible_columns());
   }
 
+  void draw_folder_list(cairo_t* cr, const Folder& folder, const FolderScroll& scroll) {
+    const auto columns = folder_list_columns(scroll.view_width);
+    const int top = folder_items_top(FolderView::list);
+    const auto end = std::min(folder.items.size(), static_cast<std::size_t>(folder.scroll_rows + scroll.visible_rows + 1));
+    for (std::size_t i = static_cast<std::size_t>(folder.scroll_rows); i < end; ++i) {
+      const auto& item = folder.items[i];
+      const int y = top + (static_cast<int>(i) - folder.scroll_rows) * folder_list_row;
+      const bool selected = folder.selected == static_cast<int>(i);
+      if (selected) fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
+                         5, y, scroll.view_width, folder_list_row);
+      const auto launcher = trusted_launcher(item);
+      cairo_save(cr);
+      cairo_translate(cr, 8, y + 2);
+      cairo_scale(cr, .5, .5);
+      icon(cr, item, 0, 0, item_icon_surface(item, launcher ? &*launcher : nullptr));
+      cairo_restore(cr);
+      for (const auto& column : columns) {
+        std::string value;
+        if (column.column == FolderColumn::name) value = launcher ? launcher->name : item.object.title;
+        else if (column.column == FolderColumn::size)
+          value = item.object.kind != ObjectKind::folder && item.metadata.size ?
+            format_content_size({*item.metadata.size, true, false}) : "—";
+        else if (column.column == FolderColumn::type) value = item.metadata.type;
+        else value = folder_modified_label(item);
+        const int inset = column.column == FolderColumn::name ? 31 : 5;
+        draw_text(cr, value, column.x + inset, y + 6, std::max(1, column.width - inset - 5),
+                  10, selected, false, config,
+                  column.column == FolderColumn::size ? PANGO_ALIGN_RIGHT : PANGO_ALIGN_LEFT);
+      }
+    }
+    // Paint headers last so partially visible rows never obscure them.
+    for (const auto& column : columns) {
+      themed_fill(cr, config.button_color, .79, .79, .79, column.x, folder_header, column.width, folder_list_header);
+      bevel(cr, column.x, folder_header, column.width, folder_list_header);
+      std::string label = column.column == FolderColumn::name ? "Name" :
+                          column.column == FolderColumn::size ? "Size" :
+                          column.column == FolderColumn::type ? "Type" : "Modified";
+      const bool ascending = (column.column == FolderColumn::name && folder.sort == FolderSort::name_ascending) ||
+                             (column.column == FolderColumn::type && folder.sort == FolderSort::type) ||
+                             (column.column == FolderColumn::modified && folder.sort == FolderSort::oldest);
+      const bool descending = (column.column == FolderColumn::name && folder.sort == FolderSort::name_descending) ||
+                              (column.column == FolderColumn::size && folder.sort == FolderSort::size) ||
+                              (column.column == FolderColumn::modified && folder.sort == FolderSort::newest);
+      if (ascending || descending) label += ascending ? " ▲" : " ▼";
+      text(cr, label, column.x + 5, folder_header + 4, std::max(1, column.width - 10), 10, false, true);
+    }
+  }
+
   void draw_folder(Folder& folder) {
     folder.content_size->request(folder_size_uri(folder));
     auto scroll = folder_scroll(folder);
@@ -2039,7 +2121,8 @@ struct Shell::Impl {
       cairo_save(cr);
       cairo_rectangle(cr, 5, folder_header, scroll.view_width, scroll.view_height);
       cairo_clip(cr);
-      draw_items(cr, folder.items, folder_header + 11, scroll.view_width, folder.selected, false, folder.scroll_rows);
+      if (folder.view == FolderView::list) draw_folder_list(cr, folder, scroll);
+      else draw_items(cr, folder.items, folder_header + 11, scroll.view_width, folder.selected, false, folder.scroll_rows);
       cairo_restore(cr);
       themed_fill(cr, config.button_color, .69, .69, .69, scroll.x, folder_header, scrollbar_width, scroll.view_height);
       bevel(cr, scroll.x, folder_header, scrollbar_width, scrollbar_width);
@@ -3056,9 +3139,19 @@ struct Shell::Impl {
       }
       if (!folder.trash) entries.push_back({"Paste", MenuAction::paste});
     } else {
-      entries = {{"Refresh", MenuAction::refresh_folder},
-                 {folder.sort_by_type ? "Sort by Name" : "✓ Sort by Name", MenuAction::sort_by_name},
-                 {folder.sort_by_type ? "✓ Sort by Type" : "Sort by Type", MenuAction::sort_by_type}};
+      entries = {{"Refresh", MenuAction::refresh_folder}};
+      for (const auto& [view, label] : {std::pair{FolderView::grid, "Grid View"},
+                                      std::pair{FolderView::list, "List View"}})
+        entries.push_back({std::string(folder.view == view ? "✓ " : "") + label,
+                           MenuAction::set_folder_view, static_cast<std::size_t>(view)});
+      for (const auto& [sort, label] : {std::pair{FolderSort::name_ascending, "Sort A–Z"},
+                                      std::pair{FolderSort::name_descending, "Sort Z–A"},
+                                      std::pair{FolderSort::newest, "Last Modified (newest first)"},
+                                      std::pair{FolderSort::oldest, "First Modified (oldest first)"},
+                                      std::pair{FolderSort::size, "Size (largest first)"},
+                                      std::pair{FolderSort::type, "Type"}})
+        entries.push_back({std::string(folder.sort == sort ? "✓ " : "") + label,
+                           MenuAction::set_folder_sort, static_cast<std::size_t>(sort)});
     }
     show_menu(folder.x + (tab == 0 ? 8 : tab == 1 ? 52 : 98), folder.y + folder_header,
               folder.window, std::move(entries));
@@ -3152,6 +3245,7 @@ struct Shell::Impl {
     xcb_change_property(connection, XCB_PROP_MODE_REPLACE, folder.window, XCB_ATOM_WM_NAME,
                         XCB_ATOM_STRING, 8, title.size(), title.data());
     folder.items = list_items(path, false);
+    sort_folder(folder);
     bool found = !selected;
     if (selected) {
       const auto normalized = selected->lexically_normal();
@@ -3159,7 +3253,7 @@ struct Shell::Impl {
         if (folder.items[i].path.lexically_normal() != normalized) continue;
         folder.selected = static_cast<int>(i);
         const auto scroll = folder_scroll(folder);
-        const int columns = std::max(1, scroll.view_width / icon_width);
+        const int columns = folder_columns(folder.view, scroll.view_width);
         folder.scroll_rows = std::max(0, static_cast<int>(i) / columns - scroll.visible_rows + 1);
         found = true;
         break;
@@ -3377,13 +3471,14 @@ struct Shell::Impl {
         break;
       case MenuAction::exit_session: show_exit_dialog(); break;
       case MenuAction::refresh_folder: refresh(); break;
-      case MenuAction::sort_by_name:
-      case MenuAction::sort_by_type:
-        if (auto it = folders.find(menu_owner); it != folders.end()) {
-          it->second.sort_by_type = entry.action == MenuAction::sort_by_type;
-          it->second.items = list_items(it->second.path, false);
+      case MenuAction::set_folder_view:
+        if (auto it = folders.find(menu_owner); it != folders.end() && entry.index <= static_cast<std::size_t>(FolderView::list))
+          change_folder_view(it->second, static_cast<FolderView>(entry.index));
+        break;
+      case MenuAction::set_folder_sort:
+        if (auto it = folders.find(menu_owner); it != folders.end() && entry.index <= static_cast<std::size_t>(FolderSort::type)) {
+          it->second.sort = static_cast<FolderSort>(entry.index);
           sort_folder(it->second);
-          it->second.selected = -1;
           draw_folder(it->second);
         }
         break;
@@ -3693,6 +3788,23 @@ struct Shell::Impl {
         draw_folder(*folder);
         return;
       }
+      if (folder->view == FolderView::list && event->event_y >= folder_header &&
+          event->event_y < folder_items_top(folder->view)) {
+        if (event->detail == 1 && event->event_x >= 5 && event->event_x < scroll.x) {
+          for (const auto& column : folder_list_columns(scroll.view_width)) {
+            if (event->event_x < column.x || event->event_x >= column.x + column.width) continue;
+            if (column.column == FolderColumn::name)
+              folder->sort = folder->sort == FolderSort::name_ascending ? FolderSort::name_descending : FolderSort::name_ascending;
+            else if (column.column == FolderColumn::size) folder->sort = FolderSort::size;
+            else if (column.column == FolderColumn::type) folder->sort = FolderSort::type;
+            else folder->sort = folder->sort == FolderSort::newest ? FolderSort::oldest : FolderSort::newest;
+            sort_folder(*folder);
+            draw_folder(*folder);
+            break;
+          }
+        }
+        return;
+      }
       if (event->event_y < folder_header || event->event_y >= folder->height - 22) return;
     }
     const bool on_desktop = event->event == desktop;
@@ -3711,8 +3823,9 @@ struct Shell::Impl {
     const int width_px = on_desktop ? desktop_width : folder_scroll(*folder).view_width;
     const int index = on_desktop && (icon_x < 0 || icon_x >= desktop_width ||
                                    icon_y < 0 || icon_y >= desktop_height) ? -1 :
-      item_index(icon_x, icon_y, start_y, width_px, items.size(),
-                 folder ? folder->scroll_rows : desktop_scroll_columns, on_desktop);
+      on_desktop ? item_index(icon_x, icon_y, start_y, width_px, items.size(), desktop_scroll_columns, true) :
+      folder_item_at(folder->view, icon_x, icon_y, width_px, folder_scroll(*folder).view_height,
+                     items.size(), folder->scroll_rows);
     if (event->detail == 3) {
       // Context actions and the File menu must agree on the selected item.
       if (!on_desktop && index >= 0) { folder->selected = index; draw_folder(*folder); }
@@ -3824,6 +3937,21 @@ struct Shell::Impl {
     int& selected = on_desktop ? selected_desktop : it->second.selected;
     const auto sym = key_symbols ? xcb_key_symbols_get_keysym(key_symbols, event->detail, 0) : 0;
     if (sym == XK_Escape) { close_menu(); return; }
+    if (!on_desktop && (event->state & XCB_MOD_MASK_CONTROL) && (sym == XK_1 || sym == XK_2)) {
+      change_folder_view(it->second, sym == XK_1 ? FolderView::grid : FolderView::list);
+      return;
+    }
+    if (!on_desktop && !items.empty() &&
+        (sym == XK_Up || sym == XK_Down ||
+         (it->second.view == FolderView::grid && (sym == XK_Left || sym == XK_Right)))) {
+      const int columns = folder_columns(it->second.view, folder_scroll(it->second).view_width);
+      const int step = sym == XK_Up ? -columns : sym == XK_Down ? columns : sym == XK_Left ? -1 : 1;
+      selected = selected < 0 ? 0 : std::clamp(selected + step, 0, static_cast<int>(items.size()) - 1);
+      reveal_folder_selection(it->second);
+      draw_folder(it->second);
+      last_click_window = 0;
+      return;
+    }
     if (on_desktop && (sym == XK_Page_Up || sym == XK_Page_Down || sym == XK_Home || sym == XK_End)) {
       if (sym == XK_Home) desktop_scroll_columns = 0;
       else if (sym == XK_End) desktop_scroll_columns = desktop_max_scroll();

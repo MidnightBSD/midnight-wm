@@ -457,7 +457,18 @@ and End keys also scroll. Other applications draw and control their own
 scrollbars.
 In a folder window, **File** opens the selected item, creates a folder, shows
 properties, moves an item to Trash, or closes the window. **Edit** offers copy,
-cut, and paste. **View** refreshes the folder and sorts by name or type.
+cut, and paste. **View** switches between the icon grid and a list with Name,
+Size, Type, and Modified columns. Ctrl+1 selects the grid; Ctrl+2 selects the list.
+List columns hide progressively in narrow windows to keep filenames readable.
+Use **View** to sort A–Z, Z–A, last modified (newest first), first modified
+(oldest first), size (largest first), or type. Folders stay first in each order;
+unknown sizes or modification times sort after known values. Size sorting uses
+logical file lengths, without recursively measuring each subfolder. Click list
+column headers to sort; Name and Modified toggle direction. Selection follows
+the same item across sorting, refresh, and view changes. Arrow keys navigate
+items, Enter opens the selection, and scrolling works in either view. Each new
+folder starts in grid view with A–Z sorting; **View → Refresh** updates its
+cached metadata and contents.
 The bottom status bar keeps the object count on the left and the contents' size
 on the right. With an item selected it shows only that item's size; selecting a
 folder measures that folder's contents. Click empty space to return to the total.

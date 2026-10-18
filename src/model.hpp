@@ -3,11 +3,20 @@
 #include "store.hpp"
 
 #include <expected>
+#include <cstdint>
+#include <optional>
 #include <filesystem>
 #include <string>
 #include <vector>
 
 namespace midnight {
+
+struct FolderMetadata {
+  std::optional<std::int64_t> size;
+  std::optional<std::int64_t> modified;
+  std::uint32_t modified_nanoseconds{};
+  std::string type;
+};
 
 struct ShellItem {
   Object object;
@@ -16,6 +25,7 @@ struct ShellItem {
   bool trashed{};
   std::string uri;
   std::filesystem::path original_path;
+  FolderMetadata metadata{};
 };
 
 // Filesystem and object semantics shared by display backends.
