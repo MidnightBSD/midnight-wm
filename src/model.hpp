@@ -40,6 +40,7 @@ public:
                                                                    const std::string& icon,
                                                                    const std::string& target) const;
   [[nodiscard]] std::expected<void, std::string> remove(const ShellItem& item) const;
+  [[nodiscard]] static std::expected<void, std::string> empty_trash();
   [[nodiscard]] std::expected<void, std::string> restore(const ShellItem& item) const;
   [[nodiscard]] std::expected<void, std::string> delete_permanently(const ShellItem& item) const;
 

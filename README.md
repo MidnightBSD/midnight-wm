@@ -243,6 +243,8 @@ managers. Drag desktop files or folders onto Trash to move them to recoverable
 Trash, or onto a folder icon to move them into that folder. Hold Ctrl when
 starting a drag to copy instead. A preview follows the pointer with the item
 icon, name, and Move or Copy label. Built-in desktop shortcuts remain in place.
+The Trash window offers **Empty Trash…** in its File and right-click menus;
+confirming permanently deletes all items in Trash.
 Clipboard and drag operations support file URIs; text selection uses
 standard X11 selection targets, including incremental transfers for large text.
 The workspace keeps a text or file clipboard snapshot when its original owner

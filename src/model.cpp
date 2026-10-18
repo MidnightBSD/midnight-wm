@@ -219,6 +219,29 @@ std::expected<void, std::string> ShellModel::remove(const ShellItem& item) const
   return store_.erase(item.object.id);
 }
 
+std::expected<void, std::string> ShellModel::empty_trash() {
+  // Delete only children returned by the Trash backend, never original paths.
+  auto* root = g_file_new_for_uri("trash:///");
+  GError* error = nullptr;
+  auto* entries = g_file_enumerate_children(root, G_FILE_ATTRIBUTE_STANDARD_NAME,
+      G_FILE_QUERY_INFO_NOFOLLOW_SYMLINKS, nullptr, &error);
+  if (!entries) {
+    g_object_unref(root);
+    return std::unexpected(error_text(error));
+  }
+  while (auto* info = g_file_enumerator_next_file(entries, nullptr, &error)) {
+    auto* child = g_file_get_child(root, g_file_info_get_name(info));
+    const bool removed = g_file_delete(child, nullptr, &error);
+    g_object_unref(child);
+    g_object_unref(info);
+    if (!removed) break;
+  }
+  g_object_unref(entries);
+  g_object_unref(root);
+  if (error) return std::unexpected(error_text(error));
+  return {};
+}
+
 std::expected<void, std::string> ShellModel::restore(const ShellItem& item) const {
   if (!item.trashed || item.original_path.empty()) return std::unexpected("Original location unavailable");
   auto* source = g_file_new_for_uri(item.uri.c_str());
