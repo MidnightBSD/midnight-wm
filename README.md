@@ -95,6 +95,14 @@ adjust volume and Space or M toggles mute. The control uses MidnightBSD's defaul
 OSS `/dev/mixer`, falling back to PCM when master volume is unavailable.
 The popup reports when no usable mixer is available.
 
+On systems with an ACPI battery, a battery icon and remaining percentage appear
+next to the speaker button. Charging displays a lightning marker; low battery
+uses a red fill. Click the indicator for power status and the remaining time
+estimate when available. Status refreshes every 30 seconds. The indicator
+is hidden when no battery is present; unavailable capacity is shown as `?`.
+Battery status uses MidnightBSD's `hw.acpi.battery.*` and `hw.acpi.acline`
+sysctls, as the base system `batt` utility does.
+
 Running MPRIS media players appear below the volume controls, with track and
 artist information and previous, play/pause, and next controls. Click the player
 name to cycle between multiple players. Unsupported actions are disabled, and

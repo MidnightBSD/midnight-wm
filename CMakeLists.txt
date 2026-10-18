@@ -10,7 +10,7 @@ pkg_check_modules(DEPS REQUIRED IMPORTED_TARGET
   xcb xcb-icccm xcb-keysyms xcb-xfixes xcb-randr xcb-sync xcb-screensaver cairo-xcb pangocairo
   gio-2.0 gio-unix-2.0 gdk-pixbuf-2.0 garcon-1 sqlite3)
 
-add_library(midnight_core src/store.cpp src/model.cpp src/config.cpp src/audio.cpp src/wallpaper.cpp
+add_library(midnight_core src/store.cpp src/model.cpp src/config.cpp src/audio.cpp src/battery.cpp src/wallpaper.cpp
   src/desktop_launcher.cpp src/thumbnail.cpp src/recent_files.cpp
   src/startup_notification.cpp src/browser_launcher.cpp src/terminal_launcher.cpp)
 target_include_directories(midnight_core PUBLIC src)
@@ -49,6 +49,11 @@ install(FILES data/midnightworkspace-portals.conf DESTINATION ${CMAKE_INSTALL_DA
 install(FILES README.md LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/midnight-wm)
 
 enable_testing()
+add_library(battery_sysctl_fixture SHARED tests/battery_sysctl_fixture.cpp)
+target_link_libraries(battery_sysctl_fixture PRIVATE ${CMAKE_DL_LIBS})
+add_executable(battery_test tests/battery_test.cpp)
+target_link_libraries(battery_test PRIVATE midnight_core)
+add_test(NAME battery_test COMMAND battery_test)
 find_program(XVFB Xvfb)
 find_package(Python3 COMPONENTS Interpreter)
 if(XVFB AND Python3_Interpreter_FOUND)

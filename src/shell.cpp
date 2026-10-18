@@ -1,6 +1,7 @@
 #include "shell.hpp"
 
 #include "audio.hpp"
+#include "battery.hpp"
 #include "media_player.hpp"
 #include "browser_launcher.hpp"
 #include "config.hpp"
@@ -47,6 +48,8 @@
 namespace midnight {
 namespace {
 constexpr int volume_group_width = 24;
+constexpr int battery_group_width = 72;
+constexpr int battery_gap = 4;
 // Icon cache limits; see Shell::Impl::trim_icon_caches().
 constexpr std::size_t max_icon_surfaces = 512;
 constexpr std::size_t max_icon_files = 2048;
@@ -397,6 +400,36 @@ void sound_icon(cairo_t* cr, int x, int y, SoundIcon kind, const ThemeConfig& th
   cairo_restore(cr);
 }
 
+void battery_icon(cairo_t* cr, int x, int y, const BatteryState& state, const ThemeConfig& theme) {
+  cairo_save(cr);
+  const auto foreground = theme.dark_mode ? theme.text_color : std::array<double, 3>{.12, .12, .12};
+  cairo_set_source_rgb(cr, foreground[0], foreground[1], foreground[2]);
+  cairo_set_line_width(cr, 1.5);
+  cairo_rectangle(cr, x + 1, y + 4, 18, 11);
+  cairo_stroke(cr);
+  cairo_rectangle(cr, x + 19, y + 7, 2, 5);
+  cairo_fill(cr);
+  if (state.percent) {
+    if (*state.percent <= 15 && !state.charging && !state.on_ac.value_or(false))
+      cairo_set_source_rgb(cr, .85, .20, .20);
+    else cairo_set_source_rgb(cr, .20, theme.dark_mode ? .80 : .52, .30);
+    cairo_rectangle(cr, x + 3, y + 6, 14.0 * *state.percent / 100, 7);
+    cairo_fill(cr);
+  }
+  if (state.charging) {
+    cairo_set_source_rgb(cr, foreground[0], foreground[1], foreground[2]);
+    cairo_move_to(cr, x + 12, y + 1);
+    cairo_line_to(cr, x + 7, y + 10);
+    cairo_line_to(cr, x + 11, y + 10);
+    cairo_line_to(cr, x + 8, y + 18);
+    cairo_line_to(cr, x + 15, y + 7);
+    cairo_line_to(cr, x + 11, y + 7);
+    cairo_close_path(cr);
+    cairo_fill(cr);
+  }
+  cairo_restore(cr);
+}
+
 void lock_icon(cairo_t* cr, int x, int y, const ThemeConfig& theme) {
   cairo_save(cr);
   const auto color = theme.dark_mode ? theme.text_color : std::array<double, 3>{.12, .12, .12};
@@ -549,6 +582,9 @@ struct Shell::Impl {
   int audio_x{}, audio_y{};
   bool volume_drag{};
   std::optional<VolumeState> volume_state;
+  BatteryMonitor battery;
+  std::optional<BatteryState> battery_state;
+  std::chrono::steady_clock::time_point last_battery_poll{};
   std::chrono::steady_clock::time_point last_volume_poll{};
   std::shared_ptr<bool> alive{std::make_shared<bool>(true)};
   int transfers_in_progress{};
@@ -1362,9 +1398,9 @@ struct Shell::Impl {
       const int clock_x = this->clock_x();
       const int volume_x = this->volume_x();
       const bool show_volume = this->show_volume();
-      if (transfers_in_progress) text(cr, "Working…", (show_volume ? volume_x : tray_x()) - 85, 8, 80, 11);
+      if (transfers_in_progress) text(cr, "Working…", status_left() - 85, 8, 80, 11);
       else if (startup && startup->pending_count())
-        text(cr, "Starting…", (show_volume ? volume_x : tray_x()) - 85, 8, 80, 11);
+        text(cr, "Starting…", status_left() - 85, 8, 80, 11);
       for (std::size_t i = 0; i < layout.visible; ++i) {
         const auto& task = all_tasks[i];
         const int x = task_start_x + static_cast<int>(i) * task_step;
@@ -1382,6 +1418,13 @@ struct Shell::Impl {
         bevel(cr, volume_x, 4, volume_group_width, 24, audio_popup != 0);
         sound_icon(cr, volume_x + 3, 7,
                    volume_state && volume_state->muted ? SoundIcon::mute : SoundIcon::speaker, config);
+      }
+      if (show_battery()) {
+        const int x = battery_x();
+        bevel(cr, x, 4, battery_group_width, 24);
+        battery_icon(cr, x + 4, 6, *battery_state, config);
+        const auto label = battery_state->percent ? std::to_string(*battery_state->percent) + "%" : "?";
+        text(cr, label, x + 29, 8, 40, 11, false, true);
       }
       bevel(cr, clock_x, 5, 99, 24, true);
       text(cr, clock_text(config.clock_format), clock_x + 7, 8, 86, 11, false, true);
@@ -1410,7 +1453,9 @@ struct Shell::Impl {
   int tray_width() const {
     // Leave room for the task overflow button even when every task is hidden.
     return std::clamp(requested_tray_width, 0,
-                      std::max(0, clock_x() - task_start_x - task_overflow_width - 4));
+                      std::max(0, clock_x() - task_start_x - task_overflow_width - 4 -
+                          (battery_state ? battery_group_width + battery_gap +
+                                           volume_group_width + volume_clock_gap : 0)));
   }
 
   int tray_x() const { return clock_x() - tray_width(); }
@@ -1419,8 +1464,18 @@ struct Shell::Impl {
 
   bool show_volume() const { return volume_x() >= 245; }
 
+  int battery_x() const {
+    return (show_volume() ? volume_x() : tray_x()) - battery_group_width - battery_gap;
+  }
+
+  bool show_battery() const { return battery_state.has_value() && battery_x() >= task_start_x; }
+
+  int status_left() const {
+    return show_battery() ? battery_x() : show_volume() ? volume_x() : tray_x();
+  }
+
   TaskLayout task_layout(std::size_t count) const {
-    const int limit = (show_volume() ? volume_x() : tray_x()) -
+    const int limit = status_left() -
                       (transfers_in_progress ? 85 : 0);
     const auto capacity = [](int right) -> std::size_t {
       return right < task_start_x + task_button_width ? 0 :
@@ -2840,6 +2895,20 @@ struct Shell::Impl {
       return;
     }
     if (event->event == panel) {
+      if (show_battery() && event->event_x >= battery_x() &&
+          event->event_x < battery_x() + battery_group_width) {
+        if (event->detail == 1) {
+          std::string message = battery_state->percent
+              ? "Battery: " + std::to_string(*battery_state->percent) + "%"
+              : "Battery level unavailable";
+          if (battery_state->charging) message += " — Charging";
+          else if (battery_state->on_ac) message += *battery_state->on_ac ? " — Plugged in" : " — On battery";
+          if (battery_state->minutes && !battery_state->on_ac.value_or(false) && !battery_state->charging)
+            message += " — " + std::to_string(*battery_state->minutes) + " minutes remaining";
+          show_notice(message);
+        }
+        return;
+      }
       const int volume_x = this->volume_x();
       if (show_volume() && event->event_x >= volume_x &&
           event->event_x < volume_x + volume_group_width) {
@@ -3218,6 +3287,8 @@ bool Shell::initialize() {
   p.media.initialize();
   if (auto state = p.volume.read(); state) p.volume_state = *state;
   p.last_volume_poll = std::chrono::steady_clock::now();
+  p.battery_state = p.battery.read();
+  p.last_battery_poll = p.last_volume_poll;
   p.key_symbols = xcb_key_symbols_alloc(p.connection);
   auto atom_cookie = xcb_intern_atom(p.connection, 0, 18, "_NET_ACTIVE_WINDOW");
   if (auto* reply = xcb_intern_atom_reply(p.connection, atom_cookie, nullptr)) {
@@ -3361,6 +3432,16 @@ void Shell::tick() {
     auto current = p.volume.read();
     std::optional<VolumeState> state = current ? std::optional<VolumeState>(*current) : std::nullopt;
     if (state != p.volume_state) { p.volume_state = state; redraw = true; p.draw_audio_popup(); }
+  }
+  if (steady_now - p.last_battery_poll >= std::chrono::seconds(30)) {
+    p.last_battery_poll = steady_now;
+    auto state = p.battery.read();
+    if (state != p.battery_state) {
+      const bool presence_changed = state.has_value() != p.battery_state.has_value();
+      p.battery_state = state;
+      if (presence_changed) refresh_display_layout();
+      redraw = true;
+    }
   }
   if (redraw) p.draw_panel();
 }

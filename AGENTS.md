@@ -96,6 +96,14 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   The panel has one speaker button toggling a popup below it, with a volume
   slider, mute beneath it, and MPRIS controls. Keep popup bounds within the
   primary monitor; release pointer/keyboard grabs on close and layout changes.
+- `src/battery.*` reads aggregate ACPI battery status through MidnightBSD sysctls,
+  following `/usr/src/usr.bin/batt`. Keep it independent of X11 and shell commands.
+  The panel shows battery capacity beside audio only when a battery is present,
+  polls every 30 seconds, and preserves task overflow and tray space. Handle
+  unknown capacity/time without inventing values and hide removed batteries.
+  `battery_test` covers the reader with injected sysctl values; run
+  `python3 tests/battery_smoke.py` for isolated presence, charging, live updates,
+  and removal checks through the test-only sysctl interposer.
 - `src/media_player.*` discovers MPRIS players asynchronously and respects their
   playback capabilities. Cancel outstanding calls safely when shutting down.
 - `src/desktop_services.*` provides the portal Settings backend and idle
