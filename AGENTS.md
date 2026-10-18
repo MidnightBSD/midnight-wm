@@ -90,6 +90,10 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   notification icons in the panel.
 - `src/status_notifier.*` provides the D-Bus StatusNotifier watcher and host;
   `src/status_panel.*` draws those items in the X11 panel and sends input actions.
+  Keep one GetAll in flight per item, and repaint the panel from tick().
+- One GLib main-context iteration dispatches every ready source, so the main
+  loop cannot cap D-Bus work per pass. Keep D-Bus handlers to bookkeeping and
+  defer X requests and drawing to the owning tick(), which runs once per pass.
 - `src/dbus_menu.*` reads application menus over D-Bus;
   `src/dbus_menu_popup.*` draws their rows and submenus in X11.
 - `src/audio.*` controls the default OSS mixer and has no X11 dependency.
@@ -115,7 +119,8 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
 - `src/notifications.*` implements the session D-Bus notification service and
   draws X11 popups only when no other daemon owns the service name. Preserve
   action identifiers, close reasons, resident/urgency behavior, and validate raw
-  image dimensions/stride/payload before creating image buffers.
+  image dimensions/stride/payload before creating image buffers. Notify only
+  updates popup state; tick() creates, paints, and maps changed popups.
 - `src/file_manager1.*` serves D-Bus folder, item, and properties requests.
   `src/recent_files.*` reads and updates the shared XBEL recent-files history.
 - `src/startup_notification.*` tracks launches over the X11 startup protocol;

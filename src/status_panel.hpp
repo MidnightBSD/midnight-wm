@@ -37,6 +37,8 @@ private:
   xcb_window_t window_{};
   std::vector<std::string> visible_keys_;
   std::string active_menu_key_;
+  // StatusNotifier changes are applied once per main-loop pass in tick().
+  bool refresh_pending_{};
   int x_{};
   int width_{};
   int height_{};
