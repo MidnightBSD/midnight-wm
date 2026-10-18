@@ -309,7 +309,7 @@ struct TransferCompletion {
 };
 
 enum class MenuAction { noop, open_home, open_desktop, open_trash, new_folder, paste, show_programs,
-                        show_recent, open_recent, settings, workspaces, switch_workspace, show_desktop,
+                        show_recent, open_recent, settings, package_manager, workspaces, switch_workspace, show_desktop,
                         show_category, next_categories, previous_categories,
                         launch, launch_action, desktop_action, next_apps, previous_apps,
                         open_item, open_with, copy, cut, create_shadow, create_template, properties, trash,
@@ -2815,6 +2815,7 @@ struct Shell::Impl {
                                    {"Workspaces ▶", MenuAction::workspaces},
                                    {"Show desktop", MenuAction::show_desktop},
                                    {"Trash", MenuAction::open_trash},
+                                   {"Mport Manager", MenuAction::package_manager},
                                    {"Exit X11 session…", MenuAction::exit_session}};
     const auto area = primary_area();
     show_menu(area.x + 3, area.y + panel_height, desktop, std::move(entries));
@@ -3151,6 +3152,22 @@ struct Shell::Impl {
         if (process) g_object_unref(process);
         else show_notice("Could not open MidnightBSD Settings.");
         if (error) g_error_free(error);
+        break;
+      }
+      case MenuAction::package_manager: {
+        auto* desktop_entry = g_desktop_app_info_new("mport-manager.desktop");
+        if (!desktop_entry) {
+          show_notice("Mport Manager is not installed. Install ports-mgmt/mport-manager.");
+          break;
+        }
+        GError* error = nullptr;
+        auto* app = G_APP_INFO(desktop_entry);
+        const bool launched = startup ? startup->launch(app, nullptr, &error) :
+          g_app_info_launch(app, nullptr, nullptr, &error);
+        if (!launched) show_notice(std::string("Could not open Mport Manager: ") +
+                                  (error ? error->message : "launch failed"));
+        if (error) g_error_free(error);
+        g_object_unref(desktop_entry);
         break;
       }
       case MenuAction::open_home: open_folder(g_get_home_dir()); break;

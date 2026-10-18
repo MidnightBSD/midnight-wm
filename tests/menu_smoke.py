@@ -55,6 +55,15 @@ def session(args):
                 category = next(window for window in popups() if window != root)
                 return root, category
 
+            # The direct package-manager entry uses its installed desktop entry's
+            # Exec argument vector, including the distribution's privilege wrapper.
+            run("xdotool", "mousemove", "12", "12", "click", "1")
+            until(lambda: bool(popups()), "launcher did not open for package manager")
+            run("xdotool", "mousemove", "100", "286", "click", "1")
+            until((Path(os.environ["HOME"]) / "mport manager.launched").exists,
+                  "Mport Manager desktop entry did not launch")
+            until(lambda: not popups(), "package manager launch did not close menu")
+
             root, category = open_categories()
             cx, cy, _, _ = popups()[category]
             move(cx + 50, cy + 16)
@@ -123,7 +132,7 @@ def session(args):
             assert not popups(), "pending animation or hover resurrected a closed menu"
             assert wm.poll() is None, "WM exited during menu checks"
             (args.output / "reveal.txt").write_text(f"Observed initial app height: {observed}; final: 248\n")
-            print("Menu levels, 720p bounds, stable popup IDs, rapid category hover, launch, "
+            print("Mport Manager desktop launch, menu levels, 720p bounds, stable popup IDs, rapid category hover, launch, "
                   "dismissal during reveal, and second-WM rejection passed.")
         finally:
             wm.terminate()
@@ -167,6 +176,9 @@ def main():
                     f'Exec={shutil.which("touch")} "{marker}"\nCategories={category};\n'
                     f'Actions=NewWindow;\n[Desktop Action NewWindow]\nName=New Window\n'
                     f'Exec={shutil.which("touch")} "{root / "home" / (name + ".action")}"\n')
+        (root / "data/applications/mport-manager.desktop").write_text(
+            "[Desktop Entry]\nType=Application\nName=Mport Manager\n"
+            f'Exec={shutil.which("touch")} "{root / "home" / "mport manager.launched"}"\n')
         read_fd, write_fd = os.pipe()
         with (args.output / "xvfb.log").open("w") as log:
             xvfb = subprocess.Popen(["Xvfb", "-displayfd", str(write_fd), "-screen", "0",

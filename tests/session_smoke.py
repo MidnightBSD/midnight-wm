@@ -70,7 +70,7 @@ def session(args):
     def exit_dialog():
         run("xdotool", "mousemove", "12", "12", "click", "1")
         time.sleep(.25)
-        run("xdotool", "mousemove", "40", "286", "click", "1")
+        run("xdotool", "mousemove", "40", "310", "click", "1")
         return until(lambda: window_for_size(380, 174), "exit dialog missing")
 
     def logout(wm):
