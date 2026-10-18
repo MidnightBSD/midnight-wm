@@ -22,6 +22,7 @@ struct Task {
   xcb_window_t window{};
   std::string title;
   bool active{};
+  bool attention{};
 };
 
 class Shell {
@@ -51,6 +52,8 @@ public:
                                  const std::optional<std::filesystem::path>& selected = std::nullopt);
   [[nodiscard]] bool show_item_properties(const std::filesystem::path& path);
   [[nodiscard]] xcb_window_t panel_window() const;
+  [[nodiscard]] xcb_window_t desktop_window() const;
+  [[nodiscard]] bool normal_window(xcb_window_t window) const;
   void set_tray_width(int width);
   [[nodiscard]] int tray_width() const;
   [[nodiscard]] int tray_x() const;

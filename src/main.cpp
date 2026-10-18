@@ -279,6 +279,7 @@ int main(int argc, char** argv) {
         pollfd display{.fd = xcb_get_file_descriptor(connection), .events = POLLIN, .revents = 0};
         while (running && !xcb_connection_has_error(connection)) {
           while (auto* event = xcb_poll_for_event(connection)) {
+            wm.observe_event(event);
             if (!clipboard.handle(event) && !dnd.handle(event) && !startup.handle(event) &&
                 !xsettings.handle(event) && !notifications.handle(event) &&
                 !menu_popup.handle(event) &&

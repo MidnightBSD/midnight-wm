@@ -1408,11 +1408,31 @@ struct Shell::Impl {
              task.active ? config.accent_color[1] : (config.dark_mode ? config.button_color[1] : .80),
              task.active ? config.accent_color[2] : (config.dark_mode ? config.button_color[2] : .80), x, 5, task_button_width, 24);
         bevel(cr, x, 5, task_button_width, 24, task.active);
-        text(cr, task.title, x + 7, 8, 95, 11, task.active);
+        if (task.attention && !task.active) {
+          cairo_set_source_rgb(cr, config.dark_mode ? .98 : .52,
+                               config.dark_mode ? .72 : .25,
+                               config.dark_mode ? .20 : .02);
+          cairo_set_line_width(cr, 2.0);
+          cairo_rectangle(cr, x + 1, 6, task_button_width - 2, 22);
+          cairo_stroke(cr);
+          text(cr, "!", x + 4, 8, 8, 11, false, true);
+        }
+        text(cr, task.title, x + (task.attention && !task.active ? 14 : 7), 8,
+             task.attention && !task.active ? 88 : 95, 11, task.active);
       }
       if (layout.overflow) {
         bevel(cr, layout.overflow_x, 5, task_overflow_width, 24);
         text(cr, "▾", layout.overflow_x + 6, 6, 16, 15, false, true);
+        const bool hidden_attention = std::ranges::any_of(
+          all_tasks.begin() + static_cast<std::ptrdiff_t>(layout.visible), all_tasks.end(),
+          [](const Task& task) { return task.attention; });
+        if (hidden_attention) {
+          cairo_set_source_rgb(cr, config.dark_mode ? .98 : .52,
+                               config.dark_mode ? .72 : .25,
+                               config.dark_mode ? .20 : .02);
+          cairo_arc(cr, layout.overflow_x + task_overflow_width - 4, 8, 3, 0, 2 * G_PI);
+          cairo_fill(cr);
+        }
       }
       if (show_volume) {
         bevel(cr, volume_x, 4, volume_group_width, 24, audio_popup != 0);
@@ -2443,9 +2463,11 @@ struct Shell::Impl {
     std::vector<MenuEntry> entries;
     if (task_page) entries.push_back({"◀ Previous windows", MenuAction::previous_tasks});
     const auto start = layout.visible + task_page * page_size;
-    for (std::size_t i = start; i < std::min(all_tasks.size(), start + page_size); ++i)
-      entries.push_back({(all_tasks[i].active ? "✓ " : "") + all_tasks[i].title,
-                         MenuAction::activate_task, 0, all_tasks[i].window});
+    for (std::size_t i = start; i < std::min(all_tasks.size(), start + page_size); ++i) {
+      const auto& task = all_tasks[i];
+      entries.push_back({std::string(task.active ? "✓ " : "") + (task.attention ? "! " : "") + task.title,
+                         MenuAction::activate_task, 0, task.window});
+    }
     if (start + page_size < all_tasks.size())
       entries.push_back({"More windows ▶", MenuAction::next_tasks});
     const auto area = primary_area();
@@ -3479,10 +3501,16 @@ void Shell::set_workspace(std::uint32_t desktop, bool showing_desktop) {
 
 void Shell::set_tasks(std::vector<Task> tasks) {
   impl_->tasks = std::move(tasks);
-  if (impl_->panel) { impl_->raise_panel(); impl_->draw_panel(); }
+  // The WM owns layer order; repainting tasks must not raise the panel above
+  // a focused fullscreen window.
+  if (impl_->panel) impl_->draw_panel();
 }
 
 xcb_window_t Shell::panel_window() const { return impl_->panel; }
+xcb_window_t Shell::desktop_window() const { return impl_->desktop; }
+bool Shell::normal_window(xcb_window_t window) const {
+  return impl_->folders.contains(window);
+}
 
 void Shell::set_tray_width(int width) {
   auto& p = *impl_;
