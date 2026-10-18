@@ -315,6 +315,20 @@ desktop. Existing user configuration overrides those defaults.
 The clickable launcher button uses the MidnightBSD logo from the
 [MidnightBSD website art collection](https://github.com/MidnightBSD/www/tree/main/art/logo).
 
+The panel network button sits beside the battery indicator and shows Wi-Fi,
+Ethernet (including unknown link types), or a disconnected cable. Basic status
+refreshes every 30 seconds without connectivity probes. Click it for active
+interfaces, IP addresses, observed connection duration, and total received and
+transmitted bytes. Wi-Fi also shows SSID, negotiated transmit link speed, and
+802.11 standard when the driver exposes them. Details refresh every two seconds
+only while the popup is open; close it with Escape or an outside click. Scroll
+with the mouse wheel or arrow/Page keys for long interface lists. Connection
+durations begin when the workspace first observes a link; counters are the
+interface's totals, not traffic measured since opening the popup. Active lagg
+members determine whether an aggregated connection is shown as wired or Wi-Fi.
+When independent wired and wireless links are both active, the panel prefers
+the wired icon; the popup still lists both.
+
 ## Design
 
 The shell object model, file operations, and presentation code are separate

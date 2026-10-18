@@ -2,6 +2,7 @@
 
 #include "audio.hpp"
 #include "battery.hpp"
+#include "network.hpp"
 #include "media_player.hpp"
 #include "browser_launcher.hpp"
 #include "config.hpp"
@@ -51,6 +52,9 @@ namespace midnight {
 namespace {
 constexpr int volume_group_width = 24;
 constexpr int battery_group_width = 64;
+constexpr int network_group_width = 24;
+constexpr int network_gap = 4;
+constexpr int network_popup_width = 420;
 constexpr int battery_gap = 4;
 // Icon cache limits; see Shell::Impl::trim_icon_caches().
 constexpr std::size_t max_icon_surfaces = 512;
@@ -636,6 +640,10 @@ struct Shell::Impl {
   MediaPlayers media;
   std::vector<MediaPlayerState> media_players;
   std::string selected_player;
+  xcb_window_t network_popup{};
+  int network_popup_height{}, network_scroll{};
+  NetworkMonitor network;
+  std::chrono::steady_clock::time_point last_network_draw{};
   xcb_window_t audio_popup{};
   int audio_x{}, audio_y{};
   bool volume_drag{};
@@ -836,6 +844,7 @@ struct Shell::Impl {
     if (submenu) xcb_destroy_window(connection, submenu);
     if (app_menu) xcb_destroy_window(connection, app_menu);
     if (exit_dialog) xcb_destroy_window(connection, exit_dialog);
+    if (network_popup) xcb_destroy_window(connection, network_popup);
     if (audio_popup) xcb_destroy_window(connection, audio_popup);
     if (drag_preview) xcb_destroy_window(connection, drag_preview);
     if (notice) xcb_destroy_window(connection, notice);
@@ -1668,6 +1677,39 @@ struct Shell::Impl {
           cairo_fill(cr);
         }
       }
+      if (show_network()) {
+        const int x = network_x();
+        bevel(cr, x, 4, network_group_width, 24, network_popup != 0);
+        cairo_save(cr);
+        cairo_set_source_rgb(cr, config.text_color[0], config.text_color[1], config.text_color[2]);
+        cairo_set_line_width(cr, 1.7);
+        if (network.state().kind == NetworkKind::wifi) {
+          for (int radius : {5, 9}) {
+            cairo_arc(cr, x + 12, 23, radius, -2.4, -.74);
+            cairo_stroke(cr);
+          }
+          cairo_arc(cr, x + 12, 23, 1.5, 0, 2 * std::numbers::pi);
+          cairo_fill(cr);
+        } else {
+          cairo_rectangle(cr, x + 6, 8, 12, 11);
+          cairo_stroke(cr);
+          for (int pin = 0; pin < 4; ++pin) {
+            cairo_move_to(cr, x + 9 + pin * 2, 8);
+            cairo_line_to(cr, x + 9 + pin * 2, 12);
+          }
+          cairo_move_to(cr, x + 12, 19);
+          cairo_line_to(cr, x + 12, 24);
+          cairo_line_to(cr, x + 18, 24);
+          cairo_stroke(cr);
+          if (network.state().kind == NetworkKind::disconnected) {
+            cairo_set_source_rgb(cr, .82, .18, .20);
+            cairo_move_to(cr, x + 4, 7); cairo_line_to(cr, x + 20, 25);
+            cairo_move_to(cr, x + 20, 7); cairo_line_to(cr, x + 4, 25);
+            cairo_stroke(cr);
+          }
+        }
+        cairo_restore(cr);
+      }
       if (show_volume) {
         bevel(cr, volume_x, 4, volume_group_width, 24, audio_popup != 0);
         sound_icon(cr, volume_x + 3, 7,
@@ -1709,8 +1751,8 @@ struct Shell::Impl {
     // Leave room for the task overflow button even when every task is hidden.
     return std::clamp(requested_tray_width, 0,
                       std::max(0, clock_x() - task_start_x - task_overflow_width - 4 -
-                          (config.show_battery && battery_state ? battery_group_width + battery_gap +
-                                           volume_group_width + volume_clock_gap : 0)));
+                          network_group_width - network_gap - volume_group_width - volume_clock_gap -
+                          (config.show_battery && battery_state ? battery_group_width + battery_gap : 0)));
   }
 
   int tray_x() const { return clock_x() - tray_width(); }
@@ -1725,8 +1767,12 @@ struct Shell::Impl {
 
   bool show_battery() const { return config.show_battery && battery_state.has_value() && battery_x() >= task_start_x; }
 
+  int network_x() const {
+    return (show_battery() ? battery_x() : show_volume() ? volume_x() : tray_x()) - network_group_width - network_gap;
+  }
+  bool show_network() const { return network_x() >= task_start_x; }
   int status_left() const {
-    return show_battery() ? battery_x() : show_volume() ? volume_x() : tray_x();
+    return show_network() ? network_x() : show_battery() ? battery_x() : show_volume() ? volume_x() : tray_x();
   }
 
   TaskLayout task_layout(std::size_t count) const {
@@ -2064,6 +2110,96 @@ struct Shell::Impl {
     return playing != media_players.end() ? &*playing : media_players.empty() ? nullptr : &media_players.front();
   }
 
+  std::vector<std::string> network_rows() const {
+    const auto& state = network.state();
+    std::vector<std::string> rows;
+    if (!state.error.empty()) rows.push_back("Status unavailable: " + state.error);
+    if (state.interfaces.empty() && state.error.empty()) rows.push_back("No active network interfaces");
+    for (const auto& item : state.interfaces) {
+      rows.push_back(item.name + (item.kind == NetworkKind::wifi ? " — Wi-Fi" : item.kind == NetworkKind::wired ? " — Ethernet" : " — Network"));
+      if (item.addresses.empty()) rows.push_back("IP address: unavailable");
+      else for (const auto& address : item.addresses) rows.push_back("IP: " + address);
+      const auto seconds = std::max<std::int64_t>(0, std::chrono::duration_cast<std::chrono::seconds>(
+          std::chrono::steady_clock::now() - item.connected_since).count());
+      rows.push_back("Connected (observed): " + std::to_string(seconds / 3600) + "h " +
+          std::to_string(seconds / 60 % 60) + "m " + std::to_string(seconds % 60) + "s");
+      if (item.kind == NetworkKind::wifi) {
+        rows.push_back("SSID: " + (item.ssid.empty() ? "unavailable" : item.ssid));
+        rows.push_back("Wi-Fi standard: " + (item.standard.empty() ? "unavailable" : item.standard));
+        std::string speed = "unavailable";
+        if (item.speed_mbps) {
+          speed = std::to_string(*item.speed_mbps);
+          speed.erase(speed.find_last_not_of('0') + 1);
+          if (speed.back() == '.') speed.pop_back();
+          speed += " Mbps";
+        }
+        rows.push_back("Link speed: " + speed);
+      }
+      rows.push_back("Received: " + (item.received ? std::to_string(*item.received) + " bytes" : "unavailable"));
+      rows.push_back("Transmitted: " + (item.transmitted ? std::to_string(*item.transmitted) + " bytes" : "unavailable"));
+      rows.emplace_back();
+    }
+    return rows;
+  }
+
+  int network_visible_rows() const { return std::max(1, (network_popup_height - 48) / 22); }
+
+  void draw_network_popup() {
+    if (!network_popup) return;
+    const auto rows = network_rows();
+    const int desired_height = std::clamp(static_cast<int>(rows.size()) * 22 + 48, 100,
+        std::max(100, primary_area().height - panel_height - 8));
+    if (network_popup_height != desired_height) {
+      network_popup_height = desired_height;
+      const std::uint32_t size[]{static_cast<std::uint32_t>(scaled_pixel(scale, desired_height))};
+      xcb_configure_window(connection, network_popup, XCB_CONFIG_WINDOW_HEIGHT, size);
+    }
+    network_scroll = std::clamp(network_scroll, 0, std::max(0, static_cast<int>(rows.size()) - network_visible_rows()));
+    paint_menu(network_popup, network_popup_height, true, [&](cairo_t* cr) {
+      themed_fill(cr, config.surface_color, .79, .79, .79, 0, 0, network_popup_width, network_popup_height);
+      bevel(cr, 0, 0, network_popup_width, network_popup_height);
+      const auto kind = network.state().kind;
+      text(cr, kind == NetworkKind::wifi ? "Wi-Fi connected" : kind == NetworkKind::wired ? "Ethernet connected" :
+          kind == NetworkKind::disconnected ? "Network disconnected" : network.state().interfaces.empty() ? "Network status unavailable" : "Network connected", 12, 9, network_popup_width - 24, 12, false, true);
+      for (int row = 0; row < network_visible_rows() && row + network_scroll < static_cast<int>(rows.size()); ++row)
+        text(cr, rows[row + network_scroll], 12, 38 + row * 22, network_popup_width - 28, 11);
+      if (static_cast<int>(rows.size()) > network_visible_rows())
+        text(cr, "↕", network_popup_width - 19, network_popup_height - 23, 16, 10);
+    }, network_popup_width);
+  }
+
+  void close_network_popup() {
+    if (!network_popup) return;
+    xcb_ungrab_pointer(connection, XCB_CURRENT_TIME);
+    xcb_ungrab_keyboard(connection, XCB_CURRENT_TIME);
+    destroy_menu_window(network_popup);
+    draw_panel();
+  }
+
+  void toggle_network_popup() {
+    if (network_popup) { close_network_popup(); return; }
+    close_audio_popup();
+    close_menu();
+    network.poll(true, true);
+    network_scroll = 0;
+    const auto area = primary_area();
+    network_popup_height = std::clamp(static_cast<int>(network_rows().size()) * 22 + 48, 100,
+        std::max(100, area.height - panel_height - 8));
+    const int x = std::clamp(area.x + network_x() + network_group_width - network_popup_width,
+        area.x, std::max(area.x, area.x + area.width - network_popup_width));
+    network_popup = create_window(x, area.y + panel_height, network_popup_width, network_popup_height);
+    const char name[] = "Midnight network status";
+    xcb_change_property(connection, XCB_PROP_MODE_REPLACE, network_popup, XCB_ATOM_WM_NAME,
+        XCB_ATOM_STRING, 8, sizeof(name) - 1, name);
+    draw_network_popup();
+    xcb_map_window(connection, network_popup);
+    xcb_grab_pointer(connection, 1, network_popup,
+        XCB_EVENT_MASK_BUTTON_PRESS | XCB_EVENT_MASK_BUTTON_RELEASE | XCB_EVENT_MASK_POINTER_MOTION,
+        XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC, XCB_NONE, XCB_NONE, XCB_CURRENT_TIME);
+    xcb_grab_keyboard(connection, 0, network_popup, XCB_CURRENT_TIME, XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC);
+    draw_panel();
+  }
+
   void draw_audio_popup() {
     if (!audio_popup) return;
     paint_menu(audio_popup, audio_popup_height, true, [&](cairo_t* cr) {
@@ -2122,6 +2258,7 @@ struct Shell::Impl {
 
   void toggle_audio_popup() {
     if (audio_popup) { close_audio_popup(); return; }
+    close_network_popup();
     close_menu();
     const auto area = primary_area();
     audio_x = std::clamp(area.x + volume_x() + volume_group_width - audio_popup_width,
@@ -3075,6 +3212,17 @@ struct Shell::Impl {
   }
 
   void button(const xcb_button_press_event_t* event) {
+    if (network_popup && event->event == network_popup) {
+      if (event->event_x < 0 || event->event_x >= network_popup_width ||
+          event->event_y < 0 || event->event_y >= network_popup_height) close_network_popup();
+      else if (event->detail == 4 || event->detail == 5) {
+        network_scroll += event->detail == 5 ? 1 : -1;
+        draw_network_popup();
+      }
+      return;
+    }
+    if (network_popup && !(event->event == panel && event->event_x >= network_x() &&
+        event->event_x < network_x() + network_group_width)) close_network_popup();
     if (event->event == audio_popup && audio_popup) { audio_button(event); return; }
     if (audio_popup && !(event->event == panel && event->event_x >= volume_x() &&
                         event->event_x < volume_x() + volume_group_width)) close_audio_popup();
@@ -3188,6 +3336,10 @@ struct Shell::Impl {
       return;
     }
     if (event->event == panel) {
+      if (show_network() && event->event_x >= network_x() && event->event_x < network_x() + network_group_width) {
+        if (event->detail == 1) toggle_network_popup();
+        return;
+      }
       if (show_battery() && event->event_x >= battery_x() &&
           event->event_x < battery_x() + battery_group_width) {
         if (event->detail == 1) {
@@ -3592,6 +3744,7 @@ bool Shell::initialize() {
   p.last_volume_poll = std::chrono::steady_clock::now();
   p.battery_state = p.battery.read();
   p.last_battery_poll = p.last_volume_poll;
+  p.network.poll(false);
   p.key_symbols = xcb_key_symbols_alloc(p.connection);
   auto atom_cookie = xcb_intern_atom(p.connection, 0, 18, "_NET_ACTIVE_WINDOW");
   if (auto* reply = xcb_intern_atom_reply(p.connection, atom_cookie, nullptr)) {
@@ -3645,7 +3798,7 @@ bool Shell::owns(xcb_window_t window) const {
   const auto& p = *impl_;
   return window && (window == p.desktop || window == p.panel || window == p.menu ||
                     window == p.submenu || window == p.app_menu || window == p.notice ||
-                    window == p.exit_dialog || window == p.audio_popup || window == p.drag_preview ||
+                    window == p.exit_dialog || window == p.audio_popup || window == p.network_popup || window == p.drag_preview ||
                     (p.icon_chooser && window == p.icon_chooser->window) ||
                     (p.open_with_dialog && window == p.open_with_dialog->window) ||
                     (p.properties && window == p.properties->window) || p.folders.contains(window));
@@ -3681,7 +3834,7 @@ bool Shell::handle(xcb_generic_event_t* event) {
   } else if (type == XCB_EXPOSE) {
     if (window == p.drag_preview) p.draw_drag_preview();
     else if (window == p.panel) p.draw_panel();
-    else if (window == p.audio_popup) {}
+    else if (window == p.audio_popup || window == p.network_popup) {}
     else if (window == p.desktop) {
       if (!p.desktop_pixmap) p.draw_desktop();
     }
@@ -3718,6 +3871,18 @@ bool Shell::handle(xcb_generic_event_t* event) {
     motion.root_x = static_cast<std::int16_t>(std::lround(motion.root_x / p.scale));
     motion.root_y = static_cast<std::int16_t>(std::lround(motion.root_y / p.scale));
     p.motion(&motion);
+  }
+  else if (type == XCB_KEY_PRESS && window == p.network_popup) {
+    const auto* key = reinterpret_cast<xcb_key_press_event_t*>(event);
+    const auto sym = p.key_symbols ? xcb_key_symbols_get_keysym(p.key_symbols, key->detail, 0) : 0;
+    if (sym == XK_Escape) p.close_network_popup();
+    else {
+      if (sym == XK_Up) --p.network_scroll;
+      else if (sym == XK_Down) ++p.network_scroll;
+      else if (sym == XK_Page_Up) p.network_scroll -= p.network_visible_rows();
+      else if (sym == XK_Page_Down) p.network_scroll += p.network_visible_rows();
+      p.draw_network_popup();
+    }
   }
   else if (type == XCB_KEY_PRESS && window == p.audio_popup) {
     const auto* key = reinterpret_cast<xcb_key_press_event_t*>(event);
@@ -3761,6 +3926,16 @@ void Shell::tick() {
       redraw = true;
     }
   }
+  const auto network_kind = p.network.state().kind;
+  p.network.poll(p.network_popup != 0, false, steady_now);
+  if (network_kind != p.network.state().kind) redraw = true;
+  if (p.network_popup) {
+    // Redraw the duration at most every two seconds, alongside detail sampling.
+    if (steady_now - p.last_network_draw >= std::chrono::seconds(2)) {
+      p.last_network_draw = steady_now;
+      p.draw_network_popup();
+    }
+  }
   if (redraw) p.draw_panel();
 }
 
@@ -3775,6 +3950,7 @@ void Shell::set_workspace(std::uint32_t desktop, bool showing_desktop) {
   p.workspace = desktop;
   p.showing_desktop = showing_desktop;
   p.close_menu();
+  p.close_network_popup();
   p.close_audio_popup();
   p.focused_folder = 0;
   for (const auto& [window, folder] : p.folders) {
@@ -3812,6 +3988,7 @@ void Shell::set_tray_width(int width) {
   auto& p = *impl_;
   const int requested = std::max(0, width);
   if (p.requested_tray_width == requested) return;
+  p.close_network_popup();
   p.close_audio_popup();
   p.requested_tray_width = requested;
   if (p.panel) p.draw_panel();
@@ -3890,6 +4067,7 @@ void Shell::set_screen_size(std::uint16_t width, std::uint16_t height) {
 void Shell::refresh_display_layout() {
   auto& p = *impl_;
   p.close_menu();
+  p.close_network_popup();
   p.close_audio_popup();
   p.update_monitor_geometry();
   p.scale = display_scale(p.primary_monitor.height, p.config.ui_scale);
