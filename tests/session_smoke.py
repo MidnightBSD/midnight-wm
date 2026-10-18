@@ -233,6 +233,12 @@ Path(sys.argv[2]).write_text(json.dumps({'manager': os.environ['SESSION_MANAGER'
             until(lambda: "restore_applications=true" in config.read_text() and
                   "save_application_checkpoints=true" in config.read_text(),
                   "application session controls did not save preferences")
+            run("xdotool", "key", "--clearmodifiers", "alt+w", "alt+a")
+            until(lambda: "restore_desktop_applications=true" in config.read_text(),
+                  "best-effort relaunch opt-in did not save")
+            run("xdotool", "key", "--clearmodifiers", "alt+w", "alt+a")
+            until(lambda: "restore_desktop_applications=false" in config.read_text(),
+                  "best-effort relaunch could not be disabled")
             applications = snapshot.parent / "applications.ini"
             applications.write_text("[Applications]\nversion=999\n")
             applications.chmod(0o600)

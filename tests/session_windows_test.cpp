@@ -19,13 +19,22 @@ int main() {
     {"client", std::string("role-\xff", 6), {-500,100,100,80}, 2, false,false,false,true}};
   check(bool(midnight::write_window_report(path, windows)), "report save failed");
   auto loaded = midnight::read_window_report(path);
-  check(loaded && *loaded == windows, "binary report changed values");
+  check(loaded && loaded->windows == windows, "binary report changed values");
   check(bool(midnight::write_window_report(path, std::vector<midnight::ApplicationWindow>{})), "empty report save failed");
   loaded = midnight::read_window_report(path);
-  check(loaded && loaded->empty(), "empty report failed");
+  check(loaded && loaded->windows.empty(), "empty report failed");
+  midnight::WindowCapture capture(windows);
+  capture.desktop_entries = {"org.example.Editor.desktop"};
+  check(bool(midnight::write_window_report(path, capture)), "desktop report save failed");
+  loaded = midnight::read_window_report(path);
+  check(loaded && loaded->windows == windows && loaded->desktop_entries == capture.desktop_entries, "desktop identities lost in native report");
+  capture.desktop_entries.push_back(capture.desktop_entries.front());
+  check(!midnight::write_window_report(path, capture), "duplicate desktop identity accepted");
+  capture.desktop_entries = {"../bad.desktop"};
+  check(!midnight::write_window_report(path, capture), "unsafe desktop identity accepted");
   auto duplicate = windows; duplicate.push_back(windows.front());
   check(!midnight::write_window_report(path, duplicate), "duplicate identity accepted");
-  for (const auto& bad : {std::string("MWP2"), std::string("MWP1not-valid"), std::string(1024*1024+1,'x')}) {
+  for (const auto& bad : {std::string("MWP2"), std::string("MWP1not-valid"), std::string("MWP2not-valid"), std::string(1024*1024+1,'x')}) {
     std::ofstream(path, std::ios::binary | std::ios::trunc) << bad;
     check(!midnight::read_window_report(path), "malformed binary report accepted");
   }
@@ -40,7 +49,7 @@ int main() {
     check(channel.pending(), "capture request not pending");
     reporter.tick([&] { return midnight::WindowReport(windows); });
     channel.tick(); loaded = channel.result();
-    check(!channel.pending() && loaded && *loaded == windows, "capture transaction failed");
+    check(!channel.pending() && loaded && loaded->windows == windows, "capture transaction failed");
     check(reporter.request_logout(), "logout request fell back to standalone");
     channel.tick();
     check(channel.take_logout_request() && !channel.take_logout_request(), "logout request not consumed once");
@@ -64,7 +73,7 @@ int main() {
     check(!channel.pending() && !channel.result(), "late capture authorized later request");
     reporter.finish(windows); channel.tick(); channel.request();
     loaded = channel.result();
-    check(loaded && *loaded == windows, "final shutdown capture not retained");
+    check(loaded && loaded->windows == windows, "final shutdown capture not retained");
   }
   check(!std::filesystem::exists(path), "runtime window report leaked");
   std::filesystem::remove_all(root);

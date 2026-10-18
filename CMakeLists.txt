@@ -141,6 +141,9 @@ target_link_libraries(xsmp_properties_test PRIVATE midnight_xsmp)
 add_test(NAME xsmp_properties_test COMMAND xsmp_properties_test)
 add_executable(xsmp_restore_fixture tests/xsmp_restore_fixture.cpp)
 target_link_libraries(xsmp_restore_fixture PRIVATE PkgConfig::XSMP PkgConfig::DEPS)
+add_executable(desktop_relaunch_fixture tests/desktop_relaunch_fixture.cpp)
+target_link_libraries(desktop_relaunch_fixture PRIVATE PkgConfig::DEPS)
+
 add_executable(xsmp_logout_fixture tests/xsmp_logout_fixture.cpp)
 target_link_libraries(xsmp_logout_fixture PRIVATE PkgConfig::XSMP)
 
@@ -199,6 +202,10 @@ if(DBUS_RUN_SESSION)
       find_program(XPROP xprop)
       find_program(XWININFO xwininfo)
       if(WMCTRL AND XDOTOOL AND XPROP AND XWININFO)
+        add_test(NAME desktop_relaunch_smoke COMMAND ${Python3_EXECUTABLE}
+          ${CMAKE_CURRENT_SOURCE_DIR}/tests/desktop_relaunch_smoke.py
+          --binary $<TARGET_FILE:midnightbsd-session> --fixture $<TARGET_FILE:desktop_relaunch_fixture>)
+        set_tests_properties(desktop_relaunch_smoke PROPERTIES TIMEOUT 100)
         add_test(NAME coordinated_logout_smoke COMMAND ${Python3_EXECUTABLE}
           ${CMAKE_CURRENT_SOURCE_DIR}/tests/logout_smoke.py
           --binary $<TARGET_FILE:midnightbsd-session> --fixture $<TARGET_FILE:xsmp_logout_fixture>)

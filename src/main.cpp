@@ -233,10 +233,10 @@ int main(int argc, char** argv) {
           if (!application_plan) std::cerr << "Application restore skipped: " << application_plan.error() << '\n';
           else if (*application_plan) {
             wm.restore_application_windows((**application_plan).windows);
-            for (const auto& error : applications.restore(**application_plan)) std::cerr << error << '\n';
+            for (const auto& error : applications.restore(**application_plan, shell.theme().restore_desktop_applications)) std::cerr << error << '\n';
           }
         }
-        midnight::launch_autostart(applications.launched_executables());
+        midnight::launch_autostart(applications.launched_executables(), applications.launched_desktop_commands());
         ConfigReload config_reload;
 
         pollfd display{.fd = xcb_get_file_descriptor(connection), .events = POLLIN, .revents = 0};

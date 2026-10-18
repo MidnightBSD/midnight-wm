@@ -4,6 +4,7 @@
 #include "private_state.hpp"
 
 #include <glib.h>
+#include <algorithm>
 #include <memory>
 #include <set>
 #include <utility>
@@ -22,6 +23,10 @@ std::string encode(const std::string& text) {
 }
 bool valid(const ApplicationCheckpoint& checkpoint) {
   if (checkpoint.applications.size() > application_limit || checkpoint.windows.size() > window_limit) return false;
+  if (checkpoint.desktop_entries.size() > application_limit) return false;
+  std::set<std::string> desktops;
+  for (const auto& id : checkpoint.desktop_entries)
+    if (!valid_desktop_application_id(id) || !desktops.insert(id).second) return false;
   std::set<std::string> ids;
   for (const auto& application : checkpoint.applications) {
     if (!validate_application_restart(application) || application.style == RestartStyle::never ||
@@ -35,6 +40,15 @@ bool valid(const ApplicationCheckpoint& checkpoint) {
   return true;
 }
 } // namespace
+
+bool valid_desktop_application_id(std::string_view id) {
+  return id.size() > 8 && id.size() <= 255 && id.ends_with(".desktop") &&
+    id.front() != '.' && id.find("..") == std::string_view::npos &&
+    std::ranges::all_of(id, [](unsigned char c) {
+      return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+             (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_';
+    });
+}
 
 ApplicationSessionStore::ApplicationSessionStore(std::filesystem::path path) : path_(std::move(path)) {}
 std::filesystem::path ApplicationSessionStore::default_path() {
@@ -72,7 +86,7 @@ std::expected<std::optional<ApplicationCheckpoint>, std::string> ApplicationSess
     return result;
   };
   const int version = integer("Applications", "version");
-  if (version != 1 && version != 2) return std::unexpected("Unsupported application checkpoint version");
+  if (version != 1 && version != 2 && version != 3) return std::unexpected("Unsupported application checkpoint version");
   const int count = integer("Applications", "count");
   if (!parsed || count < 0 || count > application_limit) return std::unexpected("Invalid application count");
   ApplicationCheckpoint checkpoint;
@@ -91,7 +105,7 @@ std::expected<std::optional<ApplicationCheckpoint>, std::string> ApplicationSess
       application.arguments.push_back(text(group.c_str(), ("arg" + std::to_string(arg)).c_str()));
     checkpoint.applications.push_back(std::move(application));
   }
-  if (version == 2) {
+  if (version >= 2) {
     const int windows = integer("Applications", "windows");
     if (!parsed || windows < 0 || windows > window_limit) return std::unexpected("Invalid application window count");
     for (int i = 0; i < windows; ++i) {
@@ -111,6 +125,13 @@ std::expected<std::optional<ApplicationCheckpoint>, std::string> ApplicationSess
       checkpoint.windows.push_back(std::move(window));
     }
   }
+  if (version >= 3) {
+    const int desktops = integer("Applications", "desktop_entries");
+    if (!parsed || desktops < 0 || desktops > application_limit)
+      return std::unexpected("Invalid desktop application count");
+    for (int i = 0; i < desktops; ++i)
+      checkpoint.desktop_entries.push_back(text("Desktop Applications", ("entry" + std::to_string(i)).c_str()));
+  }
   if (!parsed || !valid(checkpoint)) return std::unexpected("Invalid application checkpoint values");
   return checkpoint;
 }
@@ -119,7 +140,12 @@ std::expected<void, std::string> ApplicationSessionStore::save(const Application
   if (!valid(checkpoint)) return std::unexpected("Invalid application checkpoint values");
   if (auto previous = load(); !previous) return std::unexpected(previous.error());
   KeyFile keys(g_key_file_new(), g_key_file_unref);
-  g_key_file_set_integer(keys.get(), "Applications", "version", 2);
+  g_key_file_set_integer(keys.get(), "Applications", "version", 3);
+  g_key_file_set_integer(keys.get(), "Applications", "desktop_entries", static_cast<int>(checkpoint.desktop_entries.size()));
+  for (std::size_t i = 0; i < checkpoint.desktop_entries.size(); ++i) {
+    const auto value = encode(checkpoint.desktop_entries[i]);
+    g_key_file_set_string(keys.get(), "Desktop Applications", ("entry" + std::to_string(i)).c_str(), value.c_str());
+  }
   g_key_file_set_integer(keys.get(), "Applications", "windows", static_cast<int>(checkpoint.windows.size()));
   g_key_file_set_integer(keys.get(), "Applications", "count", static_cast<int>(checkpoint.applications.size()));
   for (std::size_t i = 0; i < checkpoint.applications.size(); ++i) {

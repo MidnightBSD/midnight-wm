@@ -5,9 +5,15 @@
 #include <chrono>
 #include <functional>
 #include <optional>
+#include <utility>
 
 namespace midnight {
-using WindowReport = std::expected<std::vector<ApplicationWindow>, std::string>;
+struct WindowCapture {
+  WindowCapture(std::vector<ApplicationWindow> value = {}) : windows(std::move(value)) {}
+  std::vector<ApplicationWindow> windows;
+  std::vector<std::string> desktop_entries;
+};
+using WindowReport = std::expected<WindowCapture, std::string>;
 // Native temporary format, bounded and private; persistent snapshots use INI.
 std::expected<void, std::string> write_window_report(const std::filesystem::path& path, const WindowReport& windows);
 WindowReport read_window_report(const std::filesystem::path& path);

@@ -18,7 +18,8 @@
 namespace midnight {
 namespace {
 constexpr auto limit = 1024 * 1024;
-constexpr auto type = "a(ayayiiiiubbbb)";
+constexpr auto type = "(a(ayayiiiiubbbb)as)";
+constexpr auto window_type = "a(ayayiiiiubbbb)";
 using Variant = std::unique_ptr<GVariant, decltype(&g_variant_unref)>;
 bool valid(const std::vector<ApplicationWindow>& windows) {
   if (windows.size() > 512) return false;
@@ -37,19 +38,28 @@ void clear_environment() {
 }
 std::expected<void, std::string> write_window_report(const std::filesystem::path& path, const WindowReport& windows) {
   if (!windows) return std::unexpected(windows.error());
-  if (!valid(*windows)) return std::unexpected("Invalid window report");
+  std::set<std::string> ids;
+  if (windows->desktop_entries.size() > 128) return std::unexpected("Too many desktop applications");
+  for (const auto& id : windows->desktop_entries)
+    if (!valid_desktop_application_id(id) || !ids.insert(id).second)
+      return std::unexpected("Invalid desktop application report");
+  if (!valid(windows->windows)) return std::unexpected("Invalid window report");
   GVariantBuilder builder;
-  g_variant_builder_init(&builder, G_VARIANT_TYPE(type));
-  for (const auto& w : *windows) {
+  g_variant_builder_init(&builder, G_VARIANT_TYPE(window_type));
+  for (const auto& w : windows->windows) {
     g_variant_builder_add(&builder, "(@ay@ayiiiiubbbb)",
       g_variant_new_fixed_array(G_VARIANT_TYPE_BYTE, w.client_id.data(), w.client_id.size(), 1),
       g_variant_new_fixed_array(G_VARIANT_TYPE_BYTE, w.role.data(), w.role.size(), 1),
       w.geometry.x, w.geometry.y, w.geometry.width, w.geometry.height, w.workspace,
       w.maximized_horz, w.maximized_vert, w.fullscreen, w.shaded);
   }
-  Variant value(g_variant_ref_sink(g_variant_builder_end(&builder)), g_variant_unref);
+  GVariantBuilder desktops;
+  g_variant_builder_init(&desktops, G_VARIANT_TYPE("as"));
+  for (const auto& id : windows->desktop_entries) g_variant_builder_add(&desktops, "s", id.c_str());
+  Variant value(g_variant_ref_sink(g_variant_new("(@a(ayayiiiiubbbb)@as)",
+    g_variant_builder_end(&builder), g_variant_builder_end(&desktops))), g_variant_unref);
   if (g_variant_get_size(value.get()) > limit - 4) return std::unexpected("Window report too large");
-  std::string contents = "MWP1";
+  std::string contents = "MWP2";
   if (g_variant_get_size(value.get()))
     contents.append(static_cast<const char*>(g_variant_get_data(value.get())), g_variant_get_size(value.get()));
   return write_private_state(path, contents);
@@ -57,15 +67,19 @@ std::expected<void, std::string> write_window_report(const std::filesystem::path
 WindowReport read_window_report(const std::filesystem::path& path) {
   auto contents = read_private_state(path, limit);
   if (!contents) return std::unexpected(contents.error());
-  if (!*contents || !(**contents).starts_with("MWP1")) return std::unexpected("Missing or invalid window report");
+  if (!*contents || (**contents).size() < 5 || !(**contents).starts_with("MWP2")) return std::unexpected("Missing or invalid window report");
   GBytes* bytes = g_bytes_new((**contents).data() + 4, (**contents).size() - 4);
   Variant value(g_variant_ref_sink(g_variant_new_from_bytes(G_VARIANT_TYPE(type), bytes, false)), g_variant_unref);
   g_bytes_unref(bytes);
-  if (!g_variant_is_normal_form(value.get()) || g_variant_n_children(value.get()) > 512)
+  if (!g_variant_is_normal_form(value.get()))
     return std::unexpected("Malformed window report");
+  Variant records(g_variant_get_child_value(value.get(), 0), g_variant_unref);
+  Variant desktops(g_variant_get_child_value(value.get(), 1), g_variant_unref);
+  if (g_variant_n_children(records.get()) > 512 || g_variant_n_children(desktops.get()) > 128)
+    return std::unexpected("Oversized application report");
   std::vector<ApplicationWindow> windows;
-  for (gsize i = 0; i < g_variant_n_children(value.get()); ++i) {
-    Variant child(g_variant_get_child_value(value.get(), i), g_variant_unref);
+  for (gsize i = 0; i < g_variant_n_children(records.get()); ++i) {
+    Variant child(g_variant_get_child_value(records.get(), i), g_variant_unref);
     GVariant *id{}, *role{};
     ApplicationWindow w;
     gboolean horz{}, vert{}, full{}, shade{};
@@ -82,7 +96,16 @@ WindowReport read_window_report(const std::filesystem::path& path) {
     windows.push_back(std::move(w));
   }
   if (!valid(windows)) return std::unexpected("Invalid window report values");
-  return windows;
+  WindowCapture capture(std::move(windows));
+  std::set<std::string> ids;
+  for (gsize i = 0; i < g_variant_n_children(desktops.get()); ++i) {
+    const char* id{};
+    g_variant_get_child(desktops.get(), i, "&s", &id);
+    if (!valid_desktop_application_id(id) || !ids.insert(id).second)
+      return std::unexpected("Invalid desktop application report");
+    capture.desktop_entries.emplace_back(id);
+  }
+  return capture;
 }
 SessionWindowChannel::~SessionWindowChannel() {
   if (parent_ >= 0) close(parent_);

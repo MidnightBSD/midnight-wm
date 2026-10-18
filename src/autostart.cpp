@@ -35,7 +35,8 @@ bool is_eligible(GDesktopAppInfo* info) {
 
 std::vector<std::filesystem::path> find_autostart_entries(
     const std::vector<std::filesystem::path>& config_roots,
-    std::span<const std::string> restored_executables) {
+    std::span<const std::string> restored_executables,
+    std::span<const std::string> restored_desktop_commands) {
   std::unordered_set<std::string> seen;
   std::vector<std::filesystem::path> entries;
 
@@ -70,20 +71,33 @@ std::vector<std::filesystem::path> find_autostart_entries(
       ++entry_counts[*identity];
     }
   }
+  std::map<std::string, std::size_t> restored_commands, entry_commands;
+  std::map<std::filesystem::path, std::string> commands;
+  for (const auto& command : restored_desktop_commands) ++restored_commands[command];
+  for (const auto& path : entries) {
+    DesktopInfo info(g_desktop_app_info_new_from_filename(path.c_str()), g_object_unref);
+    const char* command = info ? g_app_info_get_commandline(G_APP_INFO(info.get())) : nullptr;
+    if (command && *command) { commands[path] = command; ++entry_commands[command]; }
+  }
+  // Desktop relaunch matches the full installed command, so a wrapper or a
+  // different profile sharing one executable cannot suppress another entry.
   // Only a unique direct executable match is unambiguous. Keep wrappers and
   // multiple autostart profiles eligible rather than guessing their identity.
   std::erase_if(entries, [&](const auto& path) {
     const auto found = identities.find(path);
-    return found != identities.end() && restored_counts[found->second] == 1 && entry_counts[found->second] == 1;
+    const auto command = commands.find(path);
+    return (found != identities.end() && restored_counts[found->second] == 1 && entry_counts[found->second] == 1) ||
+      (command != commands.end() && restored_commands[command->second] == 1 && entry_commands[command->second] == 1);
   });
   return entries;
 }
 
-void launch_autostart(std::span<const std::string> restored_executables) {
+void launch_autostart(std::span<const std::string> restored_executables,
+    std::span<const std::string> restored_desktop_commands) {
   std::vector<std::filesystem::path> roots{g_get_user_config_dir()};
   for (auto dirs = g_get_system_config_dirs(); dirs && *dirs; ++dirs) roots.emplace_back(*dirs);
 
-  for (const auto& path : find_autostart_entries(roots, restored_executables)) {
+  for (const auto& path : find_autostart_entries(roots, restored_executables, restored_desktop_commands)) {
     DesktopInfo info(g_desktop_app_info_new_from_filename(path.c_str()), g_object_unref);
     if (!info) continue;
     GError* error = nullptr;

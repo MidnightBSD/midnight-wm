@@ -135,6 +135,12 @@ def session(args):
         wm = subprocess.Popen([str(args.binary)], stdout=log, stderr=subprocess.STDOUT)
         try:
             panel = until(lambda: window_for_size(1280, 30), "initial panel did not appear")
+            # Panel mapping precedes completion of session service startup.
+            # Wait for an actual WM event round trip before sending menu input.
+            for desktop in (1, 0):
+                run("xdotool", "set_desktop", str(desktop))
+                until(lambda: f"= {desktop}" in run("xprop", "-root", "_NET_CURRENT_DESKTOP"),
+                      "WM did not finish startup event dispatch")
             check_trash_icon_theme(output, "#e02020", "red")
             run("gdbus", "call", "--session", "--timeout", "5", "--dest",
                 "org.freedesktop.FileManager1", "--object-path", "/org/freedesktop/FileManager1",

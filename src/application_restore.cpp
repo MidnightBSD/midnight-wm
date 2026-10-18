@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: BSD-2-Clause
 #include "application_restore.hpp"
 #include <glib.h>
+#include <gio/gdesktopappinfo.h>
+#include <set>
+#include <map>
 #include <cerrno>
 #include <csignal>
 #include <cstring>
@@ -32,7 +35,7 @@ void ApplicationRestorer::tick() {
     else ++it;
   }
 }
-std::vector<std::string> ApplicationRestorer::restore(const ApplicationCheckpoint& checkpoint) {
+std::vector<std::string> ApplicationRestorer::restore(const ApplicationCheckpoint& checkpoint, bool reopen_desktop_applications) {
   std::vector<std::string> errors;
   if (started_) return errors;
   started_ = true;
@@ -73,6 +76,40 @@ std::vector<std::string> ApplicationRestorer::restore(const ApplicationCheckpoin
     if (!initialized) posix_spawnattr_destroy(&attributes);
     posix_spawn_file_actions_destroy(&actions);
     if (error) errors.push_back("Restart " + application.program + ": " + std::strerror(error));
+  }
+  if (reopen_desktop_applications) {
+    if (checkpoint.desktop_entries.size() > 128) errors.push_back("Too many desktop applications");
+    else {
+      std::set<std::string> xsmp_executables;
+      for (const auto& app : checkpoint.applications)
+        if (!app.arguments.empty())
+          if (auto executable = resolve_session_executable(app.arguments.front())) xsmp_executables.insert(*executable);
+      using Info = std::unique_ptr<GDesktopAppInfo, decltype(&g_object_unref)>;
+      std::map<std::string, Info> entries;
+      std::map<std::string, std::string> executables;
+      std::map<std::string, std::size_t> counts;
+      for (const auto& id : checkpoint.desktop_entries) {
+        if (!valid_desktop_application_id(id) || entries.contains(id)) continue;
+        Info info(g_desktop_app_info_new(id.c_str()), g_object_unref);
+        if (!info || !g_app_info_should_show(G_APP_INFO(info.get()))) continue;
+        const char* program = g_app_info_get_executable(G_APP_INFO(info.get()));
+        const auto executable = program ? resolve_session_executable(program) : std::nullopt;
+        if (!executable || xsmp_executables.contains(*executable)) continue;
+        ++counts[*executable];
+        executables[id] = *executable;
+        entries.emplace(id, std::move(info));
+      }
+      for (const auto& [id, info] : entries) {
+        const auto& executable = executables[id];
+        if (counts[executable] != 1) continue;
+        GError* error{};
+        if (g_app_info_launch(G_APP_INFO(info.get()), nullptr, nullptr, &error)) {
+          const char* command = g_app_info_get_commandline(G_APP_INFO(info.get()));
+          if (command && *command) desktop_commands_.emplace_back(command);
+        } else errors.push_back("Reopen " + id + ": " + (error ? error->message : "launch failed"));
+        if (error) g_error_free(error);
+      }
+    }
   }
   return errors;
 }
