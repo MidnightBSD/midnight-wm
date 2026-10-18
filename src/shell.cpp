@@ -194,7 +194,7 @@ struct Folder {
   std::filesystem::path path;
   int x{}, y{}, width{620}, height{430};
   SessionGeometry normal_geometry;
-  bool maximized{}, shaded{};
+  bool maximized{}, shaded{}, minimized{};
   int selected{-1};
   int scroll_rows{};
   std::vector<Item> items;
@@ -1810,7 +1810,8 @@ struct Shell::Impl {
     std::ranges::sort(ids);
     for (const auto window : ids) {
       const auto& folder = folders.at(window);
-      Task task{window, folder.trash ? "Trash" : basename(folder.path), window == focused_folder};
+      Task task{window, folder.trash ? "Trash" : basename(folder.path),
+                !folder.minimized && window == focused_folder};
       task.icon.theme_name = folder.trash ? "user-trash" : "folder";
       result.push_back(std::move(task));
     }
@@ -1886,16 +1887,39 @@ struct Shell::Impl {
     xcb_flush(connection);
   }
 
+  void map_folder_owned(const Folder& folder, bool visible) {
+    const auto map = [&](xcb_window_t window) {
+      if (visible) xcb_map_window(connection, window);
+      else xcb_unmap_window(connection, window);
+    };
+    if (properties && properties->owner == folder.window) {
+      map(properties->window);
+      if (icon_chooser) map(icon_chooser->window);
+    }
+    if (open_with_dialog && open_with_dialog->owner == folder.window) map(open_with_dialog->window);
+  }
+
+  void minimize_folder(Folder& folder) {
+    folder.minimized = true;
+    last_title_window = 0;
+    xcb_unmap_window(connection, folder.window);
+    map_folder_owned(folder, false);
+    if (focused_folder == folder.window) focused_folder = 0;
+    draw_panel();
+  }
+
   void activate_task_window(xcb_window_t window, xcb_timestamp_t time) {
     const auto all_tasks = panel_tasks();
     if (std::ranges::none_of(all_tasks, [window](const Task& task) { return task.window == window; })) return;
     if (folders.contains(window)) {
       auto& folder = folders.at(window);
+      folder.minimized = false;
       if (folder.shaded) { folder.shaded = false; configure_folder(folder); }
       request_root("_NET_SHOWING_DESKTOP", 0);
       xcb_map_window(connection, window);
       const std::uint32_t above[]{XCB_STACK_MODE_ABOVE};
       xcb_configure_window(connection, window, XCB_CONFIG_WINDOW_STACK_MODE, above);
+      map_folder_owned(folder, true);
       xcb_set_input_focus(connection, XCB_INPUT_FOCUS_POINTER_ROOT, window, time);
       raise_panel();
       return;
@@ -2000,7 +2024,10 @@ struct Shell::Impl {
       themed_fill(cr, config.surface_color, .73, .73, .73, 0, 0, folder.width, folder.height);
       bevel(cr, 0, 0, folder.width, folder.height);
       draw_title_bar(cr, 4, 4, folder.width - 8, 26, config);
-      text(cr, folder.trash ? "Trash" : basename(folder.path), 12, 7, folder.width - 65, 13, true, true);
+      text(cr, folder.trash ? "Trash" : basename(folder.path), 12, 7, folder.width - 90, 13, true, true);
+      themed_fill(cr, config.surface_color, .73, .73, .73, folder.width - 54, 7, 20, 19);
+      bevel(cr, folder.width - 54, 7, 20, 19);
+      draw_window_control(cr, WindowControl::minimize, folder.width - 49, 11, 10, config);
       themed_fill(cr, config.surface_color, .73, .73, .73, folder.width - 30, 7, 20, 19);
       bevel(cr, folder.width - 30, 7, 20, 19);
       draw_window_control(cr, WindowControl::close, folder.width - 25, 11, 10, config);
@@ -3581,7 +3608,14 @@ struct Shell::Impl {
       return;
     }
     if (folder && event->event_y < 31) {
-      if (event->detail == 2 && event->event_x <= folder->width - 34) {
+      if (event->event_x >= folder->width - 54 && event->event_x < folder->width - 34 &&
+          event->event_y >= 7 && event->event_y < 26) {
+        if (event->detail == 1) minimize_folder(*folder);
+        return;
+      }
+      // Keep the new control and its gaps out of title drag, shade and double-click handling.
+      if (event->event_x >= folder->width - 58 && event->event_x <= folder->width - 34) return;
+      if (event->detail == 2 && event->event_x < folder->width - 58) {
         folder->shaded = !folder->shaded;
         configure_folder(*folder);
         return;
@@ -4017,7 +4051,7 @@ bool Shell::handle(xcb_generic_event_t* event) {
     p.startup->record_user_time(reinterpret_cast<xcb_button_press_event_t*>(event)->time);
   else if (p.startup && type == XCB_KEY_PRESS)
     p.startup->record_user_time(reinterpret_cast<xcb_key_press_event_t*>(event)->time);
-  if (type == XCB_FOCUS_IN && p.folders.contains(window)) {
+  if (type == XCB_FOCUS_IN && p.folders.contains(window) && !p.folders.at(window).minimized) {
     if (p.focused_folder != window) { p.focused_folder = window; p.draw_panel(); }
   } else if (type == XCB_FOCUS_OUT && p.focused_folder == window) {
     p.focused_folder = 0;
@@ -4147,12 +4181,13 @@ void Shell::set_workspace(std::uint32_t desktop, bool showing_desktop) {
   p.close_audio_popup();
   p.focused_folder = 0;
   for (const auto& [window, folder] : p.folders) {
-    if (!showing_desktop && folder.workspace == desktop) xcb_map_window(p.connection, window);
+    if (!showing_desktop && !folder.minimized && folder.workspace == desktop) xcb_map_window(p.connection, window);
     else xcb_unmap_window(p.connection, window);
   }
   auto show_owned = [&](xcb_window_t window, xcb_window_t owner) {
     const bool visible = !showing_desktop &&
-      (!p.folders.contains(owner) || p.folders.at(owner).workspace == desktop);
+      (!p.folders.contains(owner) ||
+       (!p.folders.at(owner).minimized && p.folders.at(owner).workspace == desktop));
     if (visible) xcb_map_window(p.connection, window);
     else xcb_unmap_window(p.connection, window);
   };
