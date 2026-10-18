@@ -16,6 +16,7 @@
 #include "terminal_launcher.hpp"
 #include "thumbnail.hpp"
 #include "ui_theme.hpp"
+#include "window_controls.hpp"
 
 #include <cairo/cairo-xcb.h>
 #include <gio/gio.h>
@@ -1642,7 +1643,7 @@ struct Shell::Impl {
       text(cr, folder.trash ? "Trash" : basename(folder.path), 12, 7, folder.width - 65, 13, true, true);
       themed_fill(cr, config.surface_color, .73, .73, .73, folder.width - 30, 7, 20, 19);
       bevel(cr, folder.width - 30, 7, 20, 19);
-      text(cr, "×", folder.width - 25, 6, 17, 15);
+      draw_window_control(cr, WindowControl::close, folder.width - 25, 11, 10, config);
       text(cr, "File", 12, 34, 36, 11);
       text(cr, "Edit", 56, 34, 36, 11);
       text(cr, "View", 102, 34, 42, 11);
