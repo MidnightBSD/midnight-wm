@@ -82,6 +82,10 @@ std::optional<ThemeConfig> parse_config(std::string_view contents) {
   }
   if (auto value = read("desktop_image_mode"); value == "fit" || value == "fill")
     config.desktop_image_mode = std::move(value);
+  GError* battery_error = nullptr;
+  const bool show_battery = g_key_file_get_boolean(keyfile, "Workspace", "show_battery", &battery_error);
+  if (battery_error) g_error_free(battery_error);
+  else config.show_battery = show_battery;
   config.dark_mode = g_key_file_get_boolean(keyfile, "Workspace", "dark_mode", nullptr);
   if (config.dark_mode) {
     config.panel_color = {.18, .18, .21};

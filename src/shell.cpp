@@ -50,7 +50,7 @@
 namespace midnight {
 namespace {
 constexpr int volume_group_width = 24;
-constexpr int battery_group_width = 72;
+constexpr int battery_group_width = 64;
 constexpr int battery_gap = 4;
 // Icon cache limits; see Shell::Impl::trim_icon_caches().
 constexpr std::size_t max_icon_surfaces = 512;
@@ -1506,7 +1506,7 @@ struct Shell::Impl {
         bevel(cr, x, 4, battery_group_width, 24);
         battery_icon(cr, x + 4, 6, *battery_state, config);
         const auto label = battery_state->percent ? std::to_string(*battery_state->percent) + "%" : "?";
-        text(cr, label, x + 29, 8, 40, 11, false, true);
+        text(cr, label, x + 27, 8, battery_group_width - 31, 11, false, true);
       }
       bevel(cr, clock_x, 5, 99, 24, true);
       text(cr, clock_text(config.clock_format), clock_x + 7, 8, 86, 11, false, true);
@@ -1536,7 +1536,7 @@ struct Shell::Impl {
     // Leave room for the task overflow button even when every task is hidden.
     return std::clamp(requested_tray_width, 0,
                       std::max(0, clock_x() - task_start_x - task_overflow_width - 4 -
-                          (battery_state ? battery_group_width + battery_gap +
+                          (config.show_battery && battery_state ? battery_group_width + battery_gap +
                                            volume_group_width + volume_clock_gap : 0)));
   }
 
@@ -1550,7 +1550,7 @@ struct Shell::Impl {
     return (show_volume() ? volume_x() : tray_x()) - battery_group_width - battery_gap;
   }
 
-  bool show_battery() const { return battery_state.has_value() && battery_x() >= task_start_x; }
+  bool show_battery() const { return config.show_battery && battery_state.has_value() && battery_x() >= task_start_x; }
 
   int status_left() const {
     return show_battery() ? battery_x() : show_volume() ? volume_x() : tray_x();

@@ -27,6 +27,11 @@ int main() {
   const auto defaults = midnight::load_config();
   check(!defaults.dark_mode && defaults.ui_font == "Sans" && defaults.title_font == "Sans Bold",
         "missing config must preserve default fonts and light mode");
+  check(defaults.show_battery, "battery indicator must default to enabled");
+  check(!midnight::parse_config("[Workspace]\nshow_battery=false\n")->show_battery,
+        "battery indicator can be disabled");
+  check(midnight::parse_config("[Workspace]\nshow_battery=invalid\n")->show_battery,
+        "invalid battery setting must retain enabled default");
   write("[Workspace]\ndark_mode=true\nui_font=DejaVu Sans 12\ntitle_font=DejaVu Serif Bold 14\n");
   const auto dark = midnight::load_config();
   check(dark.dark_mode && dark.panel_color[0] < .3 && dark.text_color[0] > .8,

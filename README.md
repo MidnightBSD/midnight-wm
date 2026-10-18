@@ -100,6 +100,8 @@ next to the speaker button. Charging displays a lightning marker; low battery
 uses a red fill. Click the indicator for power status and the remaining time
 estimate when available. Status refreshes every 30 seconds. The indicator
 is hidden when no battery is present; unavailable capacity is shown as `?`.
+To hide it, uncheck **Show battery indicator** under Settings → **Desktop and panel**,
+or set `show_battery=false` in `[Workspace]`. The change applies immediately.
 Battery status uses MidnightBSD's `hw.acpi.battery.*` and `hw.acpi.acline`
 sysctls, as the base system `batt` utility does.
 
