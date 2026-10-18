@@ -271,11 +271,7 @@ bool has_app_category(std::string_view categories, std::string_view category) {
   return false;
 }
 
-struct TransferWork {
-  std::vector<std::filesystem::path> paths;
-  std::filesystem::path destination;
-  bool move{};
-};
+using TransferWork = std::function<std::expected<void, std::string>()>;
 
 struct TransferCompletion {
   std::shared_ptr<bool> alive;
@@ -287,7 +283,7 @@ enum class MenuAction { noop, open_home, open_desktop, open_trash, new_folder, p
                         show_category, next_categories, previous_categories,
                         launch, launch_action, desktop_action, next_apps, previous_apps,
                         open_item, open_with, copy, cut, create_shadow, create_template, properties, trash,
-                        restore, delete_permanently, close_folder, exit_session, refresh_folder,
+                        restore, delete_permanently, empty_trash, close_folder, exit_session, refresh_folder,
                         sort_by_name, sort_by_type, activate_task, next_tasks, previous_tasks };
 struct MenuEntry { std::string label; MenuAction action; std::size_t index{}; xcb_window_t window{}; std::string action_id{}; };
 
@@ -652,6 +648,8 @@ struct Shell::Impl {
   int transfers_in_progress{};
   xcb_visualtype_t* visual{};
   xcb_window_t desktop{}, panel{}, menu{}, submenu{}, app_menu{}, exit_dialog{};
+  bool empty_trash_confirmation{};
+  bool emptying_trash{};
   xcb_window_t drag_preview{};
   Item drag_preview_item{};
   bool drag_preview_move{};
@@ -1379,8 +1377,7 @@ struct Shell::Impl {
     draw_desktop();
   }
 
-  void transfer_async(std::vector<std::filesystem::path> paths, std::filesystem::path destination,
-                      bool move, std::function<void(std::expected<void, std::string>)> callback) {
+  void file_operation_async(TransferWork operation, std::function<void(std::expected<void, std::string>)> callback) {
     ++transfers_in_progress;
     draw_panel();
     auto* completion = new TransferCompletion{alive, std::move(callback)};
@@ -1391,15 +1388,22 @@ struct Shell::Impl {
           static_cast<std::expected<void, std::string>*>(g_task_propagate_pointer(G_TASK(result), nullptr)));
         if (*completion->alive && value) completion->callback(std::move(*value));
       }, completion);
-    g_task_set_task_data(task, new TransferWork{std::move(paths), std::move(destination), move},
+    g_task_set_task_data(task, new TransferWork(std::move(operation)),
                          +[](gpointer data) { delete static_cast<TransferWork*>(data); });
     g_task_run_in_thread(task, +[](GTask* task, gpointer, gpointer data, GCancellable*) {
       const auto* work = static_cast<TransferWork*>(data);
-      auto result = ShellModel::transfer(work->paths, work->destination, work->move);
+      auto result = (*work)();
       g_task_return_pointer(task, new std::expected<void, std::string>(std::move(result)),
                             +[](gpointer pointer) { delete static_cast<std::expected<void, std::string>*>(pointer); });
     });
     g_object_unref(task);
+  }
+
+  void transfer_async(std::vector<std::filesystem::path> paths, std::filesystem::path destination,
+                      bool move, std::function<void(std::expected<void, std::string>)> callback) {
+    file_operation_async([paths = std::move(paths), destination = std::move(destination), move] {
+      return ShellModel::transfer(paths, destination, move);
+    }, std::move(callback));
   }
 
   void draw_drag_preview() {
@@ -2469,10 +2473,12 @@ struct Shell::Impl {
       themed_fill(cr, config.surface_color, .75, .75, .75, 0, 0, exit_dialog_width, exit_dialog_height);
       bevel(cr, 0, 0, exit_dialog_width, exit_dialog_height);
       draw_title_bar(cr, 4, 4, exit_dialog_width - 8, 25, config);
-      text(cr, "Exit X11 session", 12, 7, 350, 12, true, true);
+      text(cr, empty_trash_confirmation ? "Empty Trash" : "Exit X11 session", 12, 7, 350, 12, true, true);
       themed_fill(cr, config.button_color, .87, .83, .93, 16, 42, 66, 66);
       bevel(cr, 16, 42, 66, 66, true);
-      if (exit_logo_surface) {
+      if (empty_trash_confirmation) {
+        trash_icon(cr, 24, 50);
+      } else if (exit_logo_surface) {
         cairo_set_source_surface(cr, exit_logo_surface, 25, 51);
         cairo_paint(cr);
       } else {
@@ -2485,14 +2491,14 @@ struct Shell::Impl {
         cairo_line_to(cr, 49, 76);
         cairo_stroke(cr);
       }
-      text(cr, "End this X11 session?", 96, 53, 265, 13, false, true);
-      text(cr, "Open applications may close.", 96, 78, 265, 11);
+      text(cr, empty_trash_confirmation ? "Permanently delete all Trash items?" : "End this X11 session?", 96, 53, 265, 13, false, true);
+      text(cr, empty_trash_confirmation ? "This cannot be undone." : "Open applications may close.", 96, 78, 265, 11);
       themed_fill(cr, config.shadow_color, .43, .43, .43, 12, 122, exit_dialog_width - 24, 1);
       themed_fill(cr, config.highlight_color, .93, .93, .93, 12, 123, exit_dialog_width - 24, 1);
       bevel(cr, 165, exit_dialog_button_y, 82, 26);
       text(cr, "Cancel", 183, exit_dialog_button_y + 4, 64, 11);
       bevel(cr, 265, exit_dialog_button_y, 90, 26);
-      text(cr, "Exit", 294, exit_dialog_button_y + 4, 55, 11);
+      text(cr, empty_trash_confirmation ? "Empty Trash" : "Exit", empty_trash_confirmation ? 271 : 294, exit_dialog_button_y + 4, 82, 11);
     });
   }
 
@@ -2502,7 +2508,8 @@ struct Shell::Impl {
     exit_dialog = 0;
   }
 
-  void show_exit_dialog() {
+  void show_exit_dialog(bool empty_trash = false) {
+    empty_trash_confirmation = empty_trash;
     if (!exit_dialog) {
       const auto [x, y] = centered(primary_area(), exit_dialog_width, exit_dialog_height);
       exit_dialog = create_window(x, y, exit_dialog_width, exit_dialog_height);
@@ -2517,6 +2524,20 @@ struct Shell::Impl {
 
   void confirm_exit() {
     close_exit_dialog();
+    if (empty_trash_confirmation) {
+      empty_trash_confirmation = false;
+      if (emptying_trash) return;
+      emptying_trash = true;
+      file_operation_async([] { return ShellModel::empty_trash(); },
+        [this](std::expected<void, std::string> result) {
+          emptying_trash = false;
+          --transfers_in_progress;
+          refresh();
+          draw_panel();
+          if (!result) show_notice("Could not empty Trash: " + result.error());
+        });
+      return;
+    }
     if (transfers_in_progress > 0) {
       show_notice("Wait for file transfers to finish before exiting.");
       return;
@@ -2737,6 +2758,8 @@ struct Shell::Impl {
     } else if (!(folders.contains(window) && folders.at(window).trash)) {
       entries = {{"New folder", MenuAction::new_folder}, {"Paste", MenuAction::paste}};
     }
+    if (folders.contains(window) && folders.at(window).trash)
+      entries.push_back({"Empty Trash…", MenuAction::empty_trash});
     show_menu(root_x, root_y, window, std::move(entries));
   }
 
@@ -2757,6 +2780,7 @@ struct Shell::Impl {
           entries.push_back({"Delete permanently", MenuAction::delete_permanently});
         } else entries.push_back({"Move to Trash", MenuAction::trash});
       }
+      if (folder.trash) entries.push_back({"Empty Trash…", MenuAction::empty_trash});
       entries.push_back({"Close", MenuAction::close_folder});
     } else if (tab == 1) {
       if (selected_item && !folder.trash) {
@@ -2989,6 +3013,9 @@ struct Shell::Impl {
           auto result = model.restore(*selected_item);
           if (result) refresh(); else show_notice("Restore failed: " + result.error());
         }
+        break;
+      case MenuAction::empty_trash:
+        if (!emptying_trash) show_exit_dialog(true);
         break;
       case MenuAction::delete_permanently:
         if (selected_item && selected_item->trashed) {
@@ -3296,6 +3323,8 @@ struct Shell::Impl {
       item_index(icon_x, icon_y, start_y, width_px, items.size(),
                  folder ? folder->scroll_rows : desktop_scroll_columns, on_desktop);
     if (event->detail == 3) {
+      // Context actions and the File menu must agree on the selected item.
+      if (!on_desktop && index >= 0) { folder->selected = index; draw_folder(*folder); }
       show_context(event->event, event->root_x, event->root_y, index >= 0 ? &items[index] : nullptr);
       return;
     }
@@ -3366,7 +3395,11 @@ struct Shell::Impl {
     if (exit_dialog && event->event == exit_dialog) {
       const auto sym = key_symbols ? xcb_key_symbols_get_keysym(key_symbols, event->detail, 0) : 0;
       if (sym == XK_Escape) close_exit_dialog();
-      else if (sym == XK_Return) confirm_exit();
+      else if (sym == XK_Return) {
+        if (empty_trash_confirmation) close_exit_dialog();
+        else confirm_exit();
+      }
+      else if (empty_trash_confirmation && (sym == XK_e || sym == XK_E)) confirm_exit();
       return;
     }
     if (properties && event->event == properties->window) {

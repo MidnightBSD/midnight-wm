@@ -13,7 +13,7 @@ import sys
 import tempfile
 import time
 sys.dont_write_bytecode = True
-from settings_smoke import run, until, visible_window, window_for_size
+from settings_smoke import run, until, visible_window, window_for_size, window_position
 
 
 def session(args):
@@ -21,6 +21,9 @@ def session(args):
     desktop.mkdir(exist_ok=True)
     (desktop / "A folder").mkdir()
     (desktop / "A folder/keep.txt").write_text("recoverable contents")
+    outside = Path.home() / "keep-outside.txt"
+    outside.write_text("do not delete")
+    (desktop / "A folder/outside-link").symlink_to(outside)
     (desktop / "B destination").mkdir()
     (desktop / "C file.txt").write_text("copy contents")
     data = Path(os.environ["XDG_DATA_HOME"])
@@ -97,8 +100,67 @@ def session(args):
                        for p in trash.glob("info/*.trashinfo")), "restore metadata missing"
             until(lambda: not has_saved_icon(), "trashed folder retained its desktop icon")
             run("import", "-window", "root", str(args.output / "desktop-after-drop.png"))
+            extra = Path.home() / "another-trash-item.txt"
+            extra.write_text("delete this too")
+            run("gio", "trash", str(extra))
+            until(lambda: len(list((trash / "files").iterdir())) == 2, "second Trash item missing")
+            # Empty Trash must be available without selecting an item.
+            run("xdotool", "key", "Escape")
+            tx, ty = point("Trash")
+            run("xdotool", "mousemove", str(tx), str(ty), "click", "--repeat", "2", "--delay", "100", "1")
+            folder = until(lambda: window_for_size(round(min(620, max(250, int(1280 / args.scale) - 30)) * args.scale), round(min(430, max(180, int(720 / args.scale) - 60)) * args.scale)), "Trash view missing")
+            fx, fy = window_position(folder)
+            def click(x, y, button="1"):
+                run("xdotool", "mousemove", str(round(x)), str(round(y)), "click", button)
+            def confirmation():
+                return until(lambda: window_for_size(round(380 * args.scale), round(174 * args.scale)), "Empty Trash confirmation missing")
+            # Right-click selection must also enable individual File actions.
+            click(fx + 42 * args.scale, fy + 83 * args.scale, "3")
+            run("xdotool", "key", "Escape")
+            click(fx + 25 * args.scale, fy + 42 * args.scale)
+            time.sleep(.2)
+            click(fx + 65 * args.scale, fy + 119 * args.scale)  # Restore
+            until(lambda: (desktop / "A folder/keep.txt").exists(), "individual Restore disappeared from File menu")
+            run("gio", "trash", str(desktop / "A folder"))
+            until(lambda: len(list((trash / "files").iterdir())) == 2, "restored folder did not return to Trash")
+            time.sleep(.5)
+            click(fx + 42 * args.scale, fy + 83 * args.scale, "3")
+            run("xdotool", "key", "Escape")
+            click(fx + 25 * args.scale, fy + 42 * args.scale)
+            time.sleep(.2)
+            click(fx + 65 * args.scale, fy + 143 * args.scale)  # Delete permanently
+            until(lambda: len(list((trash / "files").iterdir())) == 1, "individual Delete permanently disappeared from File menu")
+            assert not any(trash.glob("files/*/keep.txt")), "wrong item deleted"
+            assert outside.read_text() == "do not delete", "individual deletion followed symbolic link"
+            nested = Path.home() / "empty-nested"
+            (nested / "child").mkdir(parents=True)
+            (nested / "child/file.txt").write_text("empty this folder too")
+            (nested / "outside-link").symlink_to(outside)
+            run("gio", "trash", str(nested))
+            until(lambda: len(list((trash / "files").iterdir())) == 2, "nested Trash fixture missing")
+            click(fx + 300 * args.scale, fy + 270 * args.scale)  # Clear selection
+            # Blank-area context menu and cancellation.
+            click(fx + 300 * args.scale, fy + 300 * args.scale, "3")
+            time.sleep(.2)
+            click(fx + 340 * args.scale, fy + 316 * args.scale)
+            confirmation()
+            run("xdotool", "key", "Escape")
+            assert len(list((trash / "files").iterdir())) == 2, "Cancel deleted Trash contents"
+            # File menu works without a selected item, including on empty Trash.
+            for attempt in range(2):
+                click(fx + 25 * args.scale, fy + 42 * args.scale)
+                time.sleep(.2)
+                click(fx + 65 * args.scale, fy + 71 * args.scale)
+                dialog = confirmation()
+                dx, dy = window_position(dialog)
+                run("import", "-window", "root", str(args.output / "empty-trash-confirmation.png"))
+                click(dx + 310 * args.scale, dy + 149 * args.scale)
+                until(lambda: not any((trash / "files").iterdir()), "Empty Trash left items behind")
+                until(lambda: not any((trash / "info").iterdir()), "Empty Trash left restore metadata")
+                time.sleep(.3)
+            assert outside.read_text() == "do not delete", "Trash deletion followed a symbolic link"
             assert wm.poll() is None, "WM exited during drops"
-            print("Desktop copy, collision, move, self-drop rejection and recoverable Trash passed.")
+            print("Desktop drag/drop, preview, recoverable Trash, Empty Trash confirmation/cancel and nested deletion passed.")
         finally:
             if wm.poll() is None:
                 wm.terminate()
