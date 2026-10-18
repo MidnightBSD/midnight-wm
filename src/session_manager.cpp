@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Lucas Holt
 // SPDX-License-Identifier: BSD-2-Clause
 #include "session_manager.hpp"
+#include "session_windows.hpp"
 #include "config.hpp"
 #include "xsmp_properties.hpp"
 
@@ -143,6 +144,7 @@ struct SessionManager::Impl {
   MessageDeadline message_deadline;
   std::size_t next_peer{};
   ApplicationSessionStore store;
+  std::unique_ptr<SessionWindowChannel> window_channel;
   std::map<std::string, ApplicationRestart> retired;
   bool saving{}, checkpoint_ok{true};
   Clock::time_point checkpoint_deadline{}, restore_deadline{};
@@ -161,6 +163,7 @@ struct SessionManager::Impl {
       else g_unsetenv("ICEAUTHORITY");
     }
     if (old_io_handler) IceSetIOErrorHandler(old_io_handler);
+    window_channel.reset();
     if (!restore_plan.empty()) unlink(restore_plan.c_str());
     if (!authority.empty()) unlink(authority.c_str());
     if (!directory.empty()) rmdir(directory.c_str());
@@ -386,6 +389,8 @@ struct SessionManager::Impl {
     std::free(network_ids);
     published = true;
     old_io_handler = IceSetIOErrorHandler(ignore_io_error);
+    window_channel = std::make_unique<SessionWindowChannel>();
+    if (auto initialized = window_channel->initialize(directory); !initialized) return initialized;
     if (load_config().restore_applications) {
       auto saved = store.load();
       if (!saved) std::cerr << "Application restore skipped: " << saved.error() << '\n';
@@ -404,10 +409,10 @@ struct SessionManager::Impl {
     return {};
   }
 
-  void checkpoint(bool persist = true) {
+  void checkpoint(bool persist = true, bool final_checkpoint = false) {
     const auto now = Clock::now();
     // Do not mix an in-flight initial/local checkpoint with a new global one.
-    if (pending() || saving || now - last_checkpoint < std::chrono::seconds(1)) return;
+    if (pending() || saving || (!final_checkpoint && now - last_checkpoint < std::chrono::seconds(1))) return;
     last_checkpoint = now;
     // Preserve the source checkpoint while saved clients are still expected.
     saving = persist && restore_ids.empty() && load_config().save_application_checkpoints;
@@ -417,6 +422,7 @@ struct SessionManager::Impl {
       return item.second->timed_out;
     });
     checkpoint_deadline = now + timeout;
+    if (saving) window_channel->request();
     for (auto& [connection, client] : clients) {
       if (!client->registered || client->closing) continue;
       client->in_checkpoint = saving;
@@ -427,6 +433,7 @@ struct SessionManager::Impl {
 
   void finish_checkpoint() {
     if (!saving) return;
+    if (window_channel->pending()) return;
     const bool waiting = std::ranges::any_of(clients, [](const auto& item) {
       return item.second->in_checkpoint && item.second->waiting;
     });
@@ -438,7 +445,17 @@ struct SessionManager::Impl {
       if (client->in_checkpoint && client->completed) checkpoint.applications.push_back(*client->completed);
       client->in_checkpoint = false;
     }
-    if (!checkpoint_ok) std::cerr << "Application checkpoint not saved: incomplete client save\n";
+    if (window_channel->attached()) {
+      auto windows = window_channel->result();
+      if (!windows) checkpoint_ok = false;
+      else {
+        std::set<std::string> ids;
+        for (const auto& application : checkpoint.applications) ids.insert(application.client_id);
+        for (auto& window : *windows)
+          if (ids.contains(window.client_id)) checkpoint.windows.push_back(std::move(window));
+      }
+    }
+    if (!checkpoint_ok) std::cerr << "Application checkpoint not saved: incomplete application or window save\n";
     else if (auto saved = store.save(checkpoint); !saved)
       std::cerr << "Application checkpoint not saved: " << saved.error() << '\n';
     saving = false;
@@ -449,6 +466,7 @@ struct SessionManager::Impl {
   }
 
   void tick(int timeout_ms) {
+    window_channel->tick();
     if (Clock::now() >= restore_deadline) restore_ids.clear();
     std::vector<pollfd> descriptors;
     const auto old_peer_count = peers.size();
@@ -541,7 +559,8 @@ struct SessionManager::Impl {
 SessionManager::SessionManager() : impl_(std::make_unique<Impl>()) {}
 SessionManager::~SessionManager() = default;
 std::expected<void, std::string> SessionManager::initialize() { return impl_->initialize(); }
+int SessionManager::release_window_child_fd() { return impl_->window_channel->release_child_fd(); }
 void SessionManager::tick(int timeout_ms) { impl_->tick(timeout_ms); }
-void SessionManager::checkpoint(bool persist) { impl_->checkpoint(persist); }
+void SessionManager::checkpoint(bool persist, bool final_checkpoint) { impl_->checkpoint(persist, final_checkpoint); }
 bool SessionManager::checkpoint_pending() const { return impl_->pending() || impl_->saving; }
 } // namespace midnight

@@ -428,6 +428,10 @@ void X11WindowManager::observe_event(const xcb_generic_event_t* event) {
   const auto type = event->response_type & 0x7f;
   if (type == XCB_KEY_PRESS || type == XCB_BUTTON_PRESS) {
     const auto* input = reinterpret_cast<const xcb_key_press_event_t*>(event);
+    for (const auto window : {input->event, input->child}) {
+      auto client = frame_to_client_.contains(window) ? frame_to_client_.at(window) : window;
+      if (auto frame = frames_.find(client); frame != frames_.end()) frame->second.placement_until = {};
+    }
     last_event_time_ = input->time;
     if (input->time && (!last_user_time_ || !timestamp_before(input->time, last_user_time_)))
       last_user_time_ = input->time;
@@ -670,7 +674,113 @@ bool X11WindowManager::resize_pending() const {
   return std::any_of(frames_.begin(), frames_.end(), [](const auto& pair) { return pair.second.sync_waiting; });
 }
 
+std::optional<std::pair<std::string, std::string>> X11WindowManager::application_identity(xcb_window_t window) {
+  const auto text = [&](xcb_window_t target, const char* property, std::size_t limit) -> std::optional<std::string> {
+    Reply<xcb_get_property_reply_t> reply(xcb_get_property_reply(connection_,
+      xcb_get_property(connection_, 0, target, atom(property), XCB_ATOM_STRING, 0, (limit + 4) / 4), nullptr), std::free);
+    if (!reply) return std::nullopt;
+    if (reply->type == XCB_ATOM_NONE) return std::string{};
+    const auto size = xcb_get_property_value_length(reply.get());
+    if (reply->type != XCB_ATOM_STRING || reply->format != 8 || reply->bytes_after || size < 0 ||
+        static_cast<std::size_t>(size) > limit + 1) return std::nullopt;
+    std::string value;
+    if (size) value.assign(static_cast<const char*>(xcb_get_property_value(reply.get())), size);
+    if (!value.empty() && value.back() == '\0') value.pop_back();
+    if (value.size() > limit || value.find('\0') != std::string::npos) return std::nullopt;
+    return value;
+  };
+  auto id = text(window, "SM_CLIENT_ID", 256);
+  auto role = text(window, "WM_WINDOW_ROLE", 4096);
+  if (!id || !role) return std::nullopt;
+  if (id->empty()) {
+    Reply<xcb_get_property_reply_t> leader(xcb_get_property_reply(connection_,
+      xcb_get_property(connection_, 0, window, atom("WM_CLIENT_LEADER"), XCB_ATOM_WINDOW, 0, 2), nullptr), std::free);
+    if (!leader || leader->type != XCB_ATOM_WINDOW || leader->format != 32 || leader->bytes_after ||
+        xcb_get_property_value_length(leader.get()) != 4) return std::nullopt;
+    id = text(*static_cast<xcb_window_t*>(xcb_get_property_value(leader.get())), "SM_CLIENT_ID", 256);
+  }
+  if (!id || id->empty()) return std::nullopt;
+  ApplicationWindow identity;
+  identity.client_id = *id; identity.role = *role;
+  if (!validate_application_window(identity)) return std::nullopt;
+  return std::pair{*id, *role};
+}
+
+WindowReport X11WindowManager::application_windows() {
+  if (frames_.size() > 512) return std::unexpected("Too many managed windows for checkpoint");
+  std::vector<ApplicationWindow> windows;
+  std::map<std::pair<std::string, std::string>, std::size_t> counts;
+  for (const auto& [client, frame] : frames_) {
+    if (frame.role == WindowRole::splash || frame.desktop >= desktop_count_) continue;
+    const auto identity = application_identity(client);
+    if (!identity) continue;
+    ApplicationWindow saved{identity->first, identity->second,
+      {frame.fullscreen || frame.maximized_horz ? frame.old_x : frame.x,
+       frame.fullscreen || frame.maximized_vert ? frame.old_y : frame.y,
+       frame.fullscreen || frame.maximized_horz ? frame.old_width : frame.width,
+       frame.fullscreen || frame.maximized_vert ? frame.old_height : frame.height},
+      frame.desktop, frame.maximized_horz, frame.maximized_vert, frame.fullscreen, frame.shaded};
+    if (!validate_application_window(saved)) continue;
+    ++counts[*identity];
+    windows.push_back(std::move(saved));
+  }
+  std::erase_if(windows, [&](const auto& window) { return counts[{window.client_id, window.role}] != 1; });
+  return windows;
+}
+
+void X11WindowManager::restore_application_windows(std::vector<ApplicationWindow> windows) {
+  if (windows.size() > 512 || std::ranges::any_of(windows, [](const auto& w) { return !validate_application_window(w); })) return;
+  placements_ = std::move(windows);
+  claimed_placements_.clear();
+  placement_deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(120);
+}
+
+void X11WindowManager::apply_application_placements() {
+  const auto now = std::chrono::steady_clock::now();
+  if (placements_.empty() || frames_.size() > 512 || now < next_placement_check_) return;
+  if (now >= placement_deadline_) { placements_.clear(); claimed_placements_.clear(); return; }
+  next_placement_check_ = now + std::chrono::milliseconds(100);
+  if (std::ranges::none_of(frames_, [&](const auto& item) { return now < item.second.placement_until; })) return;
+  std::map<xcb_window_t, std::pair<std::string, std::string>> identities;
+  std::map<std::pair<std::string, std::string>, std::size_t> counts;
+  for (const auto& [client, frame] : frames_)
+    if (auto identity = application_identity(client)) { identities[client] = *identity; ++counts[*identity]; }
+  for (auto& [client, frame] : frames_) {
+    if (now >= frame.placement_until || frame.role == WindowRole::splash) continue;
+    const auto identity = identities.find(client);
+    if (identity == identities.end() || counts[identity->second] != 1) continue;
+    const auto saved_index = match_application_window(placements_, identity->second.first, identity->second.second, claimed_placements_);
+    if (!saved_index) continue;
+    const auto saved = placements_[*saved_index];
+    claimed_placements_.push_back(*saved_index);
+    frame.placement_until = {};
+    if (frame.fullscreen) set_fullscreen(client, false);
+    if (frame.shaded) set_shaded(client, false);
+    if (frame.maximized_horz || frame.maximized_vert) set_maximized(client, false, false);
+    if (frame.sync_query) xcb_discard_reply(connection_, frame.sync_query);
+    frame.sync_query = 0; frame.sync_waiting = false; frame.sync_deferred = false;
+    std::vector<SessionGeometry> areas;
+    for (const auto& monitor : monitors_) {
+      const auto area = workarea_for(monitor);
+      areas.push_back({area.x, area.y, std::max(1, area.width - 2 * border_pixels()),
+        std::max(1, area.height - title_height_pixels() - border_pixels())});
+    }
+    const auto geometry = recover_session_geometry(saved.geometry, areas, 1, 1);
+    frame.x = geometry.x; frame.y = geometry.y;
+    frame.width = static_cast<std::uint16_t>(geometry.width); frame.height = static_cast<std::uint16_t>(geometry.height);
+    constrain_size(frame, frame.width, frame.height);
+    resize_frame(frame);
+    send_configure_notify(frame);
+    set_window_desktop(frame, saved.workspace);
+    if (saved.fullscreen) set_fullscreen(client, true);
+    else if (saved.maximized_horz || saved.maximized_vert) set_maximized(client, saved.maximized_horz, saved.maximized_vert);
+    if (saved.shaded) set_shaded(client, true);
+    update_window_state(frame);
+  }
+}
+
 void X11WindowManager::tick() {
+  apply_application_placements();
   const auto now = std::chrono::steady_clock::now();
   bool timestamp_requested = false;
   for (auto& [client, frame] : frames_) {
@@ -849,6 +959,8 @@ void X11WindowManager::manage(xcb_window_t window) {
       xcb_get_geometry_reply(connection_, xcb_get_geometry(connection_, window), nullptr), std::free);
   if (!geometry) return;
   Frame frame;
+  if (!placements_.empty() && std::chrono::steady_clock::now() < placement_deadline_)
+    frame.placement_until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
   frame.client = window;
   frame.desktop = current_desktop_;
   const auto desktop_cookie = xcb_get_property(connection_, 0, window, atom("_NET_WM_DESKTOP"),

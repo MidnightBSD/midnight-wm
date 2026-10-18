@@ -12,6 +12,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -60,6 +61,8 @@ int main(int argc, char** argv) {
   else command.push_back(program.data());
   command.push_back(nullptr);
   if (const char* inherited = std::getenv("SESSION_MANAGER"); inherited && *inherited) {
+    g_unsetenv("MIDNIGHT_WM_WINDOW_FD");
+    g_unsetenv("MIDNIGHT_WM_WINDOW_REPORT");
     g_unsetenv("MIDNIGHT_WM_RESTORE_PLAN");
     g_unsetenv("MIDNIGHT_WM_RESTORE_MANAGER");
     execvp(command[0], command.data());
@@ -68,6 +71,8 @@ int main(int argc, char** argv) {
   }
 
   // Handoff state belongs only to this new companion, never an inherited one.
+  g_unsetenv("MIDNIGHT_WM_WINDOW_FD");
+  g_unsetenv("MIDNIGHT_WM_WINDOW_REPORT");
   g_unsetenv("MIDNIGHT_WM_RESTORE_PLAN");
   g_unsetenv("MIDNIGHT_WM_RESTORE_MANAGER");
   std::signal(SIGINT, stop);
@@ -78,12 +83,15 @@ int main(int argc, char** argv) {
     std::cerr << "XSMP session unavailable: " << initialized.error() << '\n';
     return 1;
   }
+  const int window_fd = manager.release_window_child_fd();
   const pid_t child = fork();
   if (child < 0) {
+    close(window_fd);
     std::cerr << "Could not start window manager: " << std::strerror(errno) << '\n';
     return 1;
   }
   if (!child) {
+    if (fcntl(window_fd, F_SETFD, 0) < 0) _exit(127);
     std::signal(SIGINT, SIG_DFL);
     std::signal(SIGTERM, SIG_DFL);
     std::signal(SIGUSR1, SIG_DFL);
@@ -92,6 +100,9 @@ int main(int argc, char** argv) {
     (void)write(STDERR_FILENO, message, sizeof(message) - 1);
     _exit(127);
   }
+  close(window_fd);
+  g_unsetenv("MIDNIGHT_WM_WINDOW_FD");
+  g_unsetenv("MIDNIGHT_WM_WINDOW_REPORT");
   int status{};
   std::optional<std::chrono::steady_clock::time_point> stopping;
   for (;;) {
@@ -109,7 +120,7 @@ int main(int argc, char** argv) {
   }
   // Do not send Die or signal registered applications: coordinated logout and
   // save prompts are a later phase. Only the explicitly spawned child is owned.
-  manager.checkpoint(!stop_signal && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+  manager.checkpoint(!stop_signal && WIFEXITED(status) && WEXITSTATUS(status) == 0, true);
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
   while (manager.checkpoint_pending() && std::chrono::steady_clock::now() < deadline) manager.tick();
   if (WIFEXITED(status)) return WEXITSTATUS(status);

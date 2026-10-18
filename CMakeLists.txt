@@ -10,7 +10,7 @@ pkg_check_modules(DEPS REQUIRED IMPORTED_TARGET
   xcb xcb-icccm xcb-keysyms xcb-xfixes xcb-randr xcb-xinerama xcb-sync xcb-screensaver cairo-xcb pangocairo
   gio-2.0 gio-unix-2.0 gdk-pixbuf-2.0 garcon-1 sqlite3)
 
-add_library(midnight_core src/content_size.cpp src/store.cpp src/model.cpp src/config.cpp src/session.cpp src/private_state.cpp src/session_bus.cpp src/application_session.cpp src/application_checkpoint.cpp src/application_restore.cpp src/audio.cpp src/battery.cpp src/network.cpp src/wallpaper.cpp
+add_library(midnight_core src/content_size.cpp src/store.cpp src/model.cpp src/config.cpp src/session.cpp src/private_state.cpp src/session_bus.cpp src/application_session.cpp src/application_checkpoint.cpp src/session_windows.cpp src/application_restore.cpp src/audio.cpp src/battery.cpp src/network.cpp src/wallpaper.cpp
   src/desktop_launcher.cpp src/thumbnail.cpp src/recent_files.cpp
   src/startup_notification.cpp src/browser_launcher.cpp src/terminal_launcher.cpp src/task_icon.cpp)
 target_include_directories(midnight_core PUBLIC src)
@@ -124,6 +124,10 @@ add_executable(session_test tests/session_test.cpp)
 target_link_libraries(session_test PRIVATE midnight_core)
 add_test(NAME session_test COMMAND session_test)
 
+add_executable(session_windows_test tests/session_windows_test.cpp)
+target_link_libraries(session_windows_test PRIVATE midnight_core Threads::Threads)
+add_test(NAME session_windows_test COMMAND session_windows_test)
+
 add_executable(application_restore_test tests/application_restore_test.cpp)
 target_link_libraries(application_restore_test PRIVATE midnight_core)
 add_test(NAME application_restore_test COMMAND application_restore_test)
@@ -187,6 +191,17 @@ if(DBUS_RUN_SESSION)
         --binary $<TARGET_FILE:midnightbsd-session> --fixture $<TARGET_FILE:xsmp_restore_fixture>
         --output ${CMAKE_CURRENT_BINARY_DIR}/application-restore-results)
       set_tests_properties(application_restore_smoke PROPERTIES TIMEOUT 100)
+      find_program(WMCTRL wmctrl)
+      find_program(XDOTOOL xdotool)
+      find_program(XPROP xprop)
+      find_program(XWININFO xwininfo)
+      if(WMCTRL AND XDOTOOL AND XPROP AND XWININFO)
+        add_test(NAME application_placement_smoke COMMAND ${Python3_EXECUTABLE}
+          ${CMAKE_CURRENT_SOURCE_DIR}/tests/application_restore_smoke.py --placements
+          --binary $<TARGET_FILE:midnightbsd-session> --fixture $<TARGET_FILE:xsmp_restore_fixture>
+          --output ${CMAKE_CURRENT_BINARY_DIR}/application-placement-results)
+        set_tests_properties(application_placement_smoke PROPERTIES TIMEOUT 100)
+      endif()
     endif()
   endif()
   add_executable(desktop_services_test tests/desktop_services_test.cpp src/desktop_services.cpp)

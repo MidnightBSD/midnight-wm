@@ -27,9 +27,22 @@ struct ApplicationRestart {
 
 std::expected<void, std::string> validate_application_restart(const ApplicationRestart& restart);
 
-// Restart metadata only; no process execution or backend-specific window IDs.
+struct ApplicationWindow {
+  std::string client_id;
+  std::string role;
+  SessionGeometry geometry;
+  std::uint32_t workspace{};
+  bool maximized_horz{}, maximized_vert{}, fullscreen{}, shaded{};
+  bool operator==(const ApplicationWindow&) const = default;
+};
+
+std::expected<void, std::string> validate_application_window(const ApplicationWindow& window);
+
+// No process execution or backend-specific window IDs. Window placement is
+// associated with the restart client ID and an unambiguous window role.
 struct ApplicationCheckpoint {
   std::vector<ApplicationRestart> applications;
+  std::vector<ApplicationWindow> windows;
   bool operator==(const ApplicationCheckpoint&) const = default;
 };
 class ApplicationSessionStore {
@@ -42,14 +55,6 @@ public:
   std::expected<void, std::string> clear() const;
 private:
   std::filesystem::path path_;
-};
-
-struct ApplicationWindow {
-  std::string client_id;
-  std::string role;
-  SessionGeometry geometry;
-  std::uint32_t workspace{};
-  bool maximized_horz{}, maximized_vert{}, fullscreen{}, shaded{};
 };
 
 // Ambiguous or already claimed windows never receive a saved placement.

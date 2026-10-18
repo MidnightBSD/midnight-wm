@@ -12,6 +12,7 @@
 #include "notifications.hpp"
 #include "shell.hpp"
 #include "session.hpp"
+#include "session_windows.hpp"
 #include "session_bus.hpp"
 #include "startup_notification.hpp"
 #include "status_notifier.hpp"
@@ -126,6 +127,7 @@ int main(int argc, char** argv) {
     g_setenv("XDG_CURRENT_DESKTOP", "MidnightWorkspace", true);
 
   midnight::ensure_session_bus(argc, argv);
+  midnight::SessionWindowReporter window_reporter;
   auto application_plan = midnight::take_application_restore_plan(midnight::load_config().restore_applications);
 
   int screen_number = 0;
@@ -222,11 +224,14 @@ int main(int argc, char** argv) {
             shell.restore_session(**saved);
           }
         }
+        window_reporter.ready();
         midnight::ApplicationRestorer applications;
         if (shell.theme().restore_applications) {
           if (!application_plan) std::cerr << "Application restore skipped: " << application_plan.error() << '\n';
-          else if (*application_plan)
+          else if (*application_plan) {
+            wm.restore_application_windows((**application_plan).windows);
             for (const auto& error : applications.restore(**application_plan)) std::cerr << error << '\n';
+          }
         }
         midnight::launch_autostart(applications.launched_executables());
         ConfigReload config_reload;
@@ -266,6 +271,7 @@ int main(int argc, char** argv) {
           }
           applications.tick();
           wm.tick();
+          window_reporter.tick([&wm] { return wm.application_windows(); });
           desktop_services.tick();
           shell.tick();
           tray.tick();
@@ -280,6 +286,7 @@ int main(int argc, char** argv) {
           if (poll(&display, 1, (shell.menu_animation_active() || wm.resize_pending()) ? 16 : 100) < 0 && errno != EINTR) break;
         }
         if (xcb_connection_has_error(connection)) result = 1;
+        if (!result && !running) window_reporter.finish(wm.application_windows());
         if (!result && !running && shell.theme().save_session) {
           // Revalidate even if saving was only enabled by live configuration.
           if (auto existing = session.load(); !existing)
