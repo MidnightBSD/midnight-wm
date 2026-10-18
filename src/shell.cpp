@@ -192,6 +192,8 @@ struct Folder {
   std::uint32_t workspace{};
   std::filesystem::path path;
   int x{}, y{}, width{620}, height{430};
+  SessionGeometry normal_geometry;
+  bool maximized{}, shaded{};
   int selected{-1};
   int scroll_rows{};
   std::vector<Item> items;
@@ -764,6 +766,8 @@ struct Shell::Impl {
   std::string last_clock;
   xcb_timestamp_t last_click_time{};
   int last_click_index{-1};
+  xcb_window_t last_title_window{};
+  xcb_timestamp_t last_title_time{};
   xcb_window_t last_click_window{};
   xcb_window_t drag_window{};
   xcb_window_t scroll_drag_window{};
@@ -1837,6 +1841,8 @@ struct Shell::Impl {
     const auto all_tasks = panel_tasks();
     if (std::ranges::none_of(all_tasks, [window](const Task& task) { return task.window == window; })) return;
     if (folders.contains(window)) {
+      auto& folder = folders.at(window);
+      if (folder.shaded) { folder.shaded = false; configure_folder(folder); }
       request_root("_NET_SHOWING_DESKTOP", 0);
       xcb_map_window(connection, window);
       const std::uint32_t above[]{XCB_STACK_MODE_ABOVE};
@@ -1947,6 +1953,7 @@ struct Shell::Impl {
       themed_fill(cr, config.surface_color, .73, .73, .73, folder.width - 30, 7, 20, 19);
       bevel(cr, folder.width - 30, 7, 20, 19);
       draw_window_control(cr, WindowControl::close, folder.width - 25, 11, 10, config);
+      if (folder.shaded) return;
       text(cr, "File", 12, 34, 36, 11);
       text(cr, "Edit", 56, 34, 36, 11);
       text(cr, "View", 102, 34, 42, 11);
@@ -2978,15 +2985,62 @@ struct Shell::Impl {
     return Store::desktop_path();
   }
 
+  std::vector<SessionGeometry> session_areas() const {
+    std::vector<SessionGeometry> result;
+    for (const auto& monitor : display_monitors) {
+      const auto area = monitor_area(monitor);
+      const int inset = monitor.primary ? panel_height : 0;
+      result.push_back({area.x, area.y + inset, area.width, std::max(1, area.height - inset)});
+    }
+    return result;
+  }
+
+  void configure_folder(Folder& folder) {
+    const std::uint32_t values[]{static_cast<std::uint32_t>(std::lround(folder.x * scale)),
+      static_cast<std::uint32_t>(std::lround(folder.y * scale)),
+      static_cast<std::uint32_t>(scaled_pixel(scale, folder.width)),
+      static_cast<std::uint32_t>(scaled_pixel(scale, folder.shaded ? 34 : folder.height))};
+    xcb_configure_window(connection, folder.window, XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y |
+                         XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT, values);
+    draw_folder(folder);
+  }
+
+  void recover_folder(Folder& folder) {
+    auto geometry = recover_session_geometry(folder.maximized ? folder.normal_geometry :
+        SessionGeometry{folder.x, folder.y, folder.width, folder.height}, session_areas());
+    if (folder.maximized) {
+      folder.normal_geometry = geometry;
+      const auto area = area_at(geometry.x + geometry.width / 2, geometry.y + geometry.height / 2);
+      const auto primary = primary_area();
+      const int top = area.y + (area.x == primary.x && area.y == primary.y ? panel_height : 0);
+      geometry = {area.x, top, area.width, std::max(1, area.height - (top - area.y))};
+    }
+    folder.x = geometry.x; folder.y = geometry.y;
+    folder.width = geometry.width; folder.height = geometry.height;
+  }
+
+  void maximize_folder(Folder& folder) {
+    if (!folder.maximized) folder.normal_geometry = {folder.x, folder.y, folder.width, folder.height};
+    else {
+      folder.x = folder.normal_geometry.x; folder.y = folder.normal_geometry.y;
+      folder.width = folder.normal_geometry.width; folder.height = folder.normal_geometry.height;
+    }
+    folder.maximized = !folder.maximized;
+    folder.shaded = false;
+    recover_folder(folder);
+    configure_folder(folder);
+  }
+
   bool open_folder(const std::filesystem::path& path,
-                   const std::optional<std::filesystem::path>& selected = std::nullopt) {
+                   const std::optional<std::filesystem::path>& selected = std::nullopt,
+                   const SessionFolder* saved = nullptr) {
     std::error_code ec;
     const bool trash = path == "trash:///";
     if (!trash && !std::filesystem::is_directory(path, ec)) {
       show_notice("Folder unavailable: " + path.string());
       return false;
     }
-    request_root("_NET_SHOWING_DESKTOP", 0);
+    if (!saved) request_root("_NET_SHOWING_DESKTOP", 0);
     Folder folder;
     folder.workspace = workspace;
     folder.path = path;
@@ -3000,8 +3054,19 @@ struct Shell::Impl {
     const int top = area.y + (area.x == primary_area().x && area.y == primary_area().y ? panel_height : 0);
     folder.y = std::clamp(area.y + 75 + 22 * offset, top,
                           std::max(top, area.y + area.height - folder.height));
-    folder.window = create_window(folder.x, folder.y, folder.width, folder.height,
+    if (saved) {
+      folder.workspace = saved->workspace;
+      folder.normal_geometry = saved->geometry;
+      folder.x = saved->geometry.x; folder.y = saved->geometry.y;
+      folder.width = saved->geometry.width; folder.height = saved->geometry.height;
+      folder.maximized = saved->maximized; folder.shaded = saved->shaded;
+      recover_folder(folder);
+    }
+    folder.window = create_window(folder.x, folder.y, folder.width, folder.shaded ? 34 : folder.height,
                                   XCB_EVENT_MASK_FOCUS_CHANGE);
+    const std::string title = "Folder: " + folder.path.string();
+    xcb_change_property(connection, XCB_PROP_MODE_REPLACE, folder.window, XCB_ATOM_WM_NAME,
+                        XCB_ATOM_STRING, 8, title.size(), title.data());
     folder.items = list_items(path, false);
     bool found = !selected;
     if (selected) {
@@ -3016,8 +3081,10 @@ struct Shell::Impl {
         break;
       }
     }
-    xcb_map_window(connection, folder.window);
-    xcb_set_input_focus(connection, XCB_INPUT_FOCUS_POINTER_ROOT, folder.window, XCB_CURRENT_TIME);
+    if (folder.workspace == workspace && !showing_desktop) {
+      xcb_map_window(connection, folder.window);
+      if (!saved) xcb_set_input_focus(connection, XCB_INPUT_FOCUS_POINTER_ROOT, folder.window, XCB_CURRENT_TIME);
+    }
     auto [it, inserted] = folders.emplace(folder.window, std::move(folder));
     if (inserted) { watch_directory(it->first, path); register_drop(it->first); draw_folder(it->second); draw_panel(); }
     return inserted && found;
@@ -3428,6 +3495,11 @@ struct Shell::Impl {
       return;
     }
     if (folder && event->event_y < 31) {
+      if (event->detail == 2 && event->event_x <= folder->width - 34) {
+        folder->shaded = !folder->shaded;
+        configure_folder(*folder);
+        return;
+      }
       if (event->detail == 1 && event->event_x > folder->width - 34) {
         const auto window = folder->window;
         unwatch(window);
@@ -3440,6 +3512,14 @@ struct Shell::Impl {
       else {
         xcb_set_input_focus(connection, XCB_INPUT_FOCUS_POINTER_ROOT, folder->window, event->time);
         if (event->detail == 1) {
+          if (last_title_window == folder->window && event->time - last_title_time < 350) {
+            last_title_window = 0;
+            maximize_folder(*folder);
+            return;
+          }
+          last_title_window = folder->window;
+          last_title_time = event->time;
+          if (folder->maximized) return;
           drag_window = folder->window;
           resizing = false;
           drag_root_x = event->root_x;
@@ -3452,7 +3532,7 @@ struct Shell::Impl {
       }
       return;
     }
-    if (folder && event->detail == 1 && event->event_x >= folder->width - 17 && event->event_y >= folder->height - 17) {
+    if (folder && !folder->maximized && !folder->shaded && event->detail == 1 && event->event_x >= folder->width - 17 && event->event_y >= folder->height - 17) {
       drag_window = folder->window;
       resizing = true;
       drag_root_x = event->root_x;
@@ -3736,6 +3816,7 @@ struct Shell::Impl {
     auto& folder = it->second;
     const int dx = event->root_x - drag_root_x;
     const int dy = event->root_y - drag_root_y;
+    if (std::abs(dx) > 4 || std::abs(dy) > 4) last_title_window = 0;
     if (resizing) {
       folder.width = std::max(250, drag_start_x + dx);
       folder.height = std::max(180, drag_start_y + dy);
@@ -3995,6 +4076,32 @@ void Shell::set_workspace(std::uint32_t desktop, bool showing_desktop) {
   p.draw_panel();
 }
 
+SessionSnapshot Shell::session_snapshot() const {
+  const auto& p = *impl_;
+  SessionSnapshot snapshot;
+  snapshot.workspace = p.workspace;
+  // Stable creation order makes snapshots reproducible, including duplicate paths.
+  std::vector<xcb_window_t> windows;
+  for (const auto& [window, folder] : p.folders) windows.push_back(window);
+  std::ranges::sort(windows);
+  for (auto window : windows) {
+    const auto& folder = p.folders.at(window);
+    snapshot.folders.push_back({folder.path.string(), folder.maximized ? folder.normal_geometry :
+      SessionGeometry{folder.x, folder.y, folder.width, folder.height}, folder.workspace,
+      folder.maximized, folder.shaded});
+  }
+  return snapshot;
+}
+
+void Shell::restore_session(const SessionSnapshot& snapshot) {
+  auto& p = *impl_;
+  for (const auto& saved : snapshot.folders) {
+    std::error_code error;
+    if (saved.path != "trash:///" && !std::filesystem::is_directory(saved.path, error)) continue;
+    (void)p.open_folder(saved.path, std::nullopt, &saved);
+  }
+}
+
 void Shell::set_tasks(std::vector<Task> tasks) {
   impl_->tasks = std::move(tasks);
   // The WM owns layer order; repainting tasks must not raise the panel above
@@ -4128,15 +4235,8 @@ void Shell::refresh_display_layout() {
     p.draw_panel();
   }
   for (auto& [window, folder] : p.folders) {
-    const auto area = p.area_at(folder.x + folder.width / 2, folder.y + folder.height / 2);
-    folder.width = std::min(folder.width, std::max(250, area.width - 12));
-    const int top = area.y + (area.x == primary.x && area.y == primary.y ? Impl::panel_height : 0);
-    folder.height = std::min(folder.height, std::max(180, area.height - (top - area.y) - 12));
-    folder.x = std::clamp(folder.x, area.x, std::max(area.x, area.x + area.width - folder.width));
-    folder.y = std::clamp(folder.y, top,
-                          std::max(top, area.y + area.height - folder.height));
-    configure(window, folder.x, folder.y, folder.width, folder.height);
-    p.draw_folder(folder);
+    p.recover_folder(folder);
+    p.configure_folder(folder);
   }
   auto center = [&p, &configure](xcb_window_t window, int w, int h, const Impl::MonitorArea& area) {
     const auto [x, y] = p.centered(area, w, h);

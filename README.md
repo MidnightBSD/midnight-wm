@@ -149,6 +149,39 @@ supporting `_NET_WM_PING` are marked unresponsive after a timeout, and clients
 supporting `_NET_WM_SYNC_REQUEST` can acknowledge interactive resize updates.
 Resize timeouts allow interaction to continue when an application stops responding.
 
+Settings → **Session** offers optional built-in folder sessions. Enable
+**Save folders on logout** to save open folder paths, normal geometry, workspace,
+and maximized/shaded state when confirming **Exit X11 session…** or receiving a
+normal termination signal. Cancelling logout leaves the running session intact.
+Enable **Restore folders at login** to reopen the saved folders and select the
+saved workspace; disable restoration to start fresh independently of saving.
+Missing folders are skipped, and geometry is adjusted to the current monitors
+and UI scale so restored windows remain reachable. Double-click a built-in
+folder's title to maximize/restore it; middle-click to shade/expand it. Activating
+its task expands a shaded folder.
+
+The equivalent configuration is `[Session]` with `restore_folders=false` and
+`save_on_logout=false` by default. Settings apply saving changes live; restoration
+is checked at startup. **Clear saved folder session** removes the snapshot without
+closing open folders. Saving on logout can create another snapshot afterward.
+State is stored atomically in `$XDG_STATE_HOME/midnight-wm/session.ini` (normally
+`~/.local/state/midnight-wm/session.ini`), with a private directory and file.
+Malformed, incomplete, oversized, or unsupported-version snapshots are ignored
+and preserved until cleared, including on logout. Write failures before atomic
+replacement retain the existing snapshot; save errors go to the session log.
+
+This implements the built-in folder phase of issue #31. External applications,
+documents, and terminal processes are not restored. XSMP application registration,
+a session companion, save prompts, and coordinated application logout remain
+separate follow-up work. No restart commands, credentials, or bus addresses are
+stored in the folder snapshot.
+
+Run `python3 tests/session_smoke.py --matrix` for isolated save/restore cycles at
+all five supported resolutions, including cancelled logout, window states,
+missing folders, offscreen geometry recovery, fresh startup, corrupt state, and
+clearing through Settings. `session_test` covers parsing, privacy, atomic
+replacement, interrupted writes, and monitor recovery without X11.
+
 Middle-click an application's title bar to shade it to the title bar, and
 middle-click again to expand it. The application remains mapped at its original
 size; shading does not minimize it. Task activation, Alt+Tab selection, maximize,

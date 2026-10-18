@@ -10,6 +10,7 @@
 #include "dbus_menu_popup.hpp"
 #include "notifications.hpp"
 #include "shell.hpp"
+#include "session.hpp"
 #include "startup_notification.hpp"
 #include "status_notifier.hpp"
 #include "status_panel.hpp"
@@ -280,6 +281,15 @@ int main(int argc, char** argv) {
         midnight::Compositor compositor(connection, screen_number);
         compositor.set_enabled(shell.theme().compositing);
         compositor.tick();
+        midnight::SessionStore session;
+        if (shell.theme().restore_session || shell.theme().save_session) {
+          if (auto saved = session.load(); !saved) {
+            std::cerr << "Ignoring saved folder session: " << saved.error() << '\n';
+          } else if (*saved && shell.theme().restore_session) {
+            wm.set_current_desktop((**saved).workspace);
+            shell.restore_session(**saved);
+          }
+        }
         midnight::launch_autostart();
         ConfigReload config_reload;
 
@@ -331,6 +341,13 @@ int main(int argc, char** argv) {
           if (poll(&display, 1, (shell.menu_animation_active() || wm.resize_pending()) ? 16 : 100) < 0 && errno != EINTR) break;
         }
         if (xcb_connection_has_error(connection)) result = 1;
+        if (!result && !running && shell.theme().save_session) {
+          // Revalidate even if saving was only enabled by live configuration.
+          if (auto existing = session.load(); !existing)
+            std::cerr << "Folder session not saved: " << existing.error() << '\n';
+          else if (auto saved = session.save(shell.session_snapshot()); !saved)
+            std::cerr << "Folder session not saved: " << saved.error() << '\n';
+        }
       }
     }
   }
