@@ -34,6 +34,28 @@ session-owned OpenSSH `ssh-agent`. The fallback agent ends with the session.
 Keyring unlock at login depends on the display manager's PAM configuration;
 starting a keyring here may prompt for its password when first used.
 
+## Window shadows and compositing
+
+Install [Picom](https://picom.app/) to enable soft window shadows. Midnight
+Workspace starts Picom in the foreground with its XRender backend and a fixed
+shadow preset, excluding the desktop, panel, and fullscreen windows. It does
+not read or overwrite your separate Picom configuration. A compositor already
+owning the screen is preserved; only a Picom process started by Midnight
+Workspace is stopped when disabling shadows or ending the session.
+
+Uncheck **Window shadows** in Settings → **Appearance**, or set
+`compositing=false` in `[Workspace]`, to disable the session-owned compositor.
+Changes apply live. This switch leaves an independently started compositor
+running. Missing Picom or unsupported X11 extensions leave the desktop usable
+without compositing. If Picom exits unexpectedly, toggle the setting off and
+on to retry; the session does not repeatedly restart a failing compositor.
+
+Run `python3 tests/compositor_smoke.py` with Picom installed to check actual
+window and folder shadows, panel exclusion, live Settings, and shutdown in an
+isolated Xvfb session. `--picom /path/to/picom` selects a test build. CTest also
+checks selection ownership, missing-executable fallback, and process cleanup
+without requiring Picom to be installed.
+
 ## Desktop behavior
 
 The top bar contains an application launcher, a lock button immediately to its

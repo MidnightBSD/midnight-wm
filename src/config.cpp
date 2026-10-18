@@ -86,6 +86,10 @@ std::optional<ThemeConfig> parse_config(std::string_view contents) {
   const bool show_battery = g_key_file_get_boolean(keyfile, "Workspace", "show_battery", &battery_error);
   if (battery_error) g_error_free(battery_error);
   else config.show_battery = show_battery;
+  GError* compositor_error = nullptr;
+  const bool compositing = g_key_file_get_boolean(keyfile, "Workspace", "compositing", &compositor_error);
+  if (compositor_error) g_error_free(compositor_error);
+  else config.compositing = compositing;
   config.dark_mode = g_key_file_get_boolean(keyfile, "Workspace", "dark_mode", nullptr);
   if (config.dark_mode) {
     config.panel_color = {.18, .18, .21};

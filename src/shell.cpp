@@ -3380,6 +3380,20 @@ bool Shell::initialize() {
   const auto primary = p.primary_area();
   p.desktop = p.create_window(0, 0, p.width, p.height);
   p.panel = p.create_window(primary.x, primary.y, p.panel_width, Impl::panel_height);
+  // Tell compositors these surfaces are the desktop and dock, not floating windows.
+  const auto set_type = [&](xcb_window_t window, const std::string& name) {
+    auto* property = xcb_intern_atom_reply(p.connection,
+        xcb_intern_atom(p.connection, false, 19, "_NET_WM_WINDOW_TYPE"), nullptr);
+    auto* type = xcb_intern_atom_reply(p.connection,
+        xcb_intern_atom(p.connection, false, name.size(), name.c_str()), nullptr);
+    if (property && type)
+      xcb_change_property(p.connection, XCB_PROP_MODE_REPLACE, window, property->atom,
+                          XCB_ATOM_ATOM, 32, 1, &type->atom);
+    std::free(property);
+    std::free(type);
+  };
+  set_type(p.desktop, "_NET_WM_WINDOW_TYPE_DESKTOP");
+  set_type(p.panel, "_NET_WM_WINDOW_TYPE_DOCK");
   const auto panel_pixels = scaled_pixel(p.scale, Impl::panel_height);
   const std::uint32_t desktop_size[]{p.physical_width, p.physical_height};
   xcb_configure_window(p.connection, p.desktop,
