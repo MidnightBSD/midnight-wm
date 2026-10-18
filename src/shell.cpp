@@ -2006,6 +2006,21 @@ struct Shell::Impl {
           const auto all_tasks = panel_tasks();
           const auto task = std::ranges::find(all_tasks, entry.window, &Task::window);
           if (task != all_tasks.end()) draw_task_icon(cr, *task, 9, y + 4);
+        } else if (entry.action == MenuAction::settings) {
+          // Match midnightbsd-settings.desktop in the selected icon theme.
+          if (auto* surface = themed_icon_surface("preferences-desktop")) {
+            cairo_set_source_surface(cr, surface, 8, y + 3);
+            cairo_paint(cr);
+          } else {
+            themed_fill(cr, config.field_color, .94, .94, .91, 8, y + 5, 18, 16);
+            bevel(cr, 8, y + 5, 18, 16);
+            for (int slider = 0; slider < 3; ++slider) {
+              const int x = 12 + slider * 5;
+              themed_fill(cr, config.text_color, .25, .25, .29, x, y + 8, 1, 10);
+              fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
+                   x - 1, y + 9 + (slider % 2) * 4, 3, 3);
+            }
+          }
         } else if (entry.action == MenuAction::open_trash) {
           if (auto* surface = themed_icon_surface("user-trash")) {
             cairo_set_source_surface(cr, surface, 8, y + 3);
