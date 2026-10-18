@@ -1,5 +1,6 @@
 bin/midnight-wm
 bin/midnightbsd-settings
+bin/midnightbsd-session
 share/applications/midnightbsd-settings.desktop
 share/xsessions/midnight-wm.desktop
 share/xdg-desktop-portal/portals/midnight.portal

@@ -1,7 +1,7 @@
 [Desktop Entry]
 Name=Midnight Workspace
 Comment=Warp-inspired desktop for MidnightBSD
-Exec=midnight-wm
-TryExec=midnight-wm
+Exec=midnightbsd-session
+TryExec=midnightbsd-session
 Type=Application
 DesktopNames=MidnightWorkspace
