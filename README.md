@@ -121,6 +121,22 @@ supporting `_NET_WM_PING` are marked unresponsive after a timeout, and clients
 supporting `_NET_WM_SYNC_REQUEST` can acknowledge interactive resize updates.
 Resize timeouts allow interaction to continue when an application stops responding.
 
+EWMH activation requests use interaction timestamps to reject stale background
+focus requests. `_NET_WM_USER_TIME=0` prevents initial focus; user-time helper
+windows are supported. Clients without an initial user-time hint retain legacy
+mapping behavior. Explicit taskbar/pager activation still restores a window and
+switches to its workspace. This is desktop focus policy, not isolation between
+X11 clients.
+
+Applications requesting attention through EWMH or the ICCCM urgency hint get an
+amber task outline and `!` marker without being focused. Overflow tasks also
+carry the marker. Activating the window clears attention and urgency. The WM
+publishes the read-only focused state and each window's allowed actions.
+`ABOVE` and `BELOW` requests are mutually exclusive and preserve stacking layers
+when focus changes; modal transients remain above their parent. Focused
+fullscreen families stay above ordinary windows and docks. `SKIP_PAGER` is
+supported independently of `SKIP_TASKBAR`.
+
 Optional portal integration uses `deskutils/xdg-desktop-portal` and
 `x11/xdg-desktop-portal-gtk`. The installed MidnightWorkspace portal configuration
 selects GTK for file/application choosers and Midnight's Settings backend for

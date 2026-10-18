@@ -1,0 +1,300 @@
+// Copyright (c) 2026 Lucas Holt
+// SPDX-License-Identifier: BSD-2-Clause
+// Run only in the isolated server provided by ewmh_attention.py.
+#include <xcb/xcb.h>
+#include <algorithm>
+#include <chrono>
+#include <cstdint>
+#include <cstdlib>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#include <vector>
+using namespace std::chrono_literals;
+xcb_connection_t* connection;
+xcb_window_t root;
+xcb_atom_t atom(const char* name) {
+  auto* r = xcb_intern_atom_reply(connection, xcb_intern_atom(connection, 0, std::char_traits<char>::length(name), name), nullptr);
+  if (!r) throw std::runtime_error("atom lookup");
+  auto a = r->atom; std::free(r); return a;
+}
+std::vector<std::uint32_t> property(xcb_window_t w, const char* name) {
+  auto* r = xcb_get_property_reply(connection, xcb_get_property(connection, 0, w, atom(name), XCB_GET_PROPERTY_TYPE_ANY, 0, 256), nullptr);
+  std::vector<std::uint32_t> result;
+  if (r && r->format == 32) {
+    auto* data = static_cast<std::uint32_t*>(xcb_get_property_value(r));
+    result.assign(data, data + xcb_get_property_value_length(r) / 4);
+  }
+  std::free(r); return result;
+}
+void set(xcb_window_t w, const char* name, xcb_atom_t type, std::uint32_t value) {
+  xcb_change_property(connection, XCB_PROP_MODE_REPLACE, w, atom(name), type, 32, 1, &value); xcb_flush(connection);
+}
+void message(xcb_window_t w, const char* name, std::uint32_t a, std::uint32_t b = 0, std::uint32_t c = 0) {
+  xcb_client_message_event_t e{}; e.response_type = XCB_CLIENT_MESSAGE; e.format = 32;
+  e.window = w; e.type = atom(name); e.data.data32[0] = a; e.data.data32[1] = b; e.data.data32[2] = c;
+  xcb_send_event(connection, 0, root, XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT | XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY, reinterpret_cast<char*>(&e)); xcb_flush(connection);
+}
+template<class F> void await(F f, const char* error) {
+  for (int i = 0; i < 250; ++i) { if (f()) return; std::this_thread::sleep_for(10ms); }
+  throw std::runtime_error(error);
+}
+void check(bool value, const char* error) { if (!value) throw std::runtime_error(error); }
+bool has(xcb_window_t w, const char* name, const char* value) {
+  auto p = property(w, name); return std::find(p.begin(), p.end(), atom(value)) != p.end();
+}
+bool state(xcb_window_t w, const char* value) { return has(w, "_NET_WM_STATE", value); }
+bool active(xcb_window_t w) { return property(root, "_NET_ACTIVE_WINDOW") == std::vector<std::uint32_t>{w}; }
+void focus(xcb_window_t w) { message(w, "_NET_ACTIVE_WINDOW", 2); await([&]{ return active(w); }, "pager activation"); }
+void change(xcb_window_t w, std::uint32_t action, const char* a, const char* b = nullptr) {
+  message(w, "_NET_WM_STATE", action, atom(a), b ? atom(b) : 0);
+}
+xcb_window_t create(bool map = true) {
+  auto w = xcb_generate_id(connection);
+  xcb_create_window(connection, XCB_COPY_FROM_PARENT, w, root, 160, 160, 260, 170, 0, XCB_WINDOW_CLASS_INPUT_OUTPUT, XCB_COPY_FROM_PARENT, 0, nullptr);
+  if (map) { xcb_map_window(connection, w); xcb_flush(connection); await([&]{ auto p = property(root, "_NET_CLIENT_LIST"); return std::find(p.begin(), p.end(), w) != p.end(); }, "client adoption"); }
+  return w;
+}
+bool above(xcb_window_t a, xcb_window_t b) {
+  auto p = property(root, "_NET_CLIENT_LIST_STACKING");
+  auto ai = std::find(p.begin(), p.end(), a), bi = std::find(p.begin(), p.end(), b);
+  return ai != p.end() && bi != p.end() && ai > bi;
+}
+// PropertyNotify supplies the server clock, avoiding guesses from wall time.
+xcb_timestamp_t server_time(xcb_window_t w) {
+  const std::uint32_t mask = XCB_EVENT_MASK_PROPERTY_CHANGE;
+  xcb_change_window_attributes(connection, w, XCB_CW_EVENT_MASK, &mask);
+  while (auto* event = xcb_poll_for_event(connection)) std::free(event);
+  set(w, "_MIDNIGHT_TEST_TIMESTAMP", XCB_ATOM_CARDINAL, 1);
+  xcb_timestamp_t result = 0;
+  await([&]{
+    while (auto* event = xcb_poll_for_event(connection)) {
+      if ((event->response_type & 0x7f) == XCB_PROPERTY_NOTIFY) {
+        auto* p = reinterpret_cast<xcb_property_notify_event_t*>(event);
+        if (p->window == w && p->atom == atom("_MIDNIGHT_TEST_TIMESTAMP")) result = p->time;
+      }
+      std::free(event);
+    }
+    return result != 0;
+  }, "server timestamp");
+  return result;
+}
+int main(int argc, char** argv) {
+ try {
+  connection = xcb_connect(nullptr, nullptr); check(!xcb_connection_has_error(connection), "X connection");
+  root = xcb_setup_roots_iterator(xcb_get_setup(connection)).data->root;
+  if (argc > 1 && std::string(argv[1]) == "--visual") {
+    for (const auto* title : {"Attention example", "Foreground example"}) {
+      auto window = create(false);
+      xcb_change_property(connection, XCB_PROP_MODE_REPLACE, window, XCB_ATOM_WM_NAME,
+          XCB_ATOM_STRING, 8, std::char_traits<char>::length(title), title);
+      const std::uint32_t background = 0xdddddd;
+      xcb_change_window_attributes(connection, window, XCB_CW_BACK_PIXEL, &background);
+      xcb_map_window(connection, window); xcb_flush(connection);
+      await([&]{ auto list = property(root, "_NET_CLIENT_LIST");
+        return std::find(list.begin(), list.end(), window) != list.end(); }, "visual fixture mapping");
+    }
+    std::this_thread::sleep_for(60s);
+    xcb_disconnect(connection);
+    return 0;
+  }
+  auto a = create(), b = create(); focus(b);
+  await([&]{ return state(b, "_NET_WM_STATE_FOCUSED") && !state(a, "_NET_WM_STATE_FOCUSED"); }, "FOCUSED publication");
+  change(a, 1, "_NET_WM_STATE_FOCUSED"); std::this_thread::sleep_for(100ms);
+  check(!state(a, "_NET_WM_STATE_FOCUSED") && active(b), "client forged FOCUSED");
+  change(a, 1, "_NET_WM_STATE_ABOVE");
+  await([&]{ return state(a, "_NET_WM_STATE_ABOVE") && above(a, b); }, "ABOVE stacking");
+  focus(b); check(above(a, b), "focus escaped ABOVE layer");
+  change(a, 1, "_NET_WM_STATE_BELOW");
+  await([&]{ return state(a, "_NET_WM_STATE_BELOW") && !state(a, "_NET_WM_STATE_ABOVE") && above(b, a); }, "BELOW excludes ABOVE");
+  focus(a); check(above(b, a), "focus escaped BELOW layer");
+  change(a, 0, "_NET_WM_STATE_BELOW");
+  change(a, 2, "_NET_WM_STATE_SKIP_PAGER", "_NET_WM_STATE_SKIP_PAGER");
+  await([&]{ return state(a, "_NET_WM_STATE_SKIP_PAGER"); }, "duplicate toggle applied twice");
+  change(a, 2, "_NET_WM_STATE_SKIP_PAGER");
+  await([&]{ return !state(a, "_NET_WM_STATE_SKIP_PAGER"); }, "SKIP_PAGER toggle off");
+  focus(b); change(a, 1, "_NET_WM_STATE_DEMANDS_ATTENTION");
+  await([&]{ return state(a, "_NET_WM_STATE_DEMANDS_ATTENTION"); }, "attention request");
+  check(active(b), "attention stole focus"); focus(a);
+  await([&]{ return !state(a, "_NET_WM_STATE_DEMANDS_ATTENTION"); }, "focus did not clear attention");
+  focus(b);
+  const std::uint32_t urgency[] = {256, 0, 0, 0, 0, 0, 0, 0, 0};
+  xcb_change_property(connection, XCB_PROP_MODE_REPLACE, a, atom("WM_HINTS"), atom("WM_HINTS"), 32, 9, urgency); xcb_flush(connection);
+  await([&]{ return state(a, "_NET_WM_STATE_DEMANDS_ATTENTION"); }, "ICCCM urgency ignored"); focus(a);
+  await([&]{ return !state(a, "_NET_WM_STATE_DEMANDS_ATTENTION"); }, "ICCCM attention not cleared");
+  auto no_focus = create(false); set(no_focus, "_NET_WM_USER_TIME", XCB_ATOM_CARDINAL, 0);
+  focus(b); xcb_map_window(connection, no_focus); xcb_flush(connection);
+  await([&]{ return !property(no_focus, "_NET_WM_ALLOWED_ACTIONS").empty(); }, "no-focus client adoption");
+  check(active(b), "zero user time stole map focus");
+  message(no_focus, "_NET_ACTIVE_WINDOW", 1, 0); std::this_thread::sleep_for(100ms);
+  check(active(b), "zero application activation stole focus");
+  await([&]{ return state(no_focus, "_NET_WM_STATE_DEMANDS_ATTENTION"); }, "denied activation did not request attention");
+  focus(no_focus); message(no_focus, "WM_CHANGE_STATE", 3);
+  await([&]{ return state(no_focus, "_NET_WM_STATE_HIDDEN") && !state(no_focus, "_NET_WM_STATE_FOCUSED"); }, "minimized FOCUSED state persisted");
+  focus(b); message(no_focus, "_NET_ACTIVE_WINDOW", 1, 0); std::this_thread::sleep_for(100ms);
+  check(active(b) && state(no_focus, "_NET_WM_STATE_HIDDEN"), "denied activation restored minimized window");
+  message(no_focus, "_NET_WM_DESKTOP", 1);
+  await([&]{ return property(no_focus, "_NET_WM_DESKTOP") == std::vector<std::uint32_t>{1}; }, "move minimized client");
+  message(no_focus, "_NET_ACTIVE_WINDOW", 1, 0); std::this_thread::sleep_for(100ms);
+  check(property(root, "_NET_CURRENT_DESKTOP") == std::vector<std::uint32_t>{0}, "denied activation switched workspace");
+  message(root, "_NET_SHOWING_DESKTOP", 1);
+  await([&]{ return property(root, "_NET_SHOWING_DESKTOP") == std::vector<std::uint32_t>{1}; }, "show desktop");
+  message(no_focus, "_NET_ACTIVE_WINDOW", 1, 0); std::this_thread::sleep_for(100ms);
+  check(property(root, "_NET_SHOWING_DESKTOP") == std::vector<std::uint32_t>{1}, "denied activation exited show desktop");
+  message(root, "_NET_SHOWING_DESKTOP", 0); focus(b);
+  // A valid user time from the active client establishes recent genuine input.
+  auto old_time = server_time(b);
+  std::this_thread::sleep_for(30ms);
+  auto input_time = server_time(b);
+  set(b, "_NET_WM_USER_TIME", XCB_ATOM_CARDINAL, input_time);
+  std::this_thread::sleep_for(100ms);
+  for (auto source : {0U, 1U}) {
+    message(a, "_NET_ACTIVE_WINDOW", source, old_time);
+    std::this_thread::sleep_for(100ms);
+    check(active(b), "stale application activation stole focus");
+  }
+  auto stale = create(false);
+  set(stale, "_NET_WM_USER_TIME", XCB_ATOM_CARDINAL, old_time);
+  xcb_map_window(connection, stale); xcb_flush(connection);
+  await([&]{ return !property(stale, "_NET_WM_ALLOWED_ACTIONS").empty(); }, "stale-time adoption");
+  check(active(b), "stale map user time stole focus");
+  auto fresh_time = server_time(b);
+  message(a, "_NET_ACTIVE_WINDOW", 1, fresh_time);
+  await([&]{ return active(a); }, "fresh application activation denied");
+  focus(b);
+  auto helper = create(false), timed = create(false);
+  set(helper, "_NET_WM_USER_TIME", XCB_ATOM_CARDINAL, 0);
+  set(timed, "_NET_WM_USER_TIME_WINDOW", XCB_ATOM_WINDOW, helper);
+  xcb_map_window(connection, timed); xcb_flush(connection);
+  await([&]{ return !property(timed, "_NET_WM_ALLOWED_ACTIONS").empty(); }, "helper-time adoption");
+  check(active(b), "helper zero user time ignored");
+  // Changes on the helper remain observable after the client is managed.
+  auto remap_timed = [&]{
+    xcb_unmap_window(connection, timed); xcb_flush(connection);
+    await([&]{ auto p = property(root, "_NET_CLIENT_LIST"); return std::find(p.begin(), p.end(), timed) == p.end(); }, "timed client withdrawal");
+    xcb_map_window(connection, timed); xcb_flush(connection);
+    await([&]{ return !property(timed, "_NET_WM_ALLOWED_ACTIONS").empty() &&
+      [&]{ auto p = property(root, "_NET_CLIENT_LIST"); return std::find(p.begin(), p.end(), timed) != p.end(); }(); }, "timed client remapping");
+  };
+  set(helper, "_NET_WM_USER_TIME", XCB_ATOM_CARDINAL, server_time(b));
+  std::this_thread::sleep_for(50ms); remap_timed();
+  await([&]{ return active(timed); }, "fresh helper update ignored on remap");
+  focus(b); set(helper, "_NET_WM_USER_TIME", XCB_ATOM_CARDINAL, 0);
+  std::this_thread::sleep_for(50ms); remap_timed();
+  check(active(b), "zero helper update ignored on remap");
+  xcb_delete_property(connection, helper, atom("_NET_WM_USER_TIME")); xcb_flush(connection);
+  std::this_thread::sleep_for(50ms); remap_timed();
+  await([&]{ return active(timed); }, "deleted helper time retained zero hint");
+  focus(b);
+  set(timed, "_NET_WM_USER_TIME", XCB_ATOM_CARDINAL, 0);
+  set(timed, "_NET_WM_USER_TIME_WINDOW", XCB_ATOM_CARDINAL, helper);
+  std::this_thread::sleep_for(50ms); remap_timed();
+  check(active(b), "invalid helper WINDOW type bypassed own zero time");
+  xcb_change_property(connection, XCB_PROP_MODE_REPLACE, timed, atom("_NET_WM_USER_TIME_WINDOW"), XCB_ATOM_WINDOW, 8, sizeof(helper), &helper);
+  xcb_flush(connection); std::this_thread::sleep_for(50ms); remap_timed();
+  check(active(b), "invalid helper WINDOW format bypassed own zero time");
+  // A managed active client's helper also advances the last input timestamp.
+  set(b, "_NET_WM_USER_TIME_WINDOW", XCB_ATOM_WINDOW, helper);
+  auto helper_old = server_time(b);
+  std::this_thread::sleep_for(30ms);
+  set(helper, "_NET_WM_USER_TIME", XCB_ATOM_CARDINAL, server_time(b));
+  std::this_thread::sleep_for(100ms);
+  message(a, "_NET_ACTIVE_WINDOW", 1, helper_old);
+  std::this_thread::sleep_for(100ms);
+  check(active(b), "active helper update failed to reject stale activation");
+  // Real property notifications must reject future timestamps; SendEvent
+  // notifications must never establish a trusted timestamp either.
+  const auto valid_time = server_time(b);
+  const auto future_time = valid_time + 60000U;
+  set(helper, "_NET_WM_USER_TIME", XCB_ATOM_CARDINAL, future_time);
+  std::this_thread::sleep_for(100ms);
+  message(a, "_NET_ACTIVE_WINDOW", 1, valid_time);
+  await([&]{ return active(a); }, "real future user time poisoned activation baseline");
+  focus(b);
+  xcb_property_notify_event_t fake{};
+  fake.response_type = XCB_PROPERTY_NOTIFY; fake.window = helper;
+  fake.atom = atom("_NET_WM_USER_TIME"); fake.time = future_time;
+  fake.state = XCB_PROPERTY_NEW_VALUE;
+  xcb_send_event(connection, 0, helper, XCB_EVENT_MASK_PROPERTY_CHANGE, reinterpret_cast<const char*>(&fake));
+  xcb_flush(connection); std::this_thread::sleep_for(100ms);
+  message(a, "_NET_ACTIVE_WINDOW", 1, server_time(b));
+  await([&]{ return active(a); }, "synthetic property event poisoned activation baseline");
+  // The helper becomes a managed client, then loses its final external watcher.
+  // It must retain its own WM_NORMAL_HINTS notifications after that transition.
+  xcb_map_window(connection, helper); xcb_flush(connection);
+  await([&]{ return !property(helper, "_NET_WM_ALLOWED_ACTIONS").empty(); }, "helper managed adoption");
+  xcb_delete_property(connection, b, atom("_NET_WM_USER_TIME_WINDOW")); xcb_flush(connection);
+  std::this_thread::sleep_for(100ms);
+  std::uint32_t helper_hints[18]{};
+  helper_hints[0] = (1U << 4) | (1U << 5);
+  helper_hints[5] = helper_hints[7] = 260;
+  helper_hints[6] = helper_hints[8] = 170;
+  xcb_change_property(connection, XCB_PROP_MODE_REPLACE, helper, atom("WM_NORMAL_HINTS"), atom("WM_SIZE_HINTS"), 32, 18, helper_hints);
+  xcb_flush(connection);
+  await([&]{ return !has(helper, "_NET_WM_ALLOWED_ACTIONS", "_NET_WM_ACTION_RESIZE"); }, "last helper detach removed managed property notifications");
+  auto malformed = create(false);
+  const auto forged_state = atom("_NET_WM_STATE_ABOVE");
+  xcb_change_property(connection, XCB_PROP_MODE_REPLACE, malformed, atom("_NET_WM_STATE"), XCB_ATOM_ATOM, 8, sizeof(forged_state), &forged_state);
+  set(malformed, "_NET_WM_USER_TIME", XCB_ATOM_CARDINAL, 0);
+  xcb_map_window(connection, malformed); xcb_flush(connection);
+  await([&]{ return !property(malformed, "_NET_WM_ALLOWED_ACTIONS").empty(); }, "malformed initial state adoption");
+  check(!state(malformed, "_NET_WM_STATE_ABOVE"), "malformed initial ATOM format accepted");
+  auto child = create(false);
+  set(child, "WM_TRANSIENT_FOR", XCB_ATOM_WINDOW, a);
+  set(child, "_NET_WM_STATE", XCB_ATOM_ATOM, atom("_NET_WM_STATE_MODAL"));
+  xcb_map_window(connection, child); xcb_flush(connection);
+  await([&]{ return above(child, a); }, "transient not above parent");
+  message(a, "_NET_ACTIVE_WINDOW", 2);
+  await([&]{ return active(child) && above(child, a); }, "parent activation did not preserve modal transient");
+  focus(b); change(b, 1, "_NET_WM_STATE_FULLSCREEN");
+  await([&]{ return state(b, "_NET_WM_STATE_FULLSCREEN") && above(b, a); }, "fullscreen layer");
+  auto fullscreen_above_panel = [&]{
+    auto* tree = xcb_query_tree_reply(connection, xcb_query_tree(connection, b), nullptr);
+    if (!tree) return false;
+    const auto frame = tree->parent; std::free(tree);
+    auto* root_tree = xcb_query_tree_reply(connection, xcb_query_tree(connection, root), nullptr);
+    if (!root_tree) return false;
+    const auto* windows = xcb_query_tree_children(root_tree);
+    int frame_index = -1, panel_index = -1;
+    for (int i = 0; i < xcb_query_tree_children_length(root_tree); ++i) {
+      if (windows[i] == frame) frame_index = i;
+      auto* geometry = xcb_get_geometry_reply(connection, xcb_get_geometry(connection, windows[i]), nullptr);
+      if (geometry && geometry->width == 1280 && geometry->height == 30) panel_index = i;
+      std::free(geometry);
+    }
+    std::free(root_tree);
+    return panel_index >= 0 && frame_index > panel_index;
+  };
+  await(fullscreen_above_panel, "panel escaped focused fullscreen layer");
+  change(a, 1, "_NET_WM_STATE_ABOVE");
+  await([&]{ return state(a, "_NET_WM_STATE_ABOVE") && active(b); }, "ABOVE update stole focus");
+  await(fullscreen_above_panel, "task repaint raised panel over fullscreen");
+  check(above(b, a), "ABOVE client escaped focused fullscreen layer");
+  message(a, "_NET_ACTIVE_WINDOW", 2);
+  await([&]{ return active(child) && above(a, b); }, "inactive fullscreen remained above ABOVE layer");
+  change(b, 0, "_NET_WM_STATE_FULLSCREEN");
+  change(a, 0, "_NET_WM_STATE_ABOVE");
+  check(has(a, "_NET_WM_ALLOWED_ACTIONS", "_NET_WM_ACTION_MOVE"), "MOVE action absent");
+  check(has(a, "_NET_WM_ALLOWED_ACTIONS", "_NET_WM_ACTION_CLOSE"), "CLOSE action absent");
+  auto fixed = create(false);
+  std::uint32_t hints[18]{}; hints[0] = (1U << 4) | (1U << 5); hints[5] = hints[7] = 260; hints[6] = hints[8] = 170;
+  xcb_change_property(connection, XCB_PROP_MODE_REPLACE, fixed, atom("WM_NORMAL_HINTS"), atom("WM_SIZE_HINTS"), 32, 18, hints);
+  xcb_map_window(connection, fixed); xcb_flush(connection);
+  await([&]{ return !property(fixed, "_NET_WM_ALLOWED_ACTIONS").empty(); }, "fixed-size adoption");
+  check(!has(fixed, "_NET_WM_ALLOWED_ACTIONS", "_NET_WM_ACTION_RESIZE"), "fixed-size client advertised resize");
+  hints[0] = 0;
+  xcb_change_property(connection, XCB_PROP_MODE_REPLACE, fixed, atom("WM_NORMAL_HINTS"), atom("WM_SIZE_HINTS"), 32, 18, hints);
+  xcb_flush(connection);
+  await([&]{ return has(fixed, "_NET_WM_ALLOWED_ACTIONS", "_NET_WM_ACTION_RESIZE"); }, "allowed resize not refreshed after hints changed");
+  focus(fixed); change(fixed, 1, "_NET_WM_STATE_FULLSCREEN");
+  await([&]{ return state(fixed, "_NET_WM_STATE_FULLSCREEN") &&
+      !has(fixed, "_NET_WM_ALLOWED_ACTIONS", "_NET_WM_ACTION_MOVE") &&
+      !has(fixed, "_NET_WM_ALLOWED_ACTIONS", "_NET_WM_ACTION_RESIZE"); }, "fullscreen allowed actions not refreshed");
+  change(fixed, 0, "_NET_WM_STATE_FULLSCREEN");
+  await([&]{ return has(fixed, "_NET_WM_ALLOWED_ACTIONS", "_NET_WM_ACTION_RESIZE"); }, "fullscreen exit did not restore allowed resize");
+  for (auto w : {a, b, no_focus, fixed, helper, timed, child, stale, malformed}) xcb_destroy_window(connection, w);
+  xcb_flush(connection); xcb_disconnect(connection);
+  std::cout << "EWMH stacking, attention, focus policy and allowed actions passed.\n";
+ } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
+}

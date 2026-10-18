@@ -25,6 +25,17 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   also control built-in folder visibility through Shell::set_workspace.
   Keep ping and synchronized resize waits nonblocking, bounded, and cancelled
   when clients disappear; call wm.tick() from the main loop.
+  Call wm.observe_event() before event dispatch so genuine panel/folder input
+  updates the focus policy even when the shell consumes the event. Keep input
+  timestamps separate from arbitrary property-event server times, compare X11
+  timestamps across wraparound, honor zero user-time opt-outs, and preserve
+  explicit taskbar/pager activation. Track and release shared user-time helper
+  subscriptions without removing a managed client's required event masks.
+  Publish attention/urgency and read-only FOCUSED state; clear both attention
+  sources on activation. ABOVE/BELOW layers must survive focus changes and keep
+  transients above their parents, including active fullscreen families. Update
+  ALLOWED_ACTIONS after geometry hints or window state changes. Advertise only
+  the EWMH states/actions actually implemented.
 - `src/display_monitors.hpp` queries RandR monitor rectangles and chooses a
   visible monitor for a point. The shell uses the primary monitor for its panel
   and desktop shortcuts while keeping the lavender background across the root.
@@ -182,6 +193,9 @@ For launcher menu changes, run `python3 tests/menu_smoke.py`; it checks
 category navigation, popup reuse, application launch, and dismissal during reveal.
 For compatibility changes, run `python3 tests/notifications_smoke.py`,
 `python3 tests/ewmh_smoke.py`, and `python3 tests/media_smoke.py` as applicable.
+Run `python3 tests/ewmh_attention.py` for focus timestamps, helper lifecycle,
+attention/urgency, stacking layers, allowed actions, and the visible task marker.
+`x11_timestamp_test` checks wraparound at compile time, including Release builds.
 The media test restores original OSS mixer levels after slider/mute checks.
 Desktop services protocol checks are registered with CTest.
 With xdg-desktop-portal-gtk installed, run `python3 tests/portal_smoke.py`

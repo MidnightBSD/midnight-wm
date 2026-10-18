@@ -49,6 +49,9 @@ install(FILES data/midnightworkspace-portals.conf DESTINATION ${CMAKE_INSTALL_DA
 install(FILES README.md LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/midnight-wm)
 
 enable_testing()
+add_executable(x11_timestamp_test tests/x11_timestamp_test.cpp)
+target_include_directories(x11_timestamp_test PRIVATE src)
+add_test(NAME x11_timestamp_test COMMAND x11_timestamp_test)
 add_library(battery_sysctl_fixture SHARED tests/battery_sysctl_fixture.cpp)
 target_link_libraries(battery_sysctl_fixture PRIVATE ${CMAKE_DL_LIBS})
 add_executable(battery_test tests/battery_test.cpp)

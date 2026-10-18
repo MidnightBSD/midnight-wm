@@ -8,6 +8,7 @@
 #include <chrono>
 #include <array>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -24,6 +25,7 @@ public:
 
   bool initialize();
   void handle(xcb_generic_event_t* event);
+  void observe_event(const xcb_generic_event_t* event);
   void tick();
   void set_current_desktop(std::uint32_t desktop);
   void set_showing_desktop(bool showing);
@@ -73,6 +75,13 @@ private:
     bool takes_focus{};
     bool skip_taskbar{};
     bool modal{};
+    bool above{};
+    bool below{};
+    bool skip_pager{};
+    bool attention{};
+    bool urgent{};
+    xcb_window_t user_time_window{};
+    std::optional<xcb_timestamp_t> user_time;
     WindowRole role{WindowRole::normal};
     xcb_window_t transient_for{};
     xcb_atom_t monitor_name{};
@@ -99,17 +108,25 @@ private:
   Monitor workarea_for(const Monitor& monitor) const;
   void update_client_list();
   void update_stacking();
-  void restack_layers();
+  void restack_layers(bool force = true);
   void update_tasks();
   void scan_existing();
   void manage(xcb_window_t window);
   void unmanage(xcb_window_t client, bool destroyed);
-  void map(xcb_window_t client);
+  void map(xcb_window_t client, bool activate = true);
   void focus(xcb_window_t client, xcb_timestamp_t time = XCB_CURRENT_TIME);
   void update_icccm_hints(Frame& frame);
   void constrain_size(const Frame& frame, std::uint16_t& width, std::uint16_t& height) const;
   void fit_dialog(Frame& frame);
   void update_window_state(const Frame& frame);
+  void update_allowed_actions(const Frame& frame);
+  void set_attention(Frame& frame, bool attention);
+  void clear_attention(Frame& frame);
+  void refresh_user_time(Frame& frame);
+  void release_user_time_window(xcb_window_t window);
+  std::optional<std::uint32_t> cardinal(xcb_window_t window, xcb_atom_t name, xcb_atom_t type);
+  bool can_activate(const Frame& frame, std::optional<xcb_timestamp_t> timestamp) const;
+  void clear_focus();
   bool decorated(const Frame& frame) const;
   void set_maximized(xcb_window_t client, bool horz, bool vert);
   void close(xcb_window_t client);
@@ -142,6 +159,7 @@ private:
   StartupNotification* startup_{};
   std::map<xcb_window_t, Frame> frames_;
   std::vector<xcb_window_t> client_order_;
+  std::vector<xcb_window_t> last_root_order_;
   std::map<xcb_window_t, Dock> docks_;
   std::map<xcb_window_t, xcb_window_t> frame_to_client_;
   std::map<std::string, xcb_atom_t> atoms_;
@@ -154,6 +172,8 @@ private:
   bool showing_desktop_{};
   bool sync_available_{};
   xcb_timestamp_t last_event_time_{};
+  xcb_timestamp_t last_user_time_{};
+  std::map<xcb_window_t, std::uint32_t> user_time_masks_;
   std::uint16_t screen_width_{};
   std::uint16_t screen_height_{};
   std::vector<DisplayMonitor> monitors_;
