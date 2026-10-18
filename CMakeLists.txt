@@ -10,7 +10,7 @@ pkg_check_modules(DEPS REQUIRED IMPORTED_TARGET
   xcb xcb-icccm xcb-keysyms xcb-xfixes xcb-randr xcb-xinerama xcb-sync xcb-screensaver cairo-xcb pangocairo
   gio-2.0 gio-unix-2.0 gdk-pixbuf-2.0 garcon-1 sqlite3)
 
-add_library(midnight_core src/store.cpp src/model.cpp src/config.cpp src/session.cpp src/audio.cpp src/battery.cpp src/network.cpp src/wallpaper.cpp
+add_library(midnight_core src/store.cpp src/model.cpp src/config.cpp src/session.cpp src/application_session.cpp src/audio.cpp src/battery.cpp src/network.cpp src/wallpaper.cpp
   src/desktop_launcher.cpp src/thumbnail.cpp src/recent_files.cpp
   src/startup_notification.cpp src/browser_launcher.cpp src/terminal_launcher.cpp src/task_icon.cpp)
 target_include_directories(midnight_core PUBLIC src)
@@ -100,6 +100,15 @@ add_test(NAME network_test COMMAND network_test)
 add_executable(session_test tests/session_test.cpp)
 target_link_libraries(session_test PRIVATE midnight_core)
 add_test(NAME session_test COMMAND session_test)
+
+# XSMP-specific metadata adapter; the shared session model has no X11 types.
+pkg_check_modules(XSMP REQUIRED IMPORTED_TARGET sm ice)
+add_library(midnight_xsmp STATIC src/xsmp_properties.cpp)
+target_link_libraries(midnight_xsmp PUBLIC midnight_core PkgConfig::XSMP)
+target_compile_options(midnight_xsmp PRIVATE -Wall -Wextra -Wpedantic)
+add_executable(xsmp_properties_test tests/xsmp_properties_test.cpp)
+target_link_libraries(xsmp_properties_test PRIVATE midnight_xsmp)
+add_test(NAME xsmp_properties_test COMMAND xsmp_properties_test)
 
 add_executable(model_test tests/model_test.cpp)
 target_link_libraries(model_test PRIVATE midnight_core)

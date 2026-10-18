@@ -8,6 +8,7 @@ MidnightBSD. The current target is MidnightBSD 4.2 with Clang 19 and C++23.
 The build needs CMake, pkg-config, XCB (including icccm, keysyms, XFixes, and
 RandR, Xinerama), Cairo, Pango, GLib/GIO, GdkPixbuf, Garcon, and SQLite 3.
 The companion `midnightbsd-settings` application also needs GTK 3.
+The phase 2 XSMP metadata adapter and its tests need libSM and libICE.
 Install the librsvg GdkPixbuf loader for SVG wallpapers; the mport includes
 this runtime dependency. PNG, JPEG, and GIF loaders must also be available.
 
@@ -175,6 +176,19 @@ documents, and terminal processes are not restored. XSMP application registratio
 a session companion, save prompts, and coordinated application logout remain
 separate follow-up work. No restart commands, credentials, or bus addresses are
 stored in the folder snapshot.
+
+Phase 2 development has started with a separate XSMP metadata adapter and a
+display-independent application/window model. The adapter follows the
+[X.Org SMlib property types](https://xorg.freedesktop.org/releases/X11R7.7/doc/libSM/SMlib.html),
+preserves restart argument boundaries, bounds incoming properties and argument
+data, handles property deletion and restart-style hints, and excludes environment
+and discard/shutdown commands from its retained metadata. Placement matching
+requires an unambiguous session client ID and window role. This is groundwork:
+it does not yet publish `SESSION_MANAGER`, start a companion, persist application
+metadata, launch applications, or change the running desktop. Those connections
+will be added with authenticated ICE transport and isolated client fixtures.
+`xsmp_properties_test` exercises the adapter and window matching in Release
+builds, including malformed properties and transactional rejection.
 
 Run `python3 tests/session_smoke.py --matrix` for isolated save/restore cycles at
 all five supported resolutions, including cancelled logout, window states,
