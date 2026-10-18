@@ -19,6 +19,7 @@
 #include <iostream>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <utility>
 #include <thread>
 #include <vector>
@@ -134,7 +135,7 @@ struct SessionManager::Impl {
   int listener_count{};
   IceListenObj* listeners{};
   std::vector<Auth> authentication;
-  std::filesystem::path directory, authority;
+  std::filesystem::path directory, authority, restore_plan;
   std::string old_authority;
   bool had_authority{}, published{};
   Clock::time_point last_checkpoint{};
@@ -144,7 +145,8 @@ struct SessionManager::Impl {
   ApplicationSessionStore store;
   std::map<std::string, ApplicationRestart> retired;
   bool saving{}, checkpoint_ok{true};
-  Clock::time_point checkpoint_deadline{};
+  Clock::time_point checkpoint_deadline{}, restore_deadline{};
+  std::set<std::string> restore_ids;
 
   ~Impl() {
     for (auto& [connection, client] : clients) SmsCleanUp(connection);
@@ -153,10 +155,13 @@ struct SessionManager::Impl {
     if (listeners) IceFreeListenObjs(listener_count, listeners);
     if (published) {
       g_unsetenv("SESSION_MANAGER");
+      g_unsetenv("MIDNIGHT_WM_RESTORE_PLAN");
+      g_unsetenv("MIDNIGHT_WM_RESTORE_MANAGER");
       if (had_authority) g_setenv("ICEAUTHORITY", old_authority.c_str(), true);
       else g_unsetenv("ICEAUTHORITY");
     }
     if (old_io_handler) IceSetIOErrorHandler(old_io_handler);
+    if (!restore_plan.empty()) unlink(restore_plan.c_str());
     if (!authority.empty()) unlink(authority.c_str());
     if (!directory.empty()) rmdir(directory.c_str());
   }
@@ -178,14 +183,22 @@ struct SessionManager::Impl {
   static Status registered(SmsConn connection, SmPointer data, char* previous_id) {
     auto& self = *static_cast<Impl*>(data);
     auto* client = self.find(connection);
-    // No persisted application IDs exist yet. Let SMlib retry unknown IDs as
-    // a new registration rather than accepting an arbitrary caller's identity.
-    if (previous_id) { std::free(previous_id); return 0; }
-    if (!client || client->registered) return 0;
-    char* id = g_uuid_string_random();
-    client->properties = XsmpProperties(id);
-    const auto result = SmsRegisterClientReply(connection, id);
-    g_free(id);
+    if (!client || client->registered) { std::free(previous_id); return 0; }
+    std::string assigned;
+    if (previous_id) {
+      if (strnlen(previous_id, 257) <= 256 && Clock::now() < self.restore_deadline &&
+          self.restore_ids.erase(previous_id)) assigned = previous_id;
+      std::free(previous_id);
+      // Unknown, duplicate or expired IDs retry as fresh clients via SMlib.
+      if (assigned.empty()) return 0;
+    }
+    if (assigned.empty()) {
+      char* generated = g_uuid_string_random();
+      assigned = generated;
+      g_free(generated);
+    }
+    client->properties = XsmpProperties(assigned);
+    const auto result = SmsRegisterClientReply(connection, assigned.data());
     if (!result) { client->closing = true; return 0; }
     client->registered = true;
     self.begin(*client);
@@ -373,6 +386,21 @@ struct SessionManager::Impl {
     std::free(network_ids);
     published = true;
     old_io_handler = IceSetIOErrorHandler(ignore_io_error);
+    if (load_config().restore_applications) {
+      auto saved = store.load();
+      if (!saved) std::cerr << "Application restore skipped: " << saved.error() << '\n';
+      else if (*saved && !(**saved).applications.empty()) {
+        restore_plan = directory / "restore.ini";
+        if (auto copied = ApplicationSessionStore(restore_plan).save(**saved); !copied)
+          std::cerr << "Application restore skipped: " << copied.error() << '\n';
+        else {
+          for (const auto& application : (**saved).applications) restore_ids.insert(application.client_id);
+          restore_deadline = Clock::now() + std::chrono::seconds(120);
+          g_setenv("MIDNIGHT_WM_RESTORE_PLAN", restore_plan.c_str(), true);
+          g_setenv("MIDNIGHT_WM_RESTORE_MANAGER", g_getenv("SESSION_MANAGER"), true);
+        }
+      }
+    }
     return {};
   }
 
@@ -381,7 +409,8 @@ struct SessionManager::Impl {
     // Do not mix an in-flight initial/local checkpoint with a new global one.
     if (pending() || saving || now - last_checkpoint < std::chrono::seconds(1)) return;
     last_checkpoint = now;
-    saving = persist && load_config().save_application_checkpoints;
+    // Preserve the source checkpoint while saved clients are still expected.
+    saving = persist && restore_ids.empty() && load_config().save_application_checkpoints;
     // XSMP has no checkpoint sequence number. A late SaveYourselfDone from a
     // timed-out save cannot safely authorize a later persisted checkpoint.
     checkpoint_ok = std::ranges::none_of(clients, [](const auto& item) {
@@ -420,6 +449,7 @@ struct SessionManager::Impl {
   }
 
   void tick(int timeout_ms) {
+    if (Clock::now() >= restore_deadline) restore_ids.clear();
     std::vector<pollfd> descriptors;
     const auto old_peer_count = peers.size();
     for (int i = 0; i < listener_count; ++i)

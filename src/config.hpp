@@ -19,6 +19,7 @@ struct ThemeConfig {
   bool restore_session{};
   bool save_session{};
   bool save_application_checkpoints{};
+  bool restore_applications{};
   std::string ui_font{"Sans"};
   std::string title_font{"Sans Bold"};
   std::string desktop_image;

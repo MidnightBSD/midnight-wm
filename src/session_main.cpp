@@ -60,11 +60,16 @@ int main(int argc, char** argv) {
   else command.push_back(program.data());
   command.push_back(nullptr);
   if (const char* inherited = std::getenv("SESSION_MANAGER"); inherited && *inherited) {
+    g_unsetenv("MIDNIGHT_WM_RESTORE_PLAN");
+    g_unsetenv("MIDNIGHT_WM_RESTORE_MANAGER");
     execvp(command[0], command.data());
     std::cerr << "Could not launch session: " << std::strerror(errno) << '\n';
     return 1;
   }
 
+  // Handoff state belongs only to this new companion, never an inherited one.
+  g_unsetenv("MIDNIGHT_WM_RESTORE_PLAN");
+  g_unsetenv("MIDNIGHT_WM_RESTORE_MANAGER");
   std::signal(SIGINT, stop);
   std::signal(SIGTERM, stop);
   std::signal(SIGUSR1, request_checkpoint);

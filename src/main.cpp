@@ -1,4 +1,5 @@
 #include "autostart.hpp"
+#include "application_restore.hpp"
 #include "clipboard.hpp"
 #include "compositor.hpp"
 #include "config.hpp"
@@ -125,6 +126,7 @@ int main(int argc, char** argv) {
     g_setenv("XDG_CURRENT_DESKTOP", "MidnightWorkspace", true);
 
   midnight::ensure_session_bus(argc, argv);
+  auto application_plan = midnight::take_application_restore_plan(midnight::load_config().restore_applications);
 
   int screen_number = 0;
   xcb_connection_t* connection = xcb_connect(nullptr, &screen_number);
@@ -220,7 +222,13 @@ int main(int argc, char** argv) {
             shell.restore_session(**saved);
           }
         }
-        midnight::launch_autostart();
+        midnight::ApplicationRestorer applications;
+        if (shell.theme().restore_applications) {
+          if (!application_plan) std::cerr << "Application restore skipped: " << application_plan.error() << '\n';
+          else if (*application_plan)
+            for (const auto& error : applications.restore(**application_plan)) std::cerr << error << '\n';
+        }
+        midnight::launch_autostart(applications.launched_executables());
         ConfigReload config_reload;
 
         pollfd display{.fd = xcb_get_file_descriptor(connection), .events = POLLIN, .revents = 0};
@@ -256,6 +264,7 @@ int main(int argc, char** argv) {
             notifications.refresh();
             menu_popup.refresh_geometry();
           }
+          applications.tick();
           wm.tick();
           desktop_services.tick();
           shell.tick();

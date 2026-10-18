@@ -1,4 +1,5 @@
 #include "autostart.hpp"
+#include "application_restore.hpp"
 
 #include <glib.h>
 
@@ -44,6 +45,19 @@ int main() {
   const auto entries = midnight::find_autostart_entries({user, system});
   std::set<std::string> names;
   for (const auto& entry : entries) names.insert(entry.filename().string());
+  // A single restored direct executable masks one eligible autostart entry.
+  // Multiple profiles or restores are ambiguous and must remain eligible.
+  const auto single = root / "single";
+  write_entry(single, "one.desktop", "");
+  const auto identity = midnight::resolve_session_executable("/usr/bin/true");
+  if (!identity) return 1;
+  const std::vector<std::string> restored{*identity};
+  if (!midnight::find_autostart_entries({single}, restored).empty()) return 1;
+  const std::vector<std::string> multiple{*identity, *identity};
+  if (midnight::find_autostart_entries({single}, multiple).size() != 1) return 1;
+  write_entry(single, "two.desktop", "");
+  if (midnight::find_autostart_entries({single}, restored).size() != 2) return 1;
+  if (midnight::find_autostart_entries({single}, {}).size() != 2) return 1;
   std::filesystem::remove_all(root);
 
   if (names != std::set<std::string>{"nodisplay.desktop", "regular.desktop", "system.desktop"}) {
