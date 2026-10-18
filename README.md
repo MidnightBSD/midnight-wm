@@ -174,8 +174,8 @@ replacement retain the existing snapshot; save errors go to the session log.
 Participating XSMP applications can now be reopened when application restoration
 is enabled. Applications control their own document and tab restoration; terminal
 commands and other process state are not resumed. Participating windows restore
-their saved placement and supported states. Application save prompts and
-coordinated logout remain follow-up work for issue #31. No restart
+their saved placement and supported states. Application save prompts participate
+in coordinated logout through the session companion. No restart
 commands, credentials, or bus addresses are stored in the folder snapshot.
 
 The Xsession entry now starts `midnightbsd-session`, which establishes the session
@@ -208,8 +208,9 @@ checkpoints, including requests through `SIGUSR1`, to
 `$XDG_STATE_HOME/midnight-wm/applications.ini` (normally
 `~/.local/state/midnight-wm/applications.ini`). This preference defaults to false,
 is read for each checkpoint, and is independent of folder saving. Initial and
-local checkpoints remain memory-only. A successful normal WM exit requests a
-final global checkpoint; crashes and termination signals do not save on exit.
+local checkpoints remain memory-only. Confirmed logout takes a final global
+checkpoint before client shutdown. A normal WM exit outside that flow requests a
+noninteractive final checkpoint; crashes and termination signals do not save on exit.
 A request during another save is ignored rather than merging save transactions.
 
 The versioned application snapshot uses a private 0700 directory, a 0600 file,
@@ -273,11 +274,33 @@ Normal geometry is recovered into the nearest current work area, excluding panel
 and frame decorations; maximized/fullscreen state then uses the current monitor.
 Shading preserves normal client dimensions. Sticky placement and minimized state
 are not restored, and windows without XSMP identity are not matched by title or
-class. Coordinated logout and save prompts remain follow-up work.
+class.
 
-The companion does not send `Die`, request save prompts, or honor client requests
-to end the desktop. Coordinated application logout will be added separately.
-It watches the WM it launched, propagates that child's exit status, and removes
+Confirming **Exit X11 session…** with `midnightbsd-session` starts coordinated
+logout while the desktop continues dispatching input and drawing. Participating
+applications receive an interactive XSMP save request, with one application
+allowed to show its save prompt at a time. Cancelling an application's prompt,
+a failed save, a disconnected client, or a save timeout cancels logout without
+sending `Die`; the previous application checkpoint is preserved. The panel shows
+a notice when logout is waiting or cancelled. Outstanding cancelled saves must
+settle before another attempt; a timed-out client must reconnect so late replies
+cannot authorize a later shutdown.
+
+Ordinary application saves have a three-second deadline. Prompt requests queue
+within a sixty-second overall logout deadline; exceeding it cancels logout.
+After every participating client saves successfully, the companion captures
+window placement and, when application checkpoint saving is enabled, writes the
+final snapshot before sending `Die`. Capture or snapshot-write failure cancels
+logout. It waits up to three seconds for clients to disconnect, then lets the WM
+save its built-in folders and end the desktop. Clients ignoring `Die` are not
+signalled or killed. Disabling application checkpoint saving still allows save
+prompts and orderly logout, without replacing the saved application session.
+
+Only the WM's confirmed exit action initiates this flow; application requests to
+end the desktop remain ignored. Standalone WMs and sessions under an existing
+external manager retain their previous exit behavior. Crashes and termination
+signals do not initiate interactive shutdown. The companion watches the WM it
+launched, propagates that child's exit status, and removes
 its owned sockets and authority file. A termination signal is forwarded only to
 its owned child, with a bounded wait; registered applications are not signalled.
 
@@ -297,6 +320,9 @@ initial/local/global checkpoints, phase-2 saves, unknown properties, deletion,
 malformed updates, unresponsive clients, partial pre-auth frames, disconnections,
 inherited managers, bus bootstrapping, argument boundaries, lifecycle cleanup,
 and opt-in checkpoint persistence with failure/timeout preservation.
+`coordinated_logout_smoke` checks interactive cancellation, save failures/timeouts,
+serialized prompts, responsive workspace switching, checkpoint preservation/write
+failures, successful phase-2 shutdown, and bounded client exit.
 `application_checkpoint_test` covers snapshot validation, exact argument round
 trips, privacy, malformed-state preservation and interrupted writes. The transport
 test is registered with CTest when Python 3 and `dbus-run-session` are available.

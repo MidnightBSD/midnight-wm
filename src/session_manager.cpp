@@ -11,6 +11,7 @@
 #include <array>
 #include <chrono>
 #include <condition_variable>
+#include <deque>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -125,6 +126,7 @@ struct SessionManager::Impl {
     std::map<std::string, Property> raw;
     std::optional<ApplicationRestart> completed;
     Clock::time_point deadline{}, last_request{};
+    bool logout_participant{}, interaction_requested{};
     bool registered{}, closing{}, waiting{}, phase2{}, phase2_sent{}, needs_complete{}, in_checkpoint{}, timed_out{};
   };
   struct Auth {
@@ -146,6 +148,11 @@ struct SessionManager::Impl {
   ApplicationSessionStore store;
   std::unique_ptr<SessionWindowChannel> window_channel;
   std::map<std::string, ApplicationRestart> retired;
+  enum class Logout { idle, preparing, saving, capture, dying, complete };
+  Logout logout{Logout::idle};
+  SmsConn interacting{};
+  std::deque<SmsConn> interaction_queue;
+  Clock::time_point logout_deadline{};
   bool saving{}, checkpoint_ok{true};
   Clock::time_point checkpoint_deadline{}, restore_deadline{};
   std::set<std::string> restore_ids;
@@ -180,13 +187,20 @@ struct SessionManager::Impl {
     client.phase2 = client.phase2_sent = false;
     client.needs_complete = true;
     client.deadline = Clock::now() + timeout;
-    SmsSaveYourself(client.connection, save_type, False, SmInteractStyleNone, True);
+    const bool shutdown = logout == Logout::saving;
+    SmsSaveYourself(client.connection, save_type, shutdown,
+                   shutdown ? SmInteractStyleAny : SmInteractStyleNone, !shutdown);
   }
 
   static Status registered(SmsConn connection, SmPointer data, char* previous_id) {
     auto& self = *static_cast<Impl*>(data);
     auto* client = self.find(connection);
     if (!client || client->registered) { std::free(previous_id); return 0; }
+    if (self.logout != Logout::idle) {
+      client->closing = true;
+      std::free(previous_id);
+      return 0;
+    }
     std::string assigned;
     if (previous_id) {
       if (strnlen(previous_id, 257) <= 256 && Clock::now() < self.restore_deadline &&
@@ -213,9 +227,9 @@ struct SessionManager::Impl {
     auto& self = *static_cast<Impl*>(data);
     auto* client = self.find(connection);
     if (!client || !client->registered || client->closing) return;
-    // Coordinated application logout is a later phase. Never turn a client
-    // request into desktop termination or promise shutdown interaction here.
-    if (shutdown || (save_type != SmSaveLocal && save_type != SmSaveGlobal && save_type != SmSaveBoth)) return;
+    // Only the owned WM's confirmed exit action may initiate shutdown.
+    // Application requests cannot terminate the desktop or bypass confirmation.
+    if (self.logout != Logout::idle || shutdown || (save_type != SmSaveLocal && save_type != SmSaveGlobal && save_type != SmSaveBoth)) return;
     const auto now = Clock::now();
     if (now - client->last_request < std::chrono::seconds(1)) return;
     client->last_request = now;
@@ -230,10 +244,126 @@ struct SessionManager::Impl {
 
   static void save_done(SmsConn connection, SmPointer data, Bool success) {
     if (auto* client = static_cast<Impl*>(data)->find(connection); client && client->waiting) {
+      auto& self = *static_cast<Impl*>(data);
+      if (Clock::now() >= client->deadline ||
+          (client->logout_participant && Clock::now() >= self.logout_deadline)) {
+        client->waiting = false;
+        client->timed_out = true;
+        client->completed.reset();
+        if (client->in_checkpoint) self.checkpoint_ok = false;
+        if (client->logout_participant) self.cancel_logout("Application save reply arrived after its deadline");
+        return;
+      }
       client->waiting = false;
       client->completed = success ? client->properties.restart() : std::nullopt;
-      auto& self = *static_cast<Impl*>(data);
       if (!success && client->in_checkpoint) self.checkpoint_ok = false;
+      if (!success && client->logout_participant) self.cancel_logout("Application could not save");
+    }
+  }
+
+  static void interact_request(SmsConn connection, SmPointer data, int dialog) {
+    auto& self = *static_cast<Impl*>(data);
+    auto* client = self.find(connection);
+    if (self.logout != Logout::saving || !client || !client->waiting ||
+        !client->logout_participant || Clock::now() >= client->deadline ||
+        client->interaction_requested ||
+        (dialog != SmDialogNormal && dialog != SmDialogError)) return;
+    self.interaction_queue.push_back(connection);
+    client->interaction_requested = true;
+    client->deadline = self.logout_deadline;
+  }
+
+  static void interact_done(SmsConn connection, SmPointer data, Bool cancel) {
+    auto& self = *static_cast<Impl*>(data);
+    if (self.logout != Logout::saving || self.interacting != connection) return;
+    if (Clock::now() >= self.logout_deadline) { self.cancel_logout("Application interaction timed out"); return; }
+    self.interacting = nullptr;
+    if (auto* client = self.find(connection)) {
+      client->interaction_requested = false;
+      client->deadline = Clock::now() + timeout;
+    }
+    if (cancel) self.cancel_logout("Application cancelled logout");
+  }
+
+  void cancel_logout(const char* reason) {
+    if (logout == Logout::idle || logout == Logout::complete || logout == Logout::dying) return;
+    std::cerr << "Logout cancelled: " << reason << '\n';
+    for (auto& [connection, client] : clients) {
+      if (client->logout_participant) SmsShutdownCancelled(connection);
+      client->logout_participant = client->interaction_requested = client->in_checkpoint = false;
+      // Preserve outstanding waits: XSMP has no request IDs. Do not let a late
+      // SaveYourselfDone satisfy a later save or shutdown transaction.
+      if (client->waiting) client->deadline = Clock::now() + timeout;
+    }
+    interacting = nullptr;
+    interaction_queue.clear();
+    saving = false;
+    logout = Logout::idle;
+    window_channel->logout_reply(false);
+  }
+
+  void advance_logout() {
+    const auto now = Clock::now();
+    if (window_channel->take_logout_request() && logout == Logout::idle) {
+      logout = Logout::preparing;
+      logout_deadline = now + std::chrono::seconds(60);
+    }
+    if (logout == Logout::idle || logout == Logout::complete) return;
+    if (logout != Logout::dying && (window_channel->logout_aborted() || now >= logout_deadline)) {
+      cancel_logout("Session request expired or disconnected");
+      return;
+    }
+    if (logout == Logout::preparing) {
+      if (pending() || saving) return;
+      if (std::ranges::any_of(clients, [](const auto& item) { return item.second->timed_out; })) {
+        cancel_logout("A timed-out application must reconnect before logout");
+        return;
+      }
+      logout = Logout::saving;
+      checkpoint_ok = true;
+      saving = restore_ids.empty() && load_config().save_application_checkpoints;
+      for (auto& [connection, client] : clients) {
+        if (!client->registered || client->closing) continue;
+        client->logout_participant = true;
+        client->in_checkpoint = saving;
+        client->completed.reset();
+        begin(*client, SmSaveBoth);
+      }
+    }
+    if (logout == Logout::saving) {
+      while (!interacting && !interaction_queue.empty()) {
+        const auto connection = interaction_queue.front();
+        interaction_queue.pop_front();
+        auto* client = find(connection);
+        if (client && client->interaction_requested && client->waiting && !client->closing) {
+          interacting = connection;
+          SmsInteract(connection);
+        }
+      }
+      if (pending() || interacting) return;
+      logout = Logout::capture;
+      checkpoint_deadline = now + timeout;
+      if (saving) window_channel->request();
+    }
+    if (logout == Logout::capture) {
+      finish_checkpoint();
+      if (saving) return;
+      if (!checkpoint_ok) { cancel_logout("Final checkpoint failed"); return; }
+      // Only successful saves reach Die. Never signal registered processes.
+      for (auto& [connection, client] : clients) {
+        if (client->logout_participant && !client->closing) SmsDie(connection);
+        client->needs_complete = false;
+      }
+      logout = Logout::dying;
+      logout_deadline = now + timeout;
+    }
+    if (logout == Logout::dying) {
+      const bool remaining = std::ranges::any_of(clients, [](const auto& item) {
+        return item.second->logout_participant && !item.second->closing;
+      });
+      if (remaining && now < logout_deadline) return;
+      logout = Logout::complete;
+      window_channel->logout_reply(true);
     }
   }
 
@@ -302,7 +432,7 @@ struct SessionManager::Impl {
   static Status new_client(SmsConn connection, SmPointer data, unsigned long* mask,
                             SmsCallbacks* callbacks, char** reason) {
     auto& self = *static_cast<Impl*>(data);
-    if (self.clients.size() + self.retired.size() >= connection_limit || self.clients.contains(connection)) {
+    if (self.logout != Logout::idle || self.clients.size() + self.retired.size() >= connection_limit || self.clients.contains(connection)) {
       *reason = strdup("Session client limit reached");
       return 0;
     }
@@ -311,8 +441,8 @@ struct SessionManager::Impl {
       SmsSaveYourselfRequestProcMask | SmsSaveYourselfP2RequestProcMask | SmsSaveYourselfDoneProcMask |
       SmsCloseConnectionProcMask | SmsSetPropertiesProcMask | SmsDeletePropertiesProcMask | SmsGetPropertiesProcMask;
     callbacks->register_client = {registered, data};
-    callbacks->interact_request = {+[](SmsConn, SmPointer, int) {}, data};
-    callbacks->interact_done = {+[](SmsConn, SmPointer, Bool) {}, data};
+    callbacks->interact_request = {interact_request, data};
+    callbacks->interact_done = {interact_done, data};
     callbacks->save_yourself_request = {save_request, data};
     callbacks->save_yourself_phase2_request = {phase2_request, data};
     callbacks->save_yourself_done = {save_done, data};
@@ -412,7 +542,7 @@ struct SessionManager::Impl {
   void checkpoint(bool persist = true, bool final_checkpoint = false) {
     const auto now = Clock::now();
     // Do not mix an in-flight initial/local checkpoint with a new global one.
-    if (pending() || saving || (!final_checkpoint && now - last_checkpoint < std::chrono::seconds(1))) return;
+    if (logout != Logout::idle || pending() || saving || (!final_checkpoint && now - last_checkpoint < std::chrono::seconds(1))) return;
     last_checkpoint = now;
     // Preserve the source checkpoint while saved clients are still expected.
     saving = persist && restore_ids.empty() && load_config().save_application_checkpoints;
@@ -432,7 +562,7 @@ struct SessionManager::Impl {
   }
 
   void finish_checkpoint() {
-    if (!saving) return;
+    if (!saving || logout == Logout::saving) return;
     if (window_channel->pending()) return;
     const bool waiting = std::ranges::any_of(clients, [](const auto& item) {
       return item.second->in_checkpoint && item.second->waiting;
@@ -456,8 +586,10 @@ struct SessionManager::Impl {
       }
     }
     if (!checkpoint_ok) std::cerr << "Application checkpoint not saved: incomplete application or window save\n";
-    else if (auto saved = store.save(checkpoint); !saved)
+    else if (auto saved = store.save(checkpoint); !saved) {
+      checkpoint_ok = false;
       std::cerr << "Application checkpoint not saved: " << saved.error() << '\n';
+    }
     saving = false;
   }
 
@@ -520,6 +652,9 @@ struct SessionManager::Impl {
       for (auto client = clients.begin(); client != clients.end();) {
         if (SmsGetIceConnection(client->first) != it->ice) { ++client; continue; }
         auto& state = *client->second;
+        if (interacting == client->first) interacting = nullptr;
+        if (state.logout_participant && logout != Logout::dying)
+          cancel_logout("Application disconnected during save");
         if (state.waiting && state.in_checkpoint) checkpoint_ok = false;
         // RestartAnyway survives a clean or abrupt client exit. Other styles
         // are retained only while their client is running; no immediate restart
@@ -539,6 +674,7 @@ struct SessionManager::Impl {
         client->timed_out = true;
         client->completed.reset();
         if (client->in_checkpoint) checkpoint_ok = false;
+        if (client->logout_participant) cancel_logout("Application save timed out");
       }
     const bool phase1_done = std::ranges::none_of(clients, [](const auto& item) {
       return item.second->waiting && !item.second->phase2;
@@ -549,8 +685,9 @@ struct SessionManager::Impl {
         SmsSaveYourselfPhase2(connection);
       }
     }
+    advance_logout();
     finish_checkpoint();
-    if (!pending()) for (auto& [connection, client] : clients) {
+    if (logout == Logout::idle && !pending()) for (auto& [connection, client] : clients) {
       if (client->needs_complete) { SmsSaveComplete(connection); client->needs_complete = false; }
     }
   }
@@ -561,6 +698,7 @@ SessionManager::~SessionManager() = default;
 std::expected<void, std::string> SessionManager::initialize() { return impl_->initialize(); }
 int SessionManager::release_window_child_fd() { return impl_->window_channel->release_child_fd(); }
 void SessionManager::tick(int timeout_ms) { impl_->tick(timeout_ms); }
+bool SessionManager::logout_completed() const { return impl_->logout == Impl::Logout::complete; }
 void SessionManager::checkpoint(bool persist, bool final_checkpoint) { impl_->checkpoint(persist, final_checkpoint); }
 bool SessionManager::checkpoint_pending() const { return impl_->pending() || impl_->saving; }
 } // namespace midnight

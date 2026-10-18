@@ -180,7 +180,10 @@ int main(int argc, char** argv) {
           });
       midnight::XSettings xsettings(connection, screen, screen_number);
       midnight::DesktopServices desktop_services(connection, shell.theme());
-      shell.set_exit_handler([] { running = false; });
+      shell.set_exit_handler([&] {
+        if (!window_reporter.request_logout()) running = false;
+        else shell.show_session_notice("Waiting for applications to save before logout.");
+      });
       if (!dnd.initialize()) std::cerr << "XDND integration unavailable\n";
       if (!clipboard.initialize()) std::cerr << "XFixes clipboard integration unavailable\n";
       shell.set_file_clipboard_handlers(
@@ -272,6 +275,10 @@ int main(int argc, char** argv) {
           applications.tick();
           wm.tick();
           window_reporter.tick([&wm] { return wm.application_windows(); });
+          if (auto logout = window_reporter.logout_result()) {
+            if (*logout) running = false;
+            else shell.show_session_notice("Logout cancelled: an application cancelled, failed, or did not respond.");
+          }
           desktop_services.tick();
           shell.tick();
           tray.tick();
