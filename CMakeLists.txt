@@ -20,7 +20,8 @@ target_compile_options(midnight_core PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(midnight-wm src/main.cpp src/x11.cpp src/shell.cpp src/clipboard.cpp src/dnd.cpp
   src/tray.cpp src/status_notifier.cpp src/status_panel.cpp src/dbus_menu.cpp
   src/dbus_menu_popup.cpp src/autostart.cpp src/notifications.cpp src/xsettings.cpp
-  src/file_manager1.cpp src/keyring_session.cpp src/media_player.cpp src/desktop_services.cpp)
+  src/file_manager1.cpp src/keyring_session.cpp src/media_player.cpp src/desktop_services.cpp
+  src/compositor.cpp)
 target_link_libraries(midnight-wm PRIVATE midnight_core)
 target_compile_options(midnight-wm PRIVATE -Wall -Wextra -Wpedantic)
 
@@ -60,6 +61,11 @@ add_test(NAME battery_test COMMAND battery_test)
 find_program(XVFB Xvfb)
 find_package(Python3 COMPONENTS Interpreter)
 if(XVFB AND Python3_Interpreter_FOUND)
+  add_executable(compositor_test tests/compositor_test.cpp src/compositor.cpp)
+  target_link_libraries(compositor_test PRIVATE midnight_core)
+  add_test(NAME compositor_test COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/security_x11_test.py $<TARGET_FILE:compositor_test>)
+  set_tests_properties(compositor_test PROPERTIES TIMEOUT 25)
   add_executable(security_x11_test tests/security_x11_test.cpp src/clipboard.cpp src/dnd.cpp)
   target_link_libraries(security_x11_test PRIVATE midnight_core)
   add_test(NAME security_x11_test COMMAND ${Python3_EXECUTABLE}

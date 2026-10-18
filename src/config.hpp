@@ -15,6 +15,7 @@ struct ThemeConfig {
   std::string clock_format{"%a %H:%M"};
   bool dark_mode{};
   bool show_battery{true};
+  bool compositing{true};
   std::string ui_font{"Sans"};
   std::string title_font{"Sans Bold"};
   std::string desktop_image;

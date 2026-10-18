@@ -27,6 +27,11 @@ int main() {
   const auto defaults = midnight::load_config();
   check(!defaults.dark_mode && defaults.ui_font == "Sans" && defaults.title_font == "Sans Bold",
         "missing config must preserve default fonts and light mode");
+  check(defaults.compositing, "compositing must default to enabled");
+  check(!midnight::parse_config("[Workspace]\ncompositing=false\n")->compositing,
+        "compositing can be disabled");
+  check(midnight::parse_config("[Workspace]\ncompositing=invalid\n")->compositing,
+        "invalid compositing value must retain default");
   check(defaults.show_battery, "battery indicator must default to enabled");
   check(!midnight::parse_config("[Workspace]\nshow_battery=false\n")->show_battery,
         "battery indicator can be disabled");

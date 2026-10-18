@@ -58,6 +58,7 @@ class Settings {
     auto* appearance = page(notebook, "Appearance");
     row_ = 0;
     checkbox(appearance, "_Dark controls and window decorations", "Workspace", "dark_mode", false);
+    checkbox(appearance, "Window _shadows", "Workspace", "compositing", true);
     color(appearance, "Desktop color", "desktop_color", "#7866a8");
     color(appearance, "Window accent", "accent_color", "#3b205f");
     panel_color(appearance);

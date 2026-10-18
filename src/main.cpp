@@ -1,5 +1,6 @@
 #include "autostart.hpp"
 #include "clipboard.hpp"
+#include "compositor.hpp"
 #include "config.hpp"
 #include "dnd.hpp"
 #include "file_manager1.hpp"
@@ -273,6 +274,9 @@ int main(int argc, char** argv) {
         if (!file_manager.initialize()) std::cerr << "FileManager1 D-Bus unavailable\n";
         (void)xsettings.initialize();
         (void)desktop_services.initialize();
+        midnight::Compositor compositor(connection, screen_number);
+        compositor.set_enabled(shell.theme().compositing);
+        compositor.tick();
         midnight::launch_autostart();
         ConfigReload config_reload;
 
@@ -301,6 +305,7 @@ int main(int argc, char** argv) {
           while (g_main_context_pending(nullptr)) g_main_context_iteration(nullptr, false);
           if (auto config = config_reload.poll()) {
             shell.apply_config(std::move(*config));
+            compositor.set_enabled(shell.theme().compositing);
             wm.refresh_theme();
             desktop_services.refresh(shell.theme());
             tray.refresh();
@@ -318,6 +323,7 @@ int main(int argc, char** argv) {
           notifications.tick();
           startup.tick();
           xsettings.tick();
+          compositor.tick();
           xcb_flush(connection);
           if (poll(&display, 1, (shell.menu_animation_active() || wm.resize_pending()) ? 16 : 100) < 0 && errno != EINTR) break;
         }
