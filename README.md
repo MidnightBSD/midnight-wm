@@ -239,7 +239,11 @@ theme, search by name, and choose an icon. **Default** restores the built-in
 folder or file icon. Existing image paths continue to display.
 
 Drag files between folder windows, the desktop, and other XDND-aware file
-managers. Clipboard and drag operations support file URIs; text selection uses
+managers. Drag desktop files or folders onto Trash to move them to recoverable
+Trash, or onto a folder icon to move them into that folder. Hold Ctrl when
+starting a drag to copy instead. A preview follows the pointer with the item
+icon, name, and Move or Copy label. Built-in desktop shortcuts remain in place.
+Clipboard and drag operations support file URIs; text selection uses
 standard X11 selection targets, including incremental transfers for large text.
 The workspace keeps a text or file clipboard snapshot when its original owner
 exits. The context menu provides object properties, shadows, templates, and

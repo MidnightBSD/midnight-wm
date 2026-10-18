@@ -72,7 +72,15 @@ std::vector<ShellItem> ShellModel::items(const std::filesystem::path& path, bool
     for (auto& object : store_.children(parent)) {
       const bool physical = !built_in_folder(object.id) &&
         (object.kind == ObjectKind::file || object.kind == ObjectKind::folder);
-      out.push_back({object, resolve_path(object.target), physical, false, "", {}});
+      const auto target = resolve_path(object.target);
+      if (physical) {
+        // Metadata can outlive a file after XDND, paste, or an external move.
+        // Inspect the directory entry itself so dangling symlinks stay visible.
+        std::error_code status_error;
+        const auto status = std::filesystem::symlink_status(target, status_error);
+        if (status.type() == std::filesystem::file_type::not_found) continue;
+      }
+      out.push_back({object, target, physical, false, "", {}});
     }
     std::error_code ec;
     if (std::filesystem::is_directory(path, ec)) {

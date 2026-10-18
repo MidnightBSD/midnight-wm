@@ -255,6 +255,9 @@ int main(int argc, char** argv) {
           [&clipboard](std::function<void(std::vector<std::filesystem::path>, bool)> callback) {
             clipboard.request_files(std::move(callback));
           });
+      dnd.set_drag_feedback([&shell](const std::filesystem::path& path, bool move, int x, int y) {
+        shell.update_drag_feedback(path, move, x, y);
+      });
       shell.set_dnd_handlers(
           [&dnd](xcb_window_t window, midnight::Shell::DropHandler callback) {
             dnd.register_target(window, std::move(callback));
