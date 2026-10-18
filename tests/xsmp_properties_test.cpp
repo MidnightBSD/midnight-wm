@@ -121,6 +121,8 @@ int main() {
   check(!match_application_window(windows, "client-123", "editor", claimed), "saved placement was reused");
   windows.push_back(windows.front());
   check(!match_application_window(windows, "client-123", "editor"), "ambiguous role matched a window");
+  check(!match_application_window(windows, "client-123", "editor", claimed),
+        "claiming an ambiguous candidate made another candidate match");
   windows.push_back({"single", ""});
   check(!match_application_window(windows, "single", ""), "ambiguous role-less window matched");
   if (passed) std::cout << "XSMP property validation, ownership, restart policy, limits and role matching passed\n";

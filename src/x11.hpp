@@ -5,6 +5,7 @@
 #include "display_monitors.hpp"
 #include "desktop_layout.hpp"
 #include "task_icon.hpp"
+#include "session_windows.hpp"
 
 #include <cstdint>
 #include <chrono>
@@ -29,6 +30,8 @@ public:
   void handle(xcb_generic_event_t* event);
   void observe_event(const xcb_generic_event_t* event);
   void tick();
+  WindowReport application_windows();
+  void restore_application_windows(std::vector<ApplicationWindow> windows);
   void set_current_desktop(std::uint32_t desktop);
   void set_showing_desktop(bool showing);
   [[nodiscard]] std::uint32_t current_desktop() const { return current_desktop_; }
@@ -41,6 +44,7 @@ public:
 private:
   enum class WindowRole { normal, dialog, utility, splash };
   struct Frame {
+    std::chrono::steady_clock::time_point placement_until{};
     xcb_window_t client{};
     TaskIcon icon;
     xcb_window_t frame{};
@@ -120,6 +124,11 @@ private:
   void set_fullscreen_monitors(Frame& frame, const std::array<std::uint32_t, 4>& indices);
   void update_tasks();
   void update_icon(Frame& frame);
+  std::optional<std::pair<std::string, std::string>> application_identity(xcb_window_t window);
+  void apply_application_placements();
+  std::vector<ApplicationWindow> placements_;
+  std::vector<std::size_t> claimed_placements_;
+  std::chrono::steady_clock::time_point placement_deadline_{}, next_placement_check_{};
   void scan_existing();
   void manage(xcb_window_t window);
   void unmanage(xcb_window_t client, bool destroyed);

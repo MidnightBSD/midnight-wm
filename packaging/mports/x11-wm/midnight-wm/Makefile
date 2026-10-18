@@ -14,7 +14,12 @@ LIB_DEPENDS=	libxcb-icccm.so:x11/xcb-util-wm \
 		libxcb-keysyms.so:x11/xcb-util-keysyms \
 		libgarcon-1.so:sysutils/garcon \
 		libsqlite3.so:databases/sqlite3
-TEST_DEPENDS=	dbus-run-session:devel/dbus
+TEST_DEPENDS=	dbus-run-session:devel/dbus \
+		Xvfb:x11-servers/xorg-server@xvfb \
+		xdotool:x11/xdotool \
+		wmctrl:x11/wmctrl-fork \
+		xprop:x11/xprop \
+		xwininfo:x11/xwininfo
 RUN_DEPENDS=	picom:x11-wm/picom \
 		${LOCALBASE}/libexec/gvfsd-trash:filesystems/gvfs \
 		${LOCALBASE}/share/backgrounds/midnightbsd/mnbsd_bg_purple.png:x11-themes/midnightbsd-backgrounds

@@ -16,8 +16,9 @@ public:
   SessionManager(const SessionManager&) = delete;
   SessionManager& operator=(const SessionManager&) = delete;
   std::expected<void, std::string> initialize();
+  int release_window_child_fd();
   void tick(int timeout_ms = 100);
-  void checkpoint(bool persist = true);
+  void checkpoint(bool persist = true, bool final_checkpoint = false);
   bool checkpoint_pending() const;
 private:
   struct Impl;

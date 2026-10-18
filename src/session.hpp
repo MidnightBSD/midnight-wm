@@ -30,7 +30,8 @@ struct SessionSnapshot {
 // Areas exclude panels. Recover onto the nearest area and keep the whole folder
 // reachable, even when a saved monitor has disappeared.
 SessionGeometry recover_session_geometry(SessionGeometry saved,
-                                        const std::vector<SessionGeometry>& areas);
+                                        const std::vector<SessionGeometry>& areas,
+                                        int minimum_width = 250, int minimum_height = 180);
 
 class SessionStore {
 public:

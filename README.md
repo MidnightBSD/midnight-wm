@@ -173,8 +173,9 @@ replacement retain the existing snapshot; save errors go to the session log.
 
 Participating XSMP applications can now be reopened when application restoration
 is enabled. Applications control their own document and tab restoration; terminal
-commands and other process state are not resumed. Window placement, save prompts,
-and coordinated application logout remain follow-up work for issue #31. No restart
+commands and other process state are not resumed. Participating windows restore
+their saved placement and supported states. Application save prompts and
+coordinated logout remain follow-up work for issue #31. No restart
 commands, credentials, or bus addresses are stored in the folder snapshot.
 
 The Xsession entry now starts `midnightbsd-session`, which establishes the session
@@ -249,7 +250,30 @@ both resolve to one unique direct executable. Failed restores leave autostart
 eligible. Multiple profiles, multiple restores of the same executable and wrappers
 are left to normal autostart rather than guessing which application they represent.
 This conservative matching cannot eliminate duplicates in ambiguous cases.
-Window placement and coordinated logout remain follow-up work.
+Version 2 application checkpoints include window placement: normal geometry,
+workspace, maximized axes, fullscreen and shaded state, keyed by XSMP client ID
+and window role. Version 1 snapshots remain readable without placements. The WM
+reads `SM_CLIENT_ID` from the window or its `WM_CLIENT_LEADER` and reads
+`WM_WINDOW_ROLE` from the window itself. Missing or malformed identities and
+ambiguous roles are omitted; a role-less window must be unique for its client.
+Only windows belonging to successfully checkpointed clients are persisted.
+Up to 512 placements fit within the existing one-MiB snapshot limit.
+
+The companion requests capture through a private nonblocking inherited socket;
+the WM replies through a private bounded runtime report, with no XCB dependency
+in the companion. A 750-ms capture timeout preserves the previous checkpoint,
+and late replies cannot authorize another request. Normal WM shutdown supplies
+a final capture before dismantling its windows. Runtime files and descriptors
+are removed on exit and are not inherited by restored or autostart applications.
+
+New restored windows match by client ID and role once. Identity properties may
+arrive during the first two seconds after management, within the companion's
+two-minute restore window. Genuine input on the window cancels pending placement.
+Normal geometry is recovered into the nearest current work area, excluding panel
+and frame decorations; maximized/fullscreen state then uses the current monitor.
+Shading preserves normal client dimensions. Sticky placement and minimized state
+are not restored, and windows without XSMP identity are not matched by title or
+class. Coordinated logout and save prompts remain follow-up work.
 
 The companion does not send `Die`, request save prompts, or honor client requests
 to end the desktop. Coordinated application logout will be added separately.
@@ -282,6 +306,9 @@ that verifies the session bus and inherited agent before registering.
 `python3 tests/application_restore_smoke.py` tests independent logins with a real
 XSMP client, saved-ID adoption, autostart deduplication, new bus/agent inheritance,
 literal arguments, disabled restore, corrupt-state preservation and cleanup.
+Add `--placements` for window geometry/workspace/state checks, duplicate and
+malformed roles, stalled-WM preservation, final shutdown capture and offscreen
+recovery. Add `--matrix` to repeat those checks at all five supported resolutions.
 `application_restore_test` checks exact argument bytes, working directories,
 spawn failures, descriptor/signal isolation and rejection of shell fallback.
 

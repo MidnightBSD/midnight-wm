@@ -12,6 +12,7 @@ namespace midnight {
 namespace {
 constexpr std::size_t file_limit = 1024 * 1024;
 constexpr int application_limit = 128;
+constexpr int window_limit = 512;
 using KeyFile = std::unique_ptr<GKeyFile, decltype(&g_key_file_unref)>;
 std::string encode(const std::string& text) {
   char* encoded = g_base64_encode(reinterpret_cast<const guchar*>(text.data()), text.size());
@@ -20,11 +21,16 @@ std::string encode(const std::string& text) {
   return result;
 }
 bool valid(const ApplicationCheckpoint& checkpoint) {
-  if (checkpoint.applications.size() > application_limit) return false;
+  if (checkpoint.applications.size() > application_limit || checkpoint.windows.size() > window_limit) return false;
   std::set<std::string> ids;
   for (const auto& application : checkpoint.applications) {
     if (!validate_application_restart(application) || application.style == RestartStyle::never ||
         !ids.insert(application.client_id).second) return false;
+  }
+  std::set<std::pair<std::string, std::string>> identities;
+  for (const auto& window : checkpoint.windows) {
+    if (!validate_application_window(window) || !ids.contains(window.client_id) ||
+        !identities.emplace(window.client_id, window.role).second) return false;
   }
   return true;
 }
@@ -65,7 +71,8 @@ std::expected<std::optional<ApplicationCheckpoint>, std::string> ApplicationSess
     g_free(value);
     return result;
   };
-  if (integer("Applications", "version") != 1) return std::unexpected("Unsupported application checkpoint version");
+  const int version = integer("Applications", "version");
+  if (version != 1 && version != 2) return std::unexpected("Unsupported application checkpoint version");
   const int count = integer("Applications", "count");
   if (!parsed || count < 0 || count > application_limit) return std::unexpected("Invalid application count");
   ApplicationCheckpoint checkpoint;
@@ -84,6 +91,26 @@ std::expected<std::optional<ApplicationCheckpoint>, std::string> ApplicationSess
       application.arguments.push_back(text(group.c_str(), ("arg" + std::to_string(arg)).c_str()));
     checkpoint.applications.push_back(std::move(application));
   }
+  if (version == 2) {
+    const int windows = integer("Applications", "windows");
+    if (!parsed || windows < 0 || windows > window_limit) return std::unexpected("Invalid application window count");
+    for (int i = 0; i < windows; ++i) {
+      const auto group = "Window " + std::to_string(i);
+      ApplicationWindow window;
+      window.client_id = text(group.c_str(), "client_id");
+      window.role = text(group.c_str(), "role");
+      window.geometry = {integer(group.c_str(), "x"), integer(group.c_str(), "y"),
+                         integer(group.c_str(), "width"), integer(group.c_str(), "height")};
+      window.workspace = static_cast<std::uint32_t>(integer(group.c_str(), "workspace"));
+      const int states = integer(group.c_str(), "states");
+      if (states < 0 || states > 15) parsed = false;
+      window.maximized_horz = states & 1;
+      window.maximized_vert = states & 2;
+      window.fullscreen = states & 4;
+      window.shaded = states & 8;
+      checkpoint.windows.push_back(std::move(window));
+    }
+  }
   if (!parsed || !valid(checkpoint)) return std::unexpected("Invalid application checkpoint values");
   return checkpoint;
 }
@@ -92,7 +119,8 @@ std::expected<void, std::string> ApplicationSessionStore::save(const Application
   if (!valid(checkpoint)) return std::unexpected("Invalid application checkpoint values");
   if (auto previous = load(); !previous) return std::unexpected(previous.error());
   KeyFile keys(g_key_file_new(), g_key_file_unref);
-  g_key_file_set_integer(keys.get(), "Applications", "version", 1);
+  g_key_file_set_integer(keys.get(), "Applications", "version", 2);
+  g_key_file_set_integer(keys.get(), "Applications", "windows", static_cast<int>(checkpoint.windows.size()));
   g_key_file_set_integer(keys.get(), "Applications", "count", static_cast<int>(checkpoint.applications.size()));
   for (std::size_t i = 0; i < checkpoint.applications.size(); ++i) {
     const auto group = "Application " + std::to_string(i);
@@ -108,6 +136,21 @@ std::expected<void, std::string> ApplicationSessionStore::save(const Application
     g_key_file_set_integer(keys.get(), group.c_str(), "argc", static_cast<int>(application.arguments.size()));
     for (std::size_t arg = 0; arg < application.arguments.size(); ++arg)
       text(("arg" + std::to_string(arg)).c_str(), application.arguments[arg]);
+  }
+  for (std::size_t i = 0; i < checkpoint.windows.size(); ++i) {
+    const auto group = "Window " + std::to_string(i);
+    const auto& window = checkpoint.windows[i];
+    const auto id = encode(window.client_id), role = encode(window.role);
+    g_key_file_set_string(keys.get(), group.c_str(), "client_id", id.c_str());
+    g_key_file_set_string(keys.get(), group.c_str(), "role", role.c_str());
+    const auto integer = [&](const char* name, int value) {
+      g_key_file_set_integer(keys.get(), group.c_str(), name, value);
+    };
+    integer("x", window.geometry.x); integer("y", window.geometry.y);
+    integer("width", window.geometry.width); integer("height", window.geometry.height);
+    integer("workspace", static_cast<int>(window.workspace));
+    integer("states", (window.maximized_horz ? 1 : 0) | (window.maximized_vert ? 2 : 0) |
+                      (window.fullscreen ? 4 : 0) | (window.shaded ? 8 : 0));
   }
   gsize length{};
   std::unique_ptr<gchar, decltype(&g_free)> contents(g_key_file_to_data(keys.get(), &length, nullptr), g_free);

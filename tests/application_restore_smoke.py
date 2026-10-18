@@ -8,6 +8,7 @@ import configparser
 import os
 from pathlib import Path
 import signal
+import re
 import socket
 import subprocess
 import sys
@@ -36,11 +37,21 @@ def main():
     parser.add_argument('--binary', type=Path, default=Path('build/midnightbsd-session'))
     parser.add_argument('--fixture', type=Path, default=Path('build/xsmp_restore_fixture'))
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--placements', action='store_true')
+    parser.add_argument('--width', type=int, default=1280)
+    parser.add_argument('--height', type=int, default=720)
+    parser.add_argument('--matrix', action='store_true')
     args = parser.parse_args()
     args.binary, args.fixture = args.binary.resolve(), args.fixture.resolve()
     output = (args.output or Path(tempfile.mkdtemp(prefix='midnight-restore-results-'))).resolve()
     output.mkdir(parents=True, exist_ok=True)
     print(f'Results: {output}', flush=True)
+    if args.matrix:
+        for width, height in ((1280,720),(1920,1080),(2560,1440),(3440,1440),(3840,2160)):
+            subprocess.run([sys.executable, str(Path(__file__).resolve()), '--placements',
+                '--binary', str(args.binary), '--fixture', str(args.fixture), '--width', str(width), '--height', str(height),
+                '--output', str(output / f'{width}x{height}')], check=True, timeout=100)
+        return
     with tempfile.TemporaryDirectory(prefix='midnight-restore-') as temporary:
         root = Path(temporary)
         for name in ('home', 'config', 'config-system', 'data', 'data-system', 'state', 'runtime', 'clients'):
@@ -52,7 +63,7 @@ def main():
         entry.parent.mkdir()
         literal = 'literal $(touch should-not-exist); with spaces'
         entry.write_text('[Desktop Entry]\nType=Application\nName=Restore fixture\n'
-                         f'Exec={args.fixture} --output "{root / "clients"}" --literal "{literal}"\n')
+                         f'Exec={args.fixture} --output "{root / "clients"}" --literal "{literal}"' + (' --windows yes' if args.placements else '') + '\n')
         env = os.environ.copy()
         for name in ('DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'DBUS_SESSION_BUS_PID', 'SSH_AUTH_SOCK', 'SSH_AGENT_PID',
                      'SESSION_MANAGER', 'ICEAUTHORITY', 'MIDNIGHT_WM_RESTORE_PLAN', 'MIDNIGHT_WM_RESTORE_MANAGER'):
@@ -63,7 +74,7 @@ def main():
                    XDG_RUNTIME_DIR=str(root / 'runtime'), XDG_CURRENT_DESKTOP='MidnightWorkspace', NO_AT_BRIDGE='1')
         read_fd, write_fd = os.pipe()
         with (output / 'xvfb.log').open('w') as log:
-            xvfb = subprocess.Popen(['Xvfb', '-displayfd', str(write_fd), '-screen', '0', '1280x720x24', '-nolisten', 'tcp'],
+            xvfb = subprocess.Popen(['Xvfb', '-displayfd', str(write_fd), '-screen', '0', f'{args.width}x{args.height}x24', '-nolisten', 'tcp'],
                                     pass_fds=(write_fd,), stdout=log, stderr=subprocess.STDOUT)
         os.close(write_fd)
         with os.fdopen(read_fd) as display:
@@ -83,7 +94,7 @@ def main():
             # Record the companion PID from its explicitly owned child, then
             # replace that child with the real WM without changing the handoff.
             process = subprocess.Popen([str(args.binary), '--', sys.executable, '-c',
-                "from pathlib import Path; import os,sys; Path(sys.argv[1]).write_text(str(os.getppid())); os.execv(sys.argv[2],[sys.argv[2]])",
+                "from pathlib import Path; import os,sys; Path(sys.argv[1]).write_text(str(os.getppid())); Path(sys.argv[1]).with_name('wm.pid').write_text(str(os.getpid())); os.execv(sys.argv[2],[sys.argv[2]])",
                 str(root / 'companion.pid'), str(args.binary.with_name('midnight-wm'))],
                 env=env, cwd=root / 'home', stdout=log, stderr=subprocess.STDOUT)
             log.close()
@@ -93,14 +104,32 @@ def main():
             path = paths.pop()
             known.add(path)
             owned_clients.add(int(path.stem))
-            return read(path)['Client']
+            info = read(path)['Client']
+            info['record_path'] = str(path)
+            return info
         def companion_pid(info):
             pid = int((root / 'companion.pid').read_text())
             assert pid > 1 and process.poll() is None
             return pid
-        def stop(info):
+        def command(*arguments):
+            return subprocess.check_output(arguments, env=env, text=True, timeout=10)
+        def handles(info):
+            return {name: hex(int(value)) for name, value in read(Path(info['record_path']))['Windows'].items()}
+        def geometry(window):
+            info = command('xwininfo', '-id', window)
+            values = [int(re.search(key + r':\s+(-?\d+)', info).group(1)) for key in
+                ('Absolute upper-left X', 'Absolute upper-left Y', 'Width', 'Height')]
+            extents = command('xprop', '-id', window, '_NET_FRAME_EXTENTS').split('=', 1)
+            if len(extents) > 1:
+                left, _, top, _ = map(int, extents[1].split(','))
+                values[0] -= left; values[1] -= top
+            return tuple(values)
+        def state(window):
+            return command('xprop', '-id', window, '_NET_WM_STATE')
+        def stop(info, normal=False):
             nonlocal process
-            os.kill(companion_pid(info), signal.SIGTERM)
+            pid = int((root / 'wm.pid').read_text()) if normal else companion_pid(info)
+            os.kill(pid, signal.SIGTERM)
             assert process.wait(timeout=12) == 0, "WM did not exit cleanly after forwarded termination"
             process = None
         try:
@@ -108,20 +137,82 @@ def main():
             start()
             first = client()
             assert first['previous'] == ''
+            base = {}
+            states = {'shade':'shaded', 'max':'maximized_horz,maximized_vert', 'full':'fullscreen',
+                      'partial':'maximized_horz,shaded'}
+            workspaces = {'shade':1,'max':2,'full':3,'partial':1}
+            if args.placements:
+                original_handles = handles(first)
+                for index, (name, window) in enumerate(original_handles.items()):
+                    until(lambda w=window: '=' in command('xprop','-id',w,'_NET_WM_DESKTOP'), 'window not managed')
+                    width, height = (100,80) if name == 'tiny' else (350 + index*8, 230 + index*5)
+                    command('wmctrl','-ir',window,'-e',f'0,{80+index*10},{90+index*8},{width},{height}')
+                    time.sleep(.03)
+                    base[name] = geometry(window)
+                for name, value in states.items():
+                    command('wmctrl','-ir',original_handles[name],'-b','add,'+value)
+                for name, desktop in workspaces.items():
+                    command('wmctrl','-ir',original_handles[name],'-t',str(desktop))
+                until(lambda: '_NET_WM_STATE_SHADED' in state(original_handles['shade']), 'shade not applied')
             os.kill(companion_pid(first), signal.SIGUSR1)
             until(snapshot.is_file, 'checkpoint not saved')
             saved = snapshot.read_bytes()
             original = read(snapshot)
             original_id = base64.b64decode(original['Application 0']['client_id']).decode()
             assert original_id == first['id']
-            stop(first)
+            if args.placements:
+                records = [original[f'Window {i}'] for i in range(original.getint('Applications','windows'))]
+                roles = {base64.b64decode(item['role']).decode() for item in records}
+                assert roles == {'normal','shade','max','full','partial','tiny',''}, roles
+                for item in records:
+                    role = base64.b64decode(item['role']).decode() or 'roleless'
+                    assert tuple(item.getint(key) for key in ('x','y','width','height')) == base[role], (role,dict(item),base[role])
+            if args.placements:
+                time.sleep(1.1)
+                wm_pid = int((root / 'wm.pid').read_text())
+                os.kill(wm_pid, signal.SIGSTOP)
+                try:
+                    os.kill(companion_pid(first), signal.SIGUSR1)
+                    time.sleep(1.1)
+                    assert snapshot.read_bytes() == saved, 'unresponsive WM replaced checkpoint'
+                finally:
+                    os.kill(wm_pid, signal.SIGCONT)
+                # Normal WM shutdown must deliver a final fresh placement even
+                # though the companion requests client saves after the WM exits.
+                time.sleep(1.2)
+                window = original_handles['normal']
+                command('wmctrl','-ir',window,'-e','0,180,150,430,310')
+                time.sleep(.1)
+                base['normal'] = geometry(window)
+                stop(first, normal=True)
+                saved = snapshot.read_bytes()
+                final = read(snapshot)
+                item = next(final[section] for section in final.sections() if section.startswith('Window ') and base64.b64decode(final[section]['role']) == b'normal')
+                assert tuple(item.getint(key) for key in ('x','y','width','height')) == base['normal'], 'final geometry was not captured'
+            else:
+                stop(first)
             configure(True)
             start()
             restored = client()
             assert restored['id'] == restored['previous'] == original_id, 'saved ID not adopted'
             assert restored['literal'] == literal and restored['cwd'] == str(root / 'home')
+            if args.placements:
+                restored_handles = handles(restored)
+                until(lambda: geometry(restored_handles['normal']) == base['normal'], 'normal placement not restored')
+                for name, value in states.items():
+                    for flag in value.split(','):
+                        until(lambda n=name,f=flag: '_NET_WM_STATE_'+f.upper() in state(restored_handles[n]), f'{name} state missing')
+                for name, desktop in workspaces.items():
+                    until(lambda n=name,d=desktop: command('xprop','-id',restored_handles[n],'_NET_WM_DESKTOP').strip().endswith('= '+str(d)), 'workspace not restored')
+                for name, value in states.items():
+                    command('wmctrl','-ir',restored_handles[name],'-b','remove,'+value)
+                    until(lambda n=name: geometry(restored_handles[n]) == base[n], f'{name} normal geometry lost')
+                until(lambda: geometry(restored_handles['tiny']) == base['tiny'], 'tiny window enlarged')
+                until(lambda: geometry(restored_handles['roleless']) == base['roleless'], 'roleless placement missing')
+                assert command('xdotool','get_desktop').strip() == '0', 'restoration switched selected workspace'
             assert restored.getboolean('bus_reachable')
             assert restored['midnight_wm_restore_plan'] == restored['midnight_wm_restore_manager'] == ''
+            assert restored['midnight_wm_window_fd'] == restored['midnight_wm_window_report'] == ''
             with socket.socket(socket.AF_UNIX) as peer:
                 peer.connect(restored['ssh_auth_sock'])
             time.sleep(.5)
@@ -148,11 +239,25 @@ def main():
             keys['Application 1']['arg0'] = base64.b64encode(b'/no/such/midnight-restore').decode()
             with snapshot.open('w') as file:
                 keys.write(file)
+            if args.placements:
+                for section in keys.sections():
+                    if section.startswith('Window ') and base64.b64decode(keys[section]['role']) == b'normal':
+                        keys[section]['x'] = str(args.width + 2000)
+                        keys[section]['y'] = str(args.height + 1000)
+                with snapshot.open('w') as file:
+                    keys.write(file)
             missing_saved = snapshot.read_bytes()
             configure(True, True)
             start()
             partial = client()
             assert partial['id'] == partial['previous'] == original_id
+            if args.placements:
+                window = handles(partial)['normal']
+                until(lambda: '=' in command('xprop','-id',window,'_NET_FRAME_EXTENTS'), 'restored window not managed')
+                left, right, top, bottom = map(int, command('xprop','-id',window,'_NET_FRAME_EXTENTS').split('=',1)[1].split(','))
+                expected = (args.width - left - right - base['normal'][2],
+                            args.height - top - bottom - base['normal'][3], *base['normal'][2:])
+                until(lambda: geometry(window) == expected, 'offscreen geometry not recovered to nearest work area')
             os.kill(companion_pid(partial), signal.SIGUSR1)
             time.sleep(.3)
             assert snapshot.read_bytes() == missing_saved, 'startup replaced snapshot before missing client registered'

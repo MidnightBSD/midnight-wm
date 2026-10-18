@@ -32,7 +32,8 @@ bool valid(const SessionSnapshot& snapshot) {
 
 } // namespace
 
-SessionGeometry recover_session_geometry(SessionGeometry saved, const std::vector<SessionGeometry>& areas) {
+SessionGeometry recover_session_geometry(SessionGeometry saved, const std::vector<SessionGeometry>& areas,
+                                        int minimum_width, int minimum_height) {
   if (areas.empty()) return saved;
   const SessionGeometry* best = nullptr;
   auto distance = std::numeric_limits<std::int64_t>::max();
@@ -45,8 +46,8 @@ SessionGeometry recover_session_geometry(SessionGeometry saved, const std::vecto
     if (!best || dx * dx + dy * dy < distance) { best = &area; distance = dx * dx + dy * dy; }
   }
   if (!best) return saved;
-  saved.width = std::clamp(saved.width, std::min(250, best->width), best->width);
-  saved.height = std::clamp(saved.height, std::min(180, best->height), best->height);
+  saved.width = std::clamp(saved.width, std::clamp(minimum_width, 1, best->width), best->width);
+  saved.height = std::clamp(saved.height, std::clamp(minimum_height, 1, best->height), best->height);
   saved.x = std::clamp(saved.x, best->x, best->x + best->width - saved.width);
   saved.y = std::clamp(saved.y, best->y, best->y + best->height - saved.height);
   return saved;
