@@ -6,6 +6,7 @@
 #include "media_player.hpp"
 #include "browser_launcher.hpp"
 #include "config.hpp"
+#include "content_size.hpp"
 #include "desktop_launcher.hpp"
 #include "display_scale.hpp"
 #include "display_monitors.hpp"
@@ -199,6 +200,7 @@ struct Folder {
   std::vector<Item> items;
   bool trash{};
   bool sort_by_type{};
+  std::shared_ptr<ContentSize> content_size{std::make_shared<ContentSize>()};
 };
 
 struct FolderScroll {
@@ -375,13 +377,14 @@ void draw_bevel(cairo_t* cr, int x, int y, int w, int h, bool sunken = false,
 
 void draw_text(cairo_t* cr, const std::string& value, int x, int y, int width,
           int size = 11, bool white = false, bool bold = false,
-          const ThemeConfig& theme = ThemeConfig{}) {
+          const ThemeConfig& theme = ThemeConfig{}, PangoAlignment alignment = PANGO_ALIGN_LEFT) {
   PangoLayout* layout = pango_cairo_create_layout(cr);
   PangoFontDescription* font = make_ui_font(theme, bold, size, true);
   pango_layout_set_font_description(layout, font);
   pango_layout_set_text(layout, value.c_str(), -1);
   pango_layout_set_width(layout, width * PANGO_SCALE);
   pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
+  pango_layout_set_alignment(layout, alignment);
   const auto color = white ? std::array<double, 3>{1, 1, 1} :
     (theme.dark_mode ? theme.text_color : std::array<double, 3>{.04, .04, .04});
   cairo_set_source_rgb(cr, color[0], color[1], color[2]);
@@ -1401,14 +1404,49 @@ struct Shell::Impl {
     return icon_surfaces.size() >= 2 * max_icon_surfaces;
   }
 
+  std::string folder_size_uri(const Folder& folder) const {
+    if (folder.selected >= 0 && static_cast<std::size_t>(folder.selected) < folder.items.size()) {
+      const auto& item = folder.items[folder.selected];
+      if (item.trashed) return item.uri;
+      if (!item.path.empty()) {
+        auto* file = g_file_new_for_path(item.path.c_str());
+        char* uri = g_file_get_uri(file);
+        std::string result(uri);
+        g_free(uri);
+        g_object_unref(file);
+        return result;
+      }
+    }
+    if (folder.trash) return "trash:///";
+    auto* file = g_file_new_for_path(folder.path.c_str());
+    char* uri = g_file_get_uri(file);
+    std::string result(uri);
+    g_free(uri);
+    g_object_unref(file);
+    return result;
+  }
+
   void refresh() {
     file_content_types.clear();
     file_icon_cache.clear();
     desktop_items = list_items(Store::desktop_path(), true);
     desktop_scroll_columns = std::clamp(desktop_scroll_columns, 0, desktop_max_scroll());
     for (auto& [window, folder] : folders) {
+      std::optional<Item> selected;
+      if (folder.selected >= 0 && static_cast<std::size_t>(folder.selected) < folder.items.size())
+        selected = folder.items[folder.selected];
       folder.items = list_items(folder.path, false);
       sort_folder(folder);
+      folder.selected = -1;
+      if (selected) {
+        for (std::size_t i = 0; i < folder.items.size(); ++i)
+          if (folder.items[i].path == selected->path && folder.items[i].uri == selected->uri &&
+              folder.items[i].object.id == selected->object.id) {
+            folder.selected = static_cast<int>(i);
+            break;
+          }
+      }
+      folder.content_size->request(folder_size_uri(folder), true);
       draw_folder(folder);
     }
     draw_desktop();
@@ -1953,6 +1991,7 @@ struct Shell::Impl {
   }
 
   void draw_folder(Folder& folder) {
+    folder.content_size->request(folder_size_uri(folder));
     auto scroll = folder_scroll(folder);
     folder.scroll_rows = std::clamp(folder.scroll_rows, 0, scroll.max_scroll);
     scroll = folder_scroll(folder);
@@ -1985,7 +2024,12 @@ struct Shell::Impl {
       themed_fill(cr, config.button_color, .77, .77, .77, scroll.x + 1, scroll.thumb_y, scrollbar_width - 2, scroll.thumb_height);
       bevel(cr, scroll.x + 1, scroll.thumb_y, scrollbar_width - 2, scroll.thumb_height);
       themed_fill(cr, config.surface_color, .73, .73, .73, 5, folder.height - 21, folder.width - 10, 16);
-      text(cr, std::to_string(folder.items.size()) + " objects", 11, folder.height - 21, folder.width - 22, 10);
+      const int status_width = std::max(1, (folder.width - 30) / 2);
+      text(cr, std::to_string(folder.items.size()) + " objects", 11, folder.height - 21, status_width, 10);
+      const auto& size = folder.content_size->result();
+      const auto label = size ? format_content_size(*size) : "Calculating…";
+      draw_text(cr, label, folder.width - 11 - status_width, folder.height - 21,
+                status_width, 10, false, false, config, PANGO_ALIGN_RIGHT);
     });
   }
 
@@ -4049,6 +4093,8 @@ bool Shell::handle(xcb_generic_event_t* event) {
 void Shell::tick() {
   auto& p = *impl_;
   p.trim_icon_caches();
+  for (auto& [window, folder] : p.folders)
+    if (folder.content_size->poll()) p.draw_folder(folder);
   bool redraw = false;
   const auto now = clock_text(p.config.clock_format);
   if (now != p.last_clock) { p.last_clock = now; redraw = true; }

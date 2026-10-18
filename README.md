@@ -360,6 +360,17 @@ scrollbars.
 In a folder window, **File** opens the selected item, creates a folder, shows
 properties, moves an item to Trash, or closes the window. **Edit** offers copy,
 cut, and paste. **View** refreshes the folder and sorts by name or type.
+The bottom status bar keeps the object count on the left and the contents' size
+on the right. With an item selected it shows only that item's size; selecting a
+folder measures that folder's contents. Click empty space to return to the total.
+Sizes use `humanize_number` with binary IEC units (KiB, MiB, GiB), and represent
+logical file lengths, including nested contents, rather than allocated blocks.
+Symbolic links contribute their own length and are not followed; special files
+contribute no bytes. Calculation runs in the background, showing **Calculating…**
+while pending. Unreadable entries or excessive nesting produce a **(partial)**
+label; an inaccessible target shows **Size unavailable**. Directory changes and
+View → Refresh recalculate the size, and completed results are resampled every
+30 seconds to pick up changes inside nested folders.
 On a session D-Bus, Midnight also offers `org.freedesktop.FileManager1`, so
 applications can open folders, reveal selected files, and show file properties.
 
