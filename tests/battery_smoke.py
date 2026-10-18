@@ -45,15 +45,15 @@ def session(args):
             other = subprocess.run([str(args.binary)], capture_output=True, text=True, timeout=5, env=other_env)
             assert other.returncode != 0, "second WM took over"
 
-            # At 1280x720 with no tray items, the battery fill starts at (1086,12).
+            # At 1280x720 with no tray items, the battery fill starts at (1100,12).
             until(lambda: pixel_snapshot(args) == (51, 133, 76), "initial battery did not render")
             run("import", "-window", "root", str(args.output / "battery-75.png"))
-            full_fill = pixel(args.output / "battery-75.png", 1095, 12)
+            full_fill = pixel(args.output / "battery-75.png", 1109, 12)
             assert full_fill == (51, 133, 76), f"75% battery fill missing at expected panel coordinate: {full_fill}"
-            assert pixel(args.output / "battery-75.png", 1097, 12) != (51, 133, 76), \
+            assert pixel(args.output / "battery-75.png", 1111, 12) != (51, 133, 76), \
                 "battery fill length did not match 75 percent"
 
-            run("xdotool", "mousemove", "1107", "16", "click", "1")
+            run("xdotool", "mousemove", "1121", "16", "click", "1")
             notice = until(lambda: window_for_size(420, 100), "battery click did not open its notice")
             run("import", "-window", "root", str(args.output / "battery-notice.png"))
             assert notice
@@ -90,19 +90,19 @@ def session(args):
             set_fixture(args.fixture_data, (0, 0, -1, 7, 0))
             until(lambda: hidden_now(args), "battery remained visible after removal", timeout=35)
             run("import", "-window", "root", str(args.output / "battery-absent.png"))
-            absent_pixel = pixel(args.output / "battery-absent.png", 1095, 12)
+            absent_pixel = pixel(args.output / "battery-absent.png", 1109, 12)
             assert absent_pixel != (51, 133, 76), f"battery fill remained after removal: {absent_pixel}"
 
             set_fixture(args.fixture_data, (1, 25, 0, 2, 1))
             until(lambda: pixel_snapshot(args) == (51, 133, 76),
                   "charging battery did not return after fixture change", timeout=35)
             run("import", "-window", "root", str(args.output / "battery-charging-25.png"))
-            quarter_fill = pixel(args.output / "battery-charging-25.png", 1088, 12)
+            quarter_fill = pixel(args.output / "battery-charging-25.png", 1102, 12)
             assert quarter_fill == (51, 133, 76), f"25% charging fill missing: {quarter_fill}"
-            assert pixel(args.output / "battery-charging-25.png", 1091, 12) != (51, 133, 76), \
+            assert pixel(args.output / "battery-charging-25.png", 1105, 12) != (51, 133, 76), \
                 "battery fill length did not match 25 percent"
 
-            run("xdotool", "mousemove", "1159", "16", "click", "1")
+            run("xdotool", "mousemove", "1173", "16", "click", "1")
             popup = until(lambda: window_for_size(260, 230),
                           "speaker popup did not open alongside battery status")
             run("import", "-window", popup, str(args.output / "speaker-popup.png"))
@@ -119,14 +119,14 @@ def session(args):
 def pixel_snapshot(args):
     screenshot = args.output / "battery-current.png"
     run("import", "-window", "root", str(screenshot))
-    return pixel(screenshot, 1086, 12)
+    return pixel(screenshot, 1100, 12)
 
 
 def hidden_now(args):
     # An absent battery leaves the panel background at the old fill coordinate.
     screenshot = args.output / "battery-current.png"
     run("import", "-window", "root", str(screenshot))
-    return pixel(screenshot, 1095, 12) != (51, 133, 76)
+    return pixel(screenshot, 1109, 12) != (51, 133, 76)
 
 
 def main():

@@ -87,13 +87,16 @@ constexpr std::size_t max_icon_value = 4096;
 constexpr int audio_popup_width = 260;
 constexpr int audio_popup_height = 230;
 constexpr int volume_clock_gap = 4;
-constexpr int lock_button_x = 124;
+constexpr int panel_edge = 4;
+constexpr int midnight_button_width = 104;
+constexpr int clock_width = 87;
+constexpr int lock_button_x = panel_edge + midnight_button_width + 4;
 constexpr int lock_button_width = 24;
-constexpr int terminal_button_x = 152;
+constexpr int terminal_button_x = lock_button_x + lock_button_width + 4;
 constexpr int terminal_button_width = 24;
-constexpr int browser_button_x = 180;
+constexpr int browser_button_x = terminal_button_x + terminal_button_width + 4;
 constexpr int browser_button_width = 24;
-constexpr int task_start_x = 212;
+constexpr int task_start_x = browser_button_x + browser_button_width + 8;
 constexpr int task_button_width = 110;
 constexpr int task_step = 114;
 constexpr int task_overflow_width = 24;
@@ -1643,14 +1646,14 @@ struct Shell::Impl {
     paint(panel, panel_width, panel_height, [&](cairo_t* cr) {
       fill(cr, config.panel_color[0], config.panel_color[1], config.panel_color[2], 0, 0, panel_width, panel_height);
       fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2], 0, 0, panel_width, 3);
-      themed_fill(cr, config.button_color, .85, .85, .85, 4, 4, 116, 22);
-      bevel(cr, 4, 4, 116, 22);
+      themed_fill(cr, config.button_color, .85, .85, .85, panel_edge, 5, midnight_button_width, 24);
+      bevel(cr, panel_edge, 5, midnight_button_width, 24);
       if (logo_surface) {
-        cairo_set_source_surface(cr, logo_surface, 7, 5);
+        cairo_set_source_surface(cr, logo_surface, 7, 7);
         cairo_paint(cr);
       }
-      text(cr, config.panel_label, logo_surface ? 31 : 13, 7,
-           logo_surface ? 84 : 102, 11, false, true);
+      text(cr, config.panel_label, logo_surface ? 31 : 13, 9,
+           midnight_button_width - (logo_surface ? 32 : 14), 11, false, true);
       bevel(cr, lock_button_x, 5, lock_button_width, 24);
       lock_icon(cr, lock_button_x + 4, 8, config);
       bevel(cr, terminal_button_x, 5, terminal_button_width, 24);
@@ -1743,8 +1746,8 @@ struct Shell::Impl {
         const auto label = battery_state->percent ? std::to_string(*battery_state->percent) + "%" : "?";
         text(cr, label, x + 27, 8, battery_group_width - 31, 11, false, true);
       }
-      bevel(cr, clock_x, 5, 99, 24, true);
-      text(cr, clock_text(config.clock_format), clock_x + 7, 8, 86, 11, false, true);
+      bevel(cr, clock_x, 5, clock_width, 24, true);
+      text(cr, clock_text(config.clock_format), clock_x + 6, 8, clock_width - 12, 11, false, true);
     });
   }
 
@@ -1766,7 +1769,7 @@ struct Shell::Impl {
     return result;
   }
 
-  int clock_x() const { return std::max(140, panel_width - 105); }
+  int clock_x() const { return std::max(140, panel_width - panel_edge - clock_width); }
 
   int tray_width() const {
     // Leave room for the task overflow button even when every task is hidden.
@@ -3383,7 +3386,7 @@ struct Shell::Impl {
           apply_volume(volume.adjust(event->detail == 4 ? 5 : -5));
         return;
       }
-      if (event->detail == 1 && event->event_x < 122) { if (menu) close_menu(); else show_launcher(); }
+      if (event->detail == 1 && event->event_x < panel_edge + midnight_button_width) { if (menu) close_menu(); else show_launcher(); }
       else if (event->detail == 1 && event->event_x >= lock_button_x &&
                event->event_x < lock_button_x + lock_button_width) lock_screen();
       else if (event->detail == 1 && event->event_x >= terminal_button_x &&
