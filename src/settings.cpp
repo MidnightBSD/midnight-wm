@@ -3,6 +3,7 @@
 
 #include "config.hpp"
 #include "session.hpp"
+#include "application_session.hpp"
 
 #include <gtk/gtk.h>
 #include <glib/gstdio.h>
@@ -94,7 +95,13 @@ class Settings {
     row_ = 0;
     checkbox(session, "_Restore folders at login", "Session", "restore_folders", false);
     checkbox(session, "_Save folders on logout", "Session", "save_on_logout", false);
-    auto* session_hint = gtk_label_new("Restores built-in folders and workspaces only. Applications are not reopened.\nDisable restoration to start fresh; saving takes effect at the next logout.");
+    checkbox(session, "Restore applications at _login", "Session", "restore_applications", false);
+    checkbox(session, "Save application chec_kpoints", "Session", "save_application_checkpoints", false);
+    auto* session_hint = gtk_label_new(
+      "Disable both restore options to start fresh at the next login.\n"
+      "Restores participating apps through the Midnight session companion.\n"
+      "Apps choose which documents and tabs to restore.\n"
+      "Saving changes apply after Apply; restore changes apply at next login.");
     gtk_label_set_line_wrap(GTK_LABEL(session_hint), TRUE);
     gtk_label_set_max_width_chars(GTK_LABEL(session_hint), 50);
     gtk_label_set_xalign(GTK_LABEL(session_hint), 0);
@@ -106,6 +113,15 @@ class Settings {
       const auto result = midnight::SessionStore{}.clear();
       gtk_label_set_text(GTK_LABEL(self->status_), result ?
         "Saved folder session cleared. Saving on logout may create a new snapshot." : result.error().c_str());
+    }), this);
+    auto* clear_applications = gtk_button_new_with_mnemonic("Clear saved application s_ession");
+    gtk_grid_attach(GTK_GRID(session), clear_applications, 0, row_++, 2, 1);
+    g_signal_connect(clear_applications, "clicked", G_CALLBACK(+[](GtkButton*, gpointer data) {
+      auto* self = static_cast<Settings*>(data);
+      const auto result = midnight::ApplicationSessionStore{}.clear();
+      gtk_label_set_text(GTK_LABEL(self->status_), result ?
+        "Saved application session cleared. Running apps stay open; enabled saving may create another snapshot." :
+        result.error().c_str());
     }), this);
     status_ = gtk_label_new("Apply saves your settings and updates the running desktop.");
     gtk_label_set_line_wrap(GTK_LABEL(status_), TRUE);

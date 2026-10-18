@@ -229,6 +229,30 @@ Path(sys.argv[2]).write_text(json.dumps({'manager': os.environ['SESSION_MANAGER'
             until(lambda: "restore_folders=true" in config.read_text() and "save_on_logout=true" in config.read_text(),
                   "Session checkboxes did not save preferences")
             assert "# Retain this comment" in config.read_text() and "value=keep" in config.read_text()
+            run("xdotool", "key", "--clearmodifiers", "alt+l", "alt+k", "alt+a")
+            until(lambda: "restore_applications=true" in config.read_text() and
+                  "save_application_checkpoints=true" in config.read_text(),
+                  "application session controls did not save preferences")
+            applications = snapshot.parent / "applications.ini"
+            applications.write_text("[Applications]\nversion=999\n")
+            applications.chmod(0o600)
+            previous_folder = snapshot.read_bytes()
+            run("xdotool", "key", "--clearmodifiers", "alt+e")
+            until(lambda: not applications.exists(), "clear application session failed")
+            assert snapshot.read_bytes() == previous_folder, "application clear changed folder snapshot"
+            assert wm.poll() is None, "clearing application state ended desktop"
+            # A failed clear must leave the target and other session intact.
+            applications.mkdir()
+            run("xdotool", "key", "--clearmodifiers", "alt+e")
+            time.sleep(.2)
+            assert applications.is_dir() and snapshot.read_bytes() == previous_folder
+            applications.rmdir()
+            # Starting fresh changes restoration only; saving remains enabled.
+            run("xdotool", "key", "--clearmodifiers", "alt+r", "alt+l", "alt+a")
+            until(lambda: "restore_applications=false" in config.read_text() and
+                  "restore_folders=false" in config.read_text(), "start-fresh preferences did not save")
+            assert "save_application_checkpoints=true" in config.read_text()
+            assert "save_on_logout=true" in config.read_text()
             run("xdotool", "key", "--clearmodifiers", "alt+f")
             until(lambda: not snapshot.exists(), "clear saved folder session failed")
             run("import", "-window", "root", str(args.output / f"{args.width}x{args.height}-settings.png"))
@@ -239,7 +263,7 @@ Path(sys.argv[2]).write_text(json.dumps({'manager': os.environ['SESSION_MANAGER'
         logout(wm)
         saved.read(snapshot)
         assert saved["Session"]["folders"] == "0", "live save preference was not applied"
-        print(f"{args.width}x{args.height}: folder save/restore, states, workspaces, cancellation, geometry recovery, fresh startup, corrupt preservation and clear passed.", flush=True)
+        print(f"{args.width}x{args.height}: folder save/restore, states, workspaces, cancellation, geometry recovery, fresh startup, corrupt preservation, application session preferences and independent clears passed.", flush=True)
     finally:
         if wm.poll() is None:
             wm.terminate()

@@ -163,6 +163,17 @@ its task expands a shaded folder. The title-bar minimize button hides a folder
 while retaining its taskbar entry; click that task to restore it. Minimized
 folders remain hidden across workspace and Show Desktop changes.
 
+The Session page also offers **Restore applications at login** and **Save
+application checkpoints**, independently of the folder options. Click **Apply**
+to save these preferences; application saving uses the new preference at its next
+checkpoint or logout, while restoration changes take effect at the next login.
+Disable both restoration options to start fresh without deleting either saved
+session. **Clear saved application session** removes only the application
+checkpoint immediately, leaving running applications and the folder snapshot
+intact. Enabled saving can create a new checkpoint later. Application restoration
+requires the session companion and participating applications; applications
+control which documents and tabs they restore.
+
 The equivalent configuration is `[Session]` with `restore_folders=false` and
 `save_on_logout=false` by default. Settings apply saving changes live; restoration
 is checked at startup. **Clear saved folder session** removes the snapshot without
