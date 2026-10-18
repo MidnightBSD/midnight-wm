@@ -514,6 +514,67 @@ cairo_surface_t* image_surface(const std::filesystem::path& path, int size) {
   return surface;
 }
 
+// A small metal wastebasket, drawn in logical pixels so it scales with the desktop.
+void trash_icon(cairo_t* cr, int x, int y) {
+  cairo_save(cr);
+  cairo_translate(cr, x, y);
+  const auto ellipse = [&](double cx, double cy, double rx, double ry) {
+    cairo_save(cr);
+    cairo_translate(cr, cx, cy);
+    cairo_scale(cr, rx, ry);
+    cairo_arc(cr, 0, 0, 1, 0, 2 * G_PI);
+    cairo_restore(cr);
+  };
+  cairo_set_source_rgba(cr, 0, 0, 0, .22);
+  ellipse(25, 39, 16, 3);
+  cairo_fill(cr);
+
+  // Curved base and tapered sides give the can volume at small icon sizes.
+  cairo_move_to(cr, 8, 10);
+  cairo_line_to(cr, 12, 36);
+  cairo_curve_to(cr, 13, 42, 35, 42, 36, 36);
+  cairo_line_to(cr, 40, 10);
+  cairo_close_path(cr);
+  auto* metal = cairo_pattern_create_linear(8, 0, 40, 0);
+  cairo_pattern_add_color_stop_rgb(metal, 0, .35, .40, .44);
+  cairo_pattern_add_color_stop_rgb(metal, .25, .85, .89, .91);
+  cairo_pattern_add_color_stop_rgb(metal, .45, .67, .73, .77);
+  cairo_pattern_add_color_stop_rgb(metal, .8, .44, .51, .56);
+  cairo_pattern_add_color_stop_rgb(metal, 1, .25, .30, .34);
+  cairo_set_source(cr, metal);
+  cairo_fill_preserve(cr);
+  cairo_pattern_destroy(metal);
+  cairo_set_source_rgb(cr, .23, .28, .32);
+  cairo_set_line_width(cr, 1);
+  cairo_stroke(cr);
+
+  // Embossed ribs follow the taper rather than ending as a flat grille.
+  for (int rib = 0; rib < 5; ++rib) {
+    const double top = 13 + rib * 5.5;
+    const double bottom = 16 + rib * 4;
+    cairo_set_source_rgba(cr, .12, .18, .22, .55);
+    cairo_move_to(cr, top, 15);
+    cairo_line_to(cr, bottom, 35);
+    cairo_stroke(cr);
+    cairo_set_source_rgba(cr, 1, 1, 1, .55);
+    cairo_move_to(cr, top + 1, 15);
+    cairo_line_to(cr, bottom + 1, 35);
+    cairo_stroke(cr);
+  }
+  // Rolled lip surrounding a dark, visibly open interior.
+  ellipse(24, 10, 17, 6);
+  cairo_set_source_rgb(cr, .77, .83, .87);
+  cairo_fill_preserve(cr);
+  cairo_set_source_rgb(cr, .27, .33, .38);
+  cairo_stroke(cr);
+  ellipse(24, 9.5, 14, 3.8);
+  cairo_set_source_rgb(cr, .18, .23, .27);
+  cairo_fill_preserve(cr);
+  cairo_set_source_rgb(cr, .93, .96, .98);
+  cairo_stroke(cr);
+  cairo_restore(cr);
+}
+
 void icon(cairo_t* cr, const Item& item, int x, int y, cairo_surface_t* surface) {
   if (surface) {
     cairo_set_source_surface(cr, surface, x + 4, y + 3);
@@ -524,8 +585,7 @@ void icon(cairo_t* cr, const Item& item, int x, int y, cairo_surface_t* surface)
   const bool folder = item.object.kind == ObjectKind::folder ||
     (item.physical && std::filesystem::is_directory(item.path, ec));
   if (item.object.kind == ObjectKind::trash) {
-    fill(cr, .25, .25, .29, x + 9, y + 7, 26, 30);
-    fill(cr, .66, .66, .68, x + 5, y + 4, 34, 5);
+    trash_icon(cr, x, y);
   } else if (folder) {
     fill(cr, .95, .78, .35, x + 5, y + 12, 38, 28);
     fill(cr, .99, .88, .51, x + 5, y + 6, 20, 10);
