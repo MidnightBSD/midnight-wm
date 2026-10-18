@@ -36,6 +36,8 @@ def session(args):
                 apps.append(app)
                 first_window = until(lambda: visible_window("Attention example"), "attention example missing")
                 second_window = until(lambda: visible_window("Foreground example"), "foreground example missing")
+                until(lambda: "_NET_WM_STATE_SHADED" in run("xprop", "-id", first_window, "_NET_WM_STATE"),
+                      "visual example not initially shaded")
                 run("xdotool", "windowactivate", "--sync", second_window)
                 run("xdotool", "set_window", "--urgency", "1", first_window)
                 until(lambda: "_NET_WM_STATE_DEMANDS_ATTENTION" in run("xprop", "-id", first_window, "_NET_WM_STATE"),
@@ -49,6 +51,8 @@ def session(args):
                 run("xdotool", "mousemove", "240", "16", "click", "1")
                 until(lambda: "_NET_WM_STATE_DEMANDS_ATTENTION" not in run("xprop", "-id", first_window, "_NET_WM_STATE"),
                       "task click did not clear attention")
+                until(lambda: "_NET_WM_STATE_SHADED" not in run("xprop", "-id", first_window, "_NET_WM_STATE"),
+                      "task click did not unshade window")
                 run("import", "-window", "root", str(args.output / "attention-cleared.png"))
                 print("Task attention marker and explicit task activation passed.")
             finally:

@@ -64,6 +64,106 @@ bool above(xcb_window_t a, xcb_window_t b) {
   auto ai = std::find(p.begin(), p.end(), a), bi = std::find(p.begin(), p.end(), b);
   return ai != p.end() && bi != p.end() && ai > bi;
 }
+// Shading clips the mapped client without changing its requested size.
+void shade_requests() {
+  check(has(root, "_NET_SUPPORTED", "_NET_WM_STATE_SHADED"), "SHADED not advertised");
+  check(has(root, "_NET_SUPPORTED", "_NET_WM_ACTION_SHADE"), "SHADE action not advertised");
+  auto window = create(false);
+  set(window, "_NET_WM_STATE", XCB_ATOM_ATOM, atom("_NET_WM_STATE_SHADED"));
+  xcb_map_window(connection, window); xcb_flush(connection);
+  xcb_window_t frame = 0;
+  await([&]{
+    auto* tree = xcb_query_tree_reply(connection, xcb_query_tree(connection, window), nullptr);
+    if (tree) { frame = tree->parent; std::free(tree); }
+    return frame != 0 && frame != root && state(window, "_NET_WM_STATE_SHADED");
+  }, "initial shade not honored");
+  auto geometry = [&](xcb_window_t target) {
+    auto* reply = xcb_get_geometry_reply(connection, xcb_get_geometry(connection, target), nullptr);
+    check(reply != nullptr, "shade geometry query");
+    std::vector<int> result{reply->x, reply->y, reply->width, reply->height};
+    std::free(reply); return result;
+  };
+  auto shaded = [&]{ return state(window, "_NET_WM_STATE_SHADED") && geometry(frame)[3] == 28; };
+  await(shaded, "shaded frame did not collapse to title height");
+  const auto initial_frame = geometry(frame);
+  const auto client = geometry(window);
+  check(client[2] == 260 && client[3] == 170, "shading resized client");
+  auto* attributes = xcb_get_window_attributes_reply(connection,
+      xcb_get_window_attributes(connection, window), nullptr);
+  check(attributes && attributes->map_state == XCB_MAP_STATE_VIEWABLE, "shading unmapped client");
+  std::free(attributes);
+  check(client[1] >= initial_frame[3], "shaded client not clipped below title");
+  check(!state(window, "_NET_WM_STATE_HIDDEN"), "shade published HIDDEN");
+  check(has(window, "_NET_WM_ALLOWED_ACTIONS", "_NET_WM_ACTION_SHADE") &&
+      !has(window, "_NET_WM_ALLOWED_ACTIONS", "_NET_WM_ACTION_RESIZE"), "shaded allowed actions");
+  change(window, 0, "_NET_WM_STATE_SHADED");
+  await([&]{ return !state(window, "_NET_WM_STATE_SHADED") && geometry(frame)[3] > 170; }, "shade removal");
+  const auto ordinary = geometry(frame);
+  check(geometry(window) == client, "unshade changed client geometry");
+  await([&]{ return has(window, "_NET_WM_ALLOWED_ACTIONS", "_NET_WM_ACTION_RESIZE"); }, "unshade resize action");
+  auto restore = [&]{
+    await([&]{ return !state(window, "_NET_WM_STATE_SHADED") && geometry(frame) == ordinary; }, "shade geometry restoration");
+    check(geometry(window) == client, "restored client geometry");
+  };
+  change(window, 2, "_NET_WM_STATE_SHADED", "_NET_WM_STATE_SHADED");
+  await(shaded, "duplicate shade toggle applied twice");
+  change(window, 2, "_NET_WM_STATE_SHADED"); restore();
+  change(window, 9, "_NET_WM_STATE_SHADED");
+  xcb_client_message_event_t malformed{};
+  malformed.response_type = XCB_CLIENT_MESSAGE; malformed.format = 8;
+  malformed.window = window; malformed.type = atom("_NET_WM_STATE");
+  malformed.data.data32[0] = 1; malformed.data.data32[1] = atom("_NET_WM_STATE_SHADED");
+  xcb_send_event(connection, 0, root, XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT |
+      XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY, reinterpret_cast<char*>(&malformed)); xcb_flush(connection);
+  std::this_thread::sleep_for(100ms); restore();
+  auto middle_click = [&]{
+    const auto command = "xdotool mousemove --window " + std::to_string(frame) + " 80 12 click 2";
+    check(std::system(command.c_str()) == 0, "middle-click title input");
+  };
+  middle_click(); await(shaded, "middle-click did not shade");
+  middle_click(); restore();
+  change(window, 1, "_NET_WM_STATE_SHADED"); await(shaded, "shade before workspace switch");
+  message(root, "_NET_CURRENT_DESKTOP", 1);
+  await([&]{ return property(root, "_NET_CURRENT_DESKTOP") == std::vector<std::uint32_t>{1}; }, "shaded workspace away");
+  message(root, "_NET_CURRENT_DESKTOP", 0);
+  await([&]{ return property(root, "_NET_CURRENT_DESKTOP") == std::vector<std::uint32_t>{0}; }, "shaded workspace return");
+  check(shaded() && geometry(window) == client, "workspace switch lost shade geometry");
+  message(root, "_NET_SHOWING_DESKTOP", 1);
+  await([&]{ return property(root, "_NET_SHOWING_DESKTOP") == std::vector<std::uint32_t>{1}; }, "show desktop shaded");
+  message(root, "_NET_SHOWING_DESKTOP", 0);
+  await([&]{ return property(root, "_NET_SHOWING_DESKTOP") == std::vector<std::uint32_t>{0}; }, "restore desktop shaded");
+  check(shaded(), "show desktop lost shade state");
+  check(std::system("xdotool key alt+Tab") == 0, "Alt+Tab shade input");
+  restore();
+  change(window, 1, "_NET_WM_STATE_SHADED"); await(shaded, "shade before activation");
+  focus(window); restore();
+  change(window, 1, "_NET_WM_STATE_SHADED"); await(shaded, "shade before minimize");
+  message(window, "WM_CHANGE_STATE", 3);
+  await([&]{ return state(window, "_NET_WM_STATE_HIDDEN"); }, "minimize shaded window");
+  focus(window); restore();
+  check(!state(window, "_NET_WM_STATE_HIDDEN"), "restored shaded window still hidden");
+  change(window, 1, "_NET_WM_STATE_SHADED"); await(shaded, "shade before fullscreen");
+  change(window, 1, "_NET_WM_STATE_FULLSCREEN");
+  await([&]{ return state(window, "_NET_WM_STATE_FULLSCREEN") && !state(window, "_NET_WM_STATE_SHADED"); }, "fullscreen did not unshade");
+  change(window, 1, "_NET_WM_STATE_SHADED"); std::this_thread::sleep_for(100ms);
+  check(!state(window, "_NET_WM_STATE_SHADED"), "fullscreen accepted shade");
+  change(window, 0, "_NET_WM_STATE_FULLSCREEN"); restore();
+  change(window, 1, "_NET_WM_STATE_SHADED"); await(shaded, "shade before maximize");
+  change(window, 1, "_NET_WM_STATE_MAXIMIZED_VERT", "_NET_WM_STATE_MAXIMIZED_HORZ");
+  await([&]{ return state(window, "_NET_WM_STATE_MAXIMIZED_VERT") && !state(window, "_NET_WM_STATE_SHADED"); }, "maximize did not unshade");
+  change(window, 0, "_NET_WM_STATE_MAXIMIZED_VERT", "_NET_WM_STATE_MAXIMIZED_HORZ"); restore();
+  auto splash = create(false);
+  set(splash, "_NET_WM_WINDOW_TYPE", XCB_ATOM_ATOM, atom("_NET_WM_WINDOW_TYPE_SPLASH"));
+  set(splash, "_NET_WM_STATE", XCB_ATOM_ATOM, atom("_NET_WM_STATE_SHADED"));
+  xcb_map_window(connection, splash); xcb_flush(connection);
+  await([&]{ auto clients = property(root, "_NET_CLIENT_LIST");
+    return std::find(clients.begin(), clients.end(), splash) != clients.end(); }, "splash adoption");
+  change(splash, 1, "_NET_WM_STATE_SHADED"); std::this_thread::sleep_for(100ms);
+  check(!state(splash, "_NET_WM_STATE_SHADED") &&
+      !has(splash, "_NET_WM_ALLOWED_ACTIONS", "_NET_WM_ACTION_SHADE"), "undecorated splash accepted shade");
+  xcb_destroy_window(connection, splash); xcb_destroy_window(connection, window); xcb_flush(connection);
+  std::cout << "Window shade geometry, input, state, and restore checks passed.\n";
+}
 // These requests must change stacking without changing the active client.
 void protocol_requests() {
   check(has(root, "_NET_SUPPORTED", "_NET_RESTACK_WINDOW"), "RESTACK_WINDOW not advertised");
@@ -249,6 +349,12 @@ int main(int argc, char** argv) {
   if (argc > 1 && std::string(argv[1]) == "--visual") {
     for (const auto* title : {"Attention example", "Foreground example"}) {
       auto window = create(false);
+      if (std::string(title) == "Attention example")
+        set(window, "_NET_WM_STATE", XCB_ATOM_ATOM, atom("_NET_WM_STATE_SHADED"));
+      else {
+        const std::uint32_t position[]{500, 240};
+        xcb_configure_window(connection, window, XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y, position);
+      }
       xcb_change_property(connection, XCB_PROP_MODE_REPLACE, window, XCB_ATOM_WM_NAME,
           XCB_ATOM_STRING, 8, std::char_traits<char>::length(title), title);
       const std::uint32_t background = 0xdddddd;
@@ -261,6 +367,7 @@ int main(int argc, char** argv) {
     xcb_disconnect(connection);
     return 0;
   }
+  shade_requests();
   protocol_requests();
   auto a = create(), b = create(); focus(b);
   await([&]{ return state(b, "_NET_WM_STATE_FOCUSED") && !state(a, "_NET_WM_STATE_FOCUSED"); }, "FOCUSED publication");

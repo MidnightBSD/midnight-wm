@@ -3,6 +3,7 @@
 #include <xcb/xcb.h>
 #include <xcb/xcb_icccm.h>
 #include "display_monitors.hpp"
+#include "desktop_layout.hpp"
 
 #include <cstdint>
 #include <chrono>
@@ -53,6 +54,7 @@ private:
     bool maximized_horz{};
     bool maximized_vert{};
     bool fullscreen{};
+    bool shaded{};
     std::optional<std::array<std::uint32_t, 4>> fullscreen_monitors;
     bool mapped{};
     bool minimized{};
@@ -98,6 +100,7 @@ private:
   enum class DragMode { none, move, resize, keyboard_move, keyboard_resize };
   xcb_atom_t atom(const std::string& name);
   void set_root_properties();
+  void refresh_desktop_layout();
   void refresh_visibility();
   void set_window_desktop(Frame& frame, std::uint32_t desktop);
   void initialize_sync(Frame& frame);
@@ -136,6 +139,7 @@ private:
   void close(xcb_window_t client);
   void toggle_maximize(xcb_window_t client);
   void set_fullscreen(xcb_window_t client, bool enabled);
+  void set_shaded(xcb_window_t client, bool enabled);
   void minimize(xcb_window_t client);
   void restore(xcb_window_t client);
   void resize_frame(Frame& frame);
@@ -149,7 +153,7 @@ private:
   void update_title(Frame& frame);
   void install_key_grabs();
   bool install_root_cursor();
-  void cycle_focus();
+  void cycle_focus(bool expand_shaded = false);
   [[nodiscard]] int border_pixels() const;
   [[nodiscard]] int title_height_pixels() const;
   xcb_window_t client_for(xcb_window_t window) const;
@@ -173,6 +177,7 @@ private:
   static constexpr std::uint32_t desktop_count_ = 4;
   static constexpr std::uint32_t all_desktops_ = 0xffffffffU;
   std::uint32_t current_desktop_{};
+  DesktopLayout desktop_layout_{};
   bool showing_desktop_{};
   bool sync_available_{};
   xcb_timestamp_t last_event_time_{};
