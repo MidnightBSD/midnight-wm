@@ -1,4 +1,5 @@
 #include "model.hpp"
+#include "folder_view.hpp"
 
 #include <gio/gio.h>
 
@@ -96,6 +97,7 @@ std::vector<ShellItem> ShellModel::items(const std::filesystem::path& path, bool
       }
     }
   }
+  if (!desktop) for (auto& item : out) read_folder_metadata(item);
   std::ranges::sort(out, [](const ShellItem& a, const ShellItem& b) { return a.object.title < b.object.title; });
   return out;
 }
