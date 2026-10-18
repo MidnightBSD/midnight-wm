@@ -76,7 +76,7 @@ def session(args):
             other = subprocess.run([str(args.binary)], capture_output=True, text=True, timeout=5)
             assert other.returncode != 0, "second WM took over"
             def speaker():
-                run("xdotool", "mousemove", "1155", "16", "click", "1")
+                run("xdotool", "mousemove", "1173", "16", "click", "1")
             speaker()
             popup = until(lambda: window_for_size(260, 230), "speaker popup did not open")
             x, y = window_position(popup)

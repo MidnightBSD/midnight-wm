@@ -46,7 +46,7 @@ def session(args):
     with (args.output / "wm.log").open("w") as log:
         wm = subprocess.Popen([str(args.binary)], env=env, stdout=log, stderr=subprocess.STDOUT)
         def toggle():
-            x = round((int(1280 / args.scale) - 149) * args.scale)
+            x = round((int(1280 / args.scale) - 135) * args.scale)
             run("xdotool", "mousemove", str(x), str(round(16 * args.scale)), "click", "1")
         def popup():
             return visible_window("Midnight network status")
@@ -93,7 +93,7 @@ def session(args):
             run("xdotool", "key", "Down", "Page_Down", "Up", "Page_Up")
             capture("multiple-interfaces")
             # Audio and network popups must hand off grabs cleanly.
-            volume_x = round((int(1280 / args.scale) - 121) * args.scale)
+            volume_x = round((int(1280 / args.scale) - 107) * args.scale)
             run("xdotool", "mousemove", str(volume_x), str(round(16 * args.scale)), "click", "1")
             until(lambda: not popup(), "audio did not close network popup")
             until(lambda: window_for_size(round(260 * args.scale), round(230 * args.scale)), "audio popup did not open")
