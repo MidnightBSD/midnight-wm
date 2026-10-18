@@ -172,7 +172,7 @@ and preserved until cleared, including on logout. Write failures before atomic
 replacement retain the existing snapshot; save errors go to the session log.
 
 External applications, documents, and terminal processes are not restored yet.
-Application checkpoint persistence, relaunching and placement, save prompts, and
+Application relaunching and placement, save prompts, and
 coordinated application logout remain follow-up work for issue #31. No restart
 commands, credentials, or bus addresses are stored in the folder snapshot.
 
@@ -198,9 +198,33 @@ Registered clients receive an initial noninteractive checkpoint. Local/global
 client checkpoint requests and `SIGUSR1` to the companion also request saving;
 XSMP phase-2 requests are supported. Each checkpoint has a three-second deadline,
 connections and properties have resource limits, and partial peer reads/writes
-are bounded in the separate companion process. Successful restart metadata is
-currently held in memory only. This lets participating applications checkpoint
-their own state, but does not yet reopen them after login.
+are bounded in the separate companion process. Applications can checkpoint
+their own state, but are not yet reopened after login.
+
+Set `[Session] save_application_checkpoints=true` to persist successful global
+checkpoints, including requests through `SIGUSR1`, to
+`$XDG_STATE_HOME/midnight-wm/applications.ini` (normally
+`~/.local/state/midnight-wm/applications.ini`). This preference defaults to false,
+is read for each checkpoint, and is independent of folder saving. Initial and
+local checkpoints remain memory-only. A successful normal WM exit requests a
+final global checkpoint; crashes and termination signals do not save on exit.
+A request during another save is ignored rather than merging save transactions.
+
+The versioned application snapshot uses a private 0700 directory, a 0600 file,
+and atomic replacement. Failed or timed-out client saves preserve the previous
+checkpoint. A timed-out client must reconnect before it can participate in a
+persisted checkpoint, so a late reply cannot be mistaken for a new save.
+Malformed, unsupported, or insecure existing files are preserved
+until explicitly removed. Restart argument bytes and boundaries are retained,
+including non-UTF-8 filenames, without shell interpretation. Only client IDs,
+programs, restart argument lists, working directories, and restart styles are
+stored; environment and discard/shutdown commands are excluded. Restart arguments
+can contain private document paths, so treat this file as private session data.
+`RestartNever` is omitted; disconnected `RestartAnyway` clients retain their last
+completed metadata. Other styles require a connected client at checkpoint time;
+`RestartImmediately` does not yet trigger an immediate relaunch.
+This phase stores metadata only: application launch, saved-ID adoption, window
+placement, and coordination with autostart remain follow-up work.
 
 The companion does not send `Die`, request save prompts, or honor client requests
 to end the desktop. Coordinated application logout will be added separately.
@@ -222,8 +246,11 @@ builds, including malformed properties and transactional rejection.
 `python3 tests/xsmp_smoke.py` exercises real libSM clients, authentication failure,
 initial/local/global checkpoints, phase-2 saves, unknown properties, deletion,
 malformed updates, unresponsive clients, partial pre-auth frames, disconnections,
-inherited managers, bus bootstrapping, argument boundaries and lifecycle cleanup.
-It is registered with CTest when Python 3 and `dbus-run-session` are available.
+inherited managers, bus bootstrapping, argument boundaries, lifecycle cleanup,
+and opt-in checkpoint persistence with failure/timeout preservation.
+`application_checkpoint_test` covers snapshot validation, exact argument round
+trips, privacy, malformed-state preservation and interrupted writes. The transport
+test is registered with CTest when Python 3 and `dbus-run-session` are available.
 Run `python3 tests/session_smoke.py --binary build/midnightbsd-session` to check
 the real WM lifecycle through the companion, including an XSMP autostart client
 that verifies the session bus and inherited agent before registering.

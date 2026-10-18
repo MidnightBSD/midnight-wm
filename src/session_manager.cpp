@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Lucas Holt
 // SPDX-License-Identifier: BSD-2-Clause
 #include "session_manager.hpp"
+#include "config.hpp"
 #include "xsmp_properties.hpp"
 
 #include <X11/ICE/ICEutil.h>
@@ -15,6 +16,7 @@
 #include <cstring>
 #include <filesystem>
 #include <map>
+#include <iostream>
 #include <mutex>
 #include <optional>
 #include <utility>
@@ -121,7 +123,7 @@ struct SessionManager::Impl {
     std::map<std::string, Property> raw;
     std::optional<ApplicationRestart> completed;
     Clock::time_point deadline{}, last_request{};
-    bool registered{}, closing{}, waiting{}, phase2{}, phase2_sent{}, needs_complete{};
+    bool registered{}, closing{}, waiting{}, phase2{}, phase2_sent{}, needs_complete{}, in_checkpoint{}, timed_out{};
   };
   struct Auth {
     std::string protocol, network;
@@ -139,6 +141,10 @@ struct SessionManager::Impl {
   IceIOErrorHandler old_io_handler{};
   MessageDeadline message_deadline;
   std::size_t next_peer{};
+  ApplicationSessionStore store;
+  std::map<std::string, ApplicationRestart> retired;
+  bool saving{}, checkpoint_ok{true};
+  Clock::time_point checkpoint_deadline{};
 
   ~Impl() {
     for (auto& [connection, client] : clients) SmsCleanUp(connection);
@@ -209,7 +215,9 @@ struct SessionManager::Impl {
   static void save_done(SmsConn connection, SmPointer data, Bool success) {
     if (auto* client = static_cast<Impl*>(data)->find(connection); client && client->waiting) {
       client->waiting = false;
-      if (success) client->completed = client->properties.restart();
+      client->completed = success ? client->properties.restart() : std::nullopt;
+      auto& self = *static_cast<Impl*>(data);
+      if (!success && client->in_checkpoint) self.checkpoint_ok = false;
     }
   }
 
@@ -263,6 +271,7 @@ struct SessionManager::Impl {
       for (const auto& name : removed) client->raw.erase(name);
       // Never retain a now-deleted command as a completed checkpoint.
       client->completed.reset();
+      if (client->in_checkpoint) static_cast<Impl*>(data)->checkpoint_ok = false;
     }
   }
 
@@ -277,7 +286,7 @@ struct SessionManager::Impl {
   static Status new_client(SmsConn connection, SmPointer data, unsigned long* mask,
                             SmsCallbacks* callbacks, char** reason) {
     auto& self = *static_cast<Impl*>(data);
-    if (self.clients.size() >= connection_limit || self.clients.contains(connection)) {
+    if (self.clients.size() + self.retired.size() >= connection_limit || self.clients.contains(connection)) {
       *reason = strdup("Session client limit reached");
       return 0;
     }
@@ -367,11 +376,43 @@ struct SessionManager::Impl {
     return {};
   }
 
-  void checkpoint() {
+  void checkpoint(bool persist = true) {
     const auto now = Clock::now();
-    if (now - last_checkpoint < std::chrono::seconds(1)) return;
+    // Do not mix an in-flight initial/local checkpoint with a new global one.
+    if (pending() || saving || now - last_checkpoint < std::chrono::seconds(1)) return;
     last_checkpoint = now;
-    for (auto& [connection, client] : clients) begin(*client, SmSaveBoth);
+    saving = persist && load_config().save_application_checkpoints;
+    // XSMP has no checkpoint sequence number. A late SaveYourselfDone from a
+    // timed-out save cannot safely authorize a later persisted checkpoint.
+    checkpoint_ok = std::ranges::none_of(clients, [](const auto& item) {
+      return item.second->timed_out;
+    });
+    checkpoint_deadline = now + timeout;
+    for (auto& [connection, client] : clients) {
+      if (!client->registered || client->closing) continue;
+      client->in_checkpoint = saving;
+      client->completed.reset();
+      begin(*client, SmSaveBoth);
+    }
+  }
+
+  void finish_checkpoint() {
+    if (!saving) return;
+    const bool waiting = std::ranges::any_of(clients, [](const auto& item) {
+      return item.second->in_checkpoint && item.second->waiting;
+    });
+    if (waiting && Clock::now() < checkpoint_deadline) return;
+    if (waiting) checkpoint_ok = false;
+    ApplicationCheckpoint checkpoint;
+    for (const auto& [id, application] : retired) checkpoint.applications.push_back(application);
+    for (auto& [connection, client] : clients) {
+      if (client->in_checkpoint && client->completed) checkpoint.applications.push_back(*client->completed);
+      client->in_checkpoint = false;
+    }
+    if (!checkpoint_ok) std::cerr << "Application checkpoint not saved: incomplete client save\n";
+    else if (auto saved = store.save(checkpoint); !saved)
+      std::cerr << "Application checkpoint not saved: " << saved.error() << '\n';
+    saving = false;
   }
 
   bool pending() const {
@@ -430,6 +471,13 @@ struct SessionManager::Impl {
       if (!it->close) { ++it; continue; }
       for (auto client = clients.begin(); client != clients.end();) {
         if (SmsGetIceConnection(client->first) != it->ice) { ++client; continue; }
+        auto& state = *client->second;
+        if (state.waiting && state.in_checkpoint) checkpoint_ok = false;
+        // RestartAnyway survives a clean or abrupt client exit. Other styles
+        // are retained only while their client is running; no immediate restart
+        // is attempted in this persistence-only phase.
+        if (!state.timed_out && state.completed && state.completed->style == RestartStyle::anyway)
+          retired[state.completed->client_id] = *state.completed;
         SmsCleanUp(client->first);
         client = clients.erase(client);
       }
@@ -438,7 +486,12 @@ struct SessionManager::Impl {
     }
     const auto now = Clock::now();
     for (auto& [connection, client] : clients)
-      if (client->waiting && now >= client->deadline) client->waiting = false;
+      if (client->waiting && now >= client->deadline) {
+        client->waiting = false;
+        client->timed_out = true;
+        client->completed.reset();
+        if (client->in_checkpoint) checkpoint_ok = false;
+      }
     const bool phase1_done = std::ranges::none_of(clients, [](const auto& item) {
       return item.second->waiting && !item.second->phase2;
     });
@@ -448,6 +501,7 @@ struct SessionManager::Impl {
         SmsSaveYourselfPhase2(connection);
       }
     }
+    finish_checkpoint();
     if (!pending()) for (auto& [connection, client] : clients) {
       if (client->needs_complete) { SmsSaveComplete(connection); client->needs_complete = false; }
     }
@@ -458,6 +512,6 @@ SessionManager::SessionManager() : impl_(std::make_unique<Impl>()) {}
 SessionManager::~SessionManager() = default;
 std::expected<void, std::string> SessionManager::initialize() { return impl_->initialize(); }
 void SessionManager::tick(int timeout_ms) { impl_->tick(timeout_ms); }
-void SessionManager::checkpoint() { impl_->checkpoint(); }
-bool SessionManager::checkpoint_pending() const { return impl_->pending(); }
+void SessionManager::checkpoint(bool persist) { impl_->checkpoint(persist); }
+bool SessionManager::checkpoint_pending() const { return impl_->pending() || impl_->saving; }
 } // namespace midnight

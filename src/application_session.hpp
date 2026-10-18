@@ -27,6 +27,23 @@ struct ApplicationRestart {
 
 std::expected<void, std::string> validate_application_restart(const ApplicationRestart& restart);
 
+// Restart metadata only; no process execution or backend-specific window IDs.
+struct ApplicationCheckpoint {
+  std::vector<ApplicationRestart> applications;
+  bool operator==(const ApplicationCheckpoint&) const = default;
+};
+class ApplicationSessionStore {
+public:
+  explicit ApplicationSessionStore(std::filesystem::path path = default_path());
+  static std::filesystem::path default_path();
+  std::expected<std::optional<ApplicationCheckpoint>, std::string> load() const;
+  // Refuse to overwrite malformed/insecure existing checkpoints until cleared.
+  std::expected<void, std::string> save(const ApplicationCheckpoint& checkpoint) const;
+  std::expected<void, std::string> clear() const;
+private:
+  std::filesystem::path path_;
+};
+
 struct ApplicationWindow {
   std::string client_id;
   std::string role;
