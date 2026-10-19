@@ -61,7 +61,7 @@ def session(root, binary, fixture):
     def logout():
         run('xdotool', 'mousemove', '12', '12', 'click', '1')
         time.sleep(.25)
-        run('xdotool', 'mousemove', '40', '310', 'click', '1')
+        run('xdotool', 'mousemove', '40', '334', 'click', '1')
         until(lambda: window_for_size(380, 174), 'exit confirmation missing')
         run('xdotool', 'key', 'Return')
         until(lambda: any(line.endswith('shutdown') for line in events()) or
@@ -136,7 +136,7 @@ def session(root, binary, fixture):
         # The hung connection must reconnect; no second shutdown is sent.
         run('xdotool', 'mousemove', '12', '12', 'click', '1')
         time.sleep(.25)
-        run('xdotool', 'mousemove', '40', '310', 'click', '1')
+        run('xdotool', 'mousemove', '40', '334', 'click', '1')
         until(lambda: window_for_size(380, 174), 'retry confirmation missing')
         run('xdotool', 'key', 'Return')
         time.sleep(.7)

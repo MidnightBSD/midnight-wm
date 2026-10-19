@@ -314,7 +314,8 @@ struct TransferCompletion {
 };
 
 enum class MenuAction { noop, open_home, open_desktop, open_trash, new_folder, paste, show_programs,
-                        show_recent, open_recent, settings, package_manager, workspaces, switch_workspace, show_desktop,
+                        show_recent, open_recent, settings, package_manager, system_monitor,
+                        workspaces, switch_workspace, show_desktop,
                         show_category, next_categories, previous_categories,
                         launch, launch_action, desktop_action, next_apps, previous_apps,
                         open_item, open_with, copy, cut, create_shadow, create_template, properties, trash,
@@ -2287,6 +2288,11 @@ struct Shell::Impl {
                    x - 1, y + 9 + (slider % 2) * 4, 3, 3);
             }
           }
+        } else if (entry.action == MenuAction::system_monitor) {
+          if (auto* surface = themed_icon_surface("utilities-system-monitor")) {
+            cairo_set_source_surface(cr, surface, 8, y + 3);
+            cairo_paint(cr);
+          }
         } else if (entry.action == MenuAction::open_trash) {
           if (auto* surface = themed_icon_surface("user-trash")) {
             cairo_set_source_surface(cr, surface, 8, y + 3);
@@ -3066,6 +3072,7 @@ struct Shell::Impl {
                                    {"Show desktop", MenuAction::show_desktop},
                                    {"Trash", MenuAction::open_trash},
                                    {"Mport Manager", MenuAction::package_manager},
+                                   {"System Monitor", MenuAction::system_monitor},
                                    {"Exit X11 session…", MenuAction::exit_session}};
     const auto area = primary_area();
     show_menu(area.x + 3, area.y + panel_height, desktop, std::move(entries));
@@ -3440,6 +3447,22 @@ struct Shell::Impl {
         }
         g_strfreev(argv);
         if (!launched) show_notice(std::string("Could not open Mport Manager: ") +
+                                  (error ? error->message : "launch failed"));
+        if (error) g_error_free(error);
+        g_object_unref(desktop_entry);
+        break;
+      }
+      case MenuAction::system_monitor: {
+        auto* desktop_entry = g_desktop_app_info_new("midnightbsd-system-monitor.desktop");
+        if (!desktop_entry) {
+          show_notice("System Monitor is not installed.");
+          break;
+        }
+        GError* error = nullptr;
+        auto* app = G_APP_INFO(desktop_entry);
+        const bool launched = startup ? startup->launch(app, nullptr, &error) :
+          g_app_info_launch(app, nullptr, nullptr, &error);
+        if (!launched) show_notice(std::string("Could not open System Monitor: ") +
                                   (error ? error->message : "launch failed"));
         if (error) g_error_free(error);
         g_object_unref(desktop_entry);
