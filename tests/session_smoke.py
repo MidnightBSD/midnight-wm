@@ -70,7 +70,7 @@ def session(args):
     def exit_dialog():
         run("xdotool", "mousemove", "12", "12", "click", "1")
         time.sleep(.25)
-        run("xdotool", "mousemove", "40", "310", "click", "1")
+        run("xdotool", "mousemove", "40", "334", "click", "1")
         return until(lambda: window_for_size(380, 174), "exit dialog missing")
 
     def logout(wm):
@@ -220,6 +220,8 @@ Path(sys.argv[2]).write_text(json.dumps({'manager': os.environ['SESSION_MANAGER'
             from settings_smoke import visible_window
             window = until(lambda: visible_window("Midnight Workspace Settings"), "settings missing")
             run("xdotool", "windowactivate", "--sync", window)
+            run("xdotool", "key", "--clearmodifiers", "ctrl+Page_Down")
+            time.sleep(.2)
             run("xdotool", "key", "--clearmodifiers", "ctrl+Page_Down")
             time.sleep(.2)
             run("xdotool", "key", "--clearmodifiers", "ctrl+Page_Down")
