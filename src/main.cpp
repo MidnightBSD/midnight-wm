@@ -178,6 +178,14 @@ int main(int argc, char** argv) {
           [&shell](const std::filesystem::path& path) {
             return shell.show_item_properties(path);
           });
+      midnight::FileManager1 workspace_file_manager(
+          [&shell](const std::filesystem::path& path,
+                   const std::optional<std::filesystem::path>& selected) {
+            return shell.show_folder(path, selected);
+          },
+          [&shell](const std::filesystem::path& path) {
+            return shell.show_item_properties(path);
+          }, midnight::workspace_file_manager_name, midnight::workspace_file_manager_path);
       midnight::XSettings xsettings(connection, screen, screen_number);
       midnight::DesktopServices desktop_services(connection, shell.theme());
       shell.set_exit_handler([&] {
@@ -213,6 +221,7 @@ int main(int argc, char** argv) {
         // Existing notification daemons retain the standard session name.
         (void)notifications.initialize();
         if (!file_manager.initialize()) std::cerr << "FileManager1 D-Bus unavailable\n";
+        if (!workspace_file_manager.initialize()) std::cerr << "Workspace file manager D-Bus unavailable\n";
         (void)xsettings.initialize();
         (void)desktop_services.initialize();
         midnight::Compositor compositor(connection, screen_number);

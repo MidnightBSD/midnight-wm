@@ -486,6 +486,11 @@ View → Refresh recalculate the size, and completed results are resampled every
 30 seconds to pick up changes inside nested folders.
 On a session D-Bus, Midnight also offers `org.freedesktop.FileManager1`, so
 applications can open folders, reveal selected files, and show file properties.
+The `Midnight Workspace Files` application can be selected as the default
+folder handler in Settings. Its `midnightbsd-open-folder` launcher sends local
+paths or file URIs to the running workspace, opening built-in folder windows
+without starting another window manager. The launcher also works if another
+file manager owns the shared `org.freedesktop.FileManager1` name.
 
 The `Home`, `Downloads`, `Documents`, `Pictures`, `Trash`, and `Templates`
 shortcuts appear on the desktop by default. Downloads, Documents, Pictures, and

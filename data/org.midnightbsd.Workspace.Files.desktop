@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Midnight Workspace Files
+Comment=Open folders in Midnight Workspace
+Exec=midnightbsd-open-folder %U
+TryExec=midnightbsd-open-folder
+Icon=system-file-manager
+Terminal=false
+Categories=System;FileTools;FileManager;
+MimeType=inode/directory;
+StartupNotify=false

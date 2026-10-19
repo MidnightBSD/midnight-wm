@@ -55,6 +55,11 @@ int main() {
            "MimeType=text/plain;\n";
   }
   {
+    std::ofstream out(apps / "org.midnightbsd.Workspace.Files.desktop");
+    out << "[Desktop Entry]\nType=Application\nName=Midnight Workspace Files\n"
+           "Exec=/usr/bin/true\nMimeType=inode/directory;\n";
+  }
+  {
     std::ofstream out(apps / "mimeinfo.cache");
     out << "[MIME Cache]\n"
            "x-scheme-handler/http=test-browser.desktop;\n"
@@ -79,6 +84,7 @@ int main() {
   const auto browser_choices = app_default_choices(AppDefaultRole::browser);
   const auto html_choices = app_default_choices(AppDefaultRole::html);
   const auto calendar_choices = app_default_choices(AppDefaultRole::calendar);
+  const auto folder_choices = app_default_choices(AppDefaultRole::files);
   const auto terminal_choices = app_default_choices(AppDefaultRole::terminal);
   const auto contains = [](const auto& choices, const char* id) {
     return std::ranges::any_of(choices, [id](const auto& item) { return item.id == id; });
@@ -88,11 +94,13 @@ int main() {
       !contains(html_choices, "test-html-editor.desktop") ||
       !contains(calendar_choices, "test-calendar.desktop") ||
       contains(calendar_choices, "test-text-editor.desktop") ||
+      !contains(folder_choices, "org.midnightbsd.Workspace.Files.desktop") ||
       !contains(terminal_choices, "test-terminal.desktop")) return 2;
   const auto browser_applied = save_app_defaults({{AppDefaultRole::browser, "test-browser.desktop"}});
   if (!browser_applied || read(config / "midnightworkspace-mimeapps.list").find("text/html=") != std::string::npos)
     return 3;
   const auto applied = save_app_defaults({{AppDefaultRole::html, "test-html-editor.desktop"},
+                                          {AppDefaultRole::files, "org.midnightbsd.Workspace.Files.desktop"},
                                           {AppDefaultRole::terminal, "test-terminal.desktop"}});
   if (!applied) { std::cerr << applied.error() << '\n'; return 3; }
   const auto mime = read(config / "midnightworkspace-mimeapps.list");
@@ -104,6 +112,7 @@ int main() {
       mime.find("x-scheme-handler/http=test-browser.desktop;") == std::string::npos ||
       mime.find("x-scheme-handler/https=test-browser.desktop;") == std::string::npos ||
       mime.find("text/html=test-html-editor.desktop;") == std::string::npos ||
+      mime.find("inode/directory=org.midnightbsd.Workspace.Files.desktop;") == std::string::npos ||
       associations.find("# generic comment") == std::string::npos ||
       associations.find("test-browser.desktop") == std::string::npos ||
       associations.find("[Removed Associations]\nx-scheme-handler/https=test-browser.desktop") != std::string::npos ||
@@ -112,15 +121,19 @@ int main() {
       terminals.find("old-terminal.desktop") == std::string::npos) return 4;
   auto* browser = preferred_web_browser();
   auto* html = g_app_info_get_default_for_type("text/html", false);
+  auto* folder = g_app_info_get_default_for_type("inode/directory", false);
   auto* terminal = preferred_terminal();
-  const bool effective = browser && html && terminal && g_app_info_get_id(browser) &&
+  const bool effective = browser && html && folder && terminal && g_app_info_get_id(browser) &&
       g_app_info_get_id(html) &&
+      g_app_info_get_id(folder) &&
       g_app_info_get_id(terminal) &&
       std::string(g_app_info_get_id(browser)) == "test-browser.desktop" &&
       std::string(g_app_info_get_id(html)) == "test-html-editor.desktop" &&
+      std::string(g_app_info_get_id(folder)) == "org.midnightbsd.Workspace.Files.desktop" &&
       std::string(g_app_info_get_id(terminal)) == "test-terminal.desktop";
   if (browser) g_object_unref(browser);
   if (html) g_object_unref(html);
+  if (folder) g_object_unref(folder);
   if (terminal) g_object_unref(terminal);
   if (!effective) return 5;
   const auto before = read(config / "midnightworkspace-mimeapps.list");
