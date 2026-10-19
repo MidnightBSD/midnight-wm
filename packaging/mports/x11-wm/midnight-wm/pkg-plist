@@ -1,4 +1,5 @@
 bin/midnightbsd-search
+bin/midnightbsd-system-monitor
 bin/midnightbsd-open-folder
 bin/midnight-wm
 bin/midnightbsd-settings
@@ -6,8 +7,10 @@ bin/midnightbsd-session
 share/man/man1/midnight-wm.1.gz
 share/man/man1/midnightbsd-settings.1.gz
 share/man/man1/midnightbsd-search.1.gz
+share/man/man1/midnightbsd-system-monitor.1.gz
 share/man/man1/midnightbsd-open-folder.1.gz
 share/applications/midnightbsd-settings.desktop
+share/applications/midnightbsd-system-monitor.desktop
 share/applications/org.midnightbsd.Workspace.Files.desktop
 share/xsessions/midnight-wm.desktop
 share/xdg-desktop-portal/portals/midnight.portal
