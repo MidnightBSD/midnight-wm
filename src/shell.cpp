@@ -798,7 +798,9 @@ struct Shell::Impl {
       display_monitors.push_back({0, 0, physical_width, physical_height, true});
     // A synthetic root ConfigureNotify used by isolated resize checks cannot
     // update RandR's sole monitor. The root event still supplies the new bounds.
-    if (display_monitors.size() == 1 && display_monitors.front().x == 0 &&
+    const char* synthetic = std::getenv("MIDNIGHT_WM_TEST_SYNTHETIC_RESIZE");
+    if (synthetic && std::string_view(synthetic) == "1" &&
+        display_monitors.size() == 1 && display_monitors.front().x == 0 &&
         display_monitors.front().y == 0 &&
         (display_monitors.front().width != physical_width ||
          display_monitors.front().height != physical_height)) {

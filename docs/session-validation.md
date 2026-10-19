@@ -48,9 +48,64 @@ The skill's live-resize result therefore covers synthetic ConfigureNotify reflow
 while the cross-login matrix covers actual different root-screen sizes. Neither
 result proves physical output rearrangement or hotplug.
 
+## Native RandR topology checks
+
+`tests/session_randr_smoke.py` runs a private headless Xorg server with the
+X.Org dummy 0.4.x driver. It changes actual RandR outputs while keeping the
+3840×1440 framebuffer fixed: primary selection, an offset and gap, output
+disable/re-enable, then session restoration with the saved output absent.
+Assertions cover panel bounds, named-monitor fullscreen/maximized geometry,
+reachable ordinary/shaded windows and built-in folders, restored client identity,
+and unchanged application checkpoints. Screenshots and monitor/window listings
+are retained in the printed temporary directory.
+
+Build the driver against the installed Xorg SDK without installing it system-wide:
+
+```sh
+mkdir -p /tmp/midnight-xorg-dummy
+cd /tmp/midnight-xorg-dummy
+fetch https://www.x.org/releases/individual/driver/xf86-video-dummy-0.4.1.tar.xz
+tar -xf xf86-video-dummy-0.4.1.tar.xz
+cd xf86-video-dummy-0.4.1
+./configure --prefix=/tmp/midnight-xorg-dummy/install
+make
+mkdir -p /tmp/midnight-xorg-dummy/modules/drivers
+cp src/.libs/dummy_drv.so /tmp/midnight-xorg-dummy/modules/drivers/
+```
+
+From the repository root, run:
+
+```sh
+python3 tests/session_randr_smoke.py --module-path /tmp/midnight-xorg-dummy/modules
+```
+
+To register the optional CTest, configure with
+`-DMIDNIGHT_WM_RANDR_MODULE_PATH=/tmp/midnight-xorg-dummy/modules`.
+The test requires Xorg, xrandr, xauth, and the usual X11 smoke-test tools.
+Use dummy 0.4.x, whose `HW_SKIP_CONSOLE` support avoids console access; the older
+0.3.8 mport is unsuitable. The server disables physical input/GPU discovery and
+VT switching, uses private authorization with TCP disabled, and never connects
+to an inherited display. HOME and XDG directories are isolated.
+
+This test exposed a sole-monitor fallback that incorrectly expanded real output
+bounds to the framebuffer after another output was disabled. The fallback now
+applies only with the explicit synthetic-resize test flag. The native topology
+test passes with the fix and fails at panel recovery without it.
+
+Validation on 2026-10-18: all 40 CTests passed with the optional native test
+enabled, cppcheck reported no findings, and the five-size display matrix passed.
+Menu, folder and Properties screenshots remained usable at each size. The live
+Xvfb check used synthetic ConfigureNotify; the separate native test used actual
+RandR events. The Xinerama fullscreen edge/geometry smoke check also passed.
+The experimental mport's test dependencies include Xorg, xrandr and xauth;
+the optional dummy 0.4.x module remains a separately prepared test fixture.
+
+These are genuine RandR protocol events from virtual outputs. Physical cable
+hotplug, hardware drivers, and mixed-DPI displays still require the checks below.
+
 ## Remaining Xorg hardware checks
 
-No live Xorg display was exposed to the automated runner. Use a dedicated test
+No physical Xorg display was exposed to the automated runner. Use a dedicated test
 account on a two-output session and record `xrandr --listmonitors`, screenshots,
 and relevant window geometry before and after each change:
 

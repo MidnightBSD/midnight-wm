@@ -380,6 +380,10 @@ behind shading, maximization and fullscreen. The default CTest changed-resolutio
 case restores 4K sessions at 1280×720. These are actual screen sizes across logins,
 not synthetic root resize events; they do not prove live RandR hotplug or offset
 multi-monitor behavior. See [session validation](docs/session-validation.md).
+`python3 tests/session_randr_smoke.py --module-path /path/to/private/modules`
+uses a private Xorg dummy 0.4.x server for genuine RandR primary-output changes,
+offsets, gaps, output disable/re-enable, and restoration with a missing output.
+See the session validation guide for driver setup and optional CTest registration.
 `application_restore_test` checks exact argument bytes, working directories,
 spawn failures, descriptor/signal isolation and rejection of shell fallback.
 

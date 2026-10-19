@@ -1862,7 +1862,9 @@ void X11WindowManager::refresh_theme() {
 void X11WindowManager::refresh_display_layout(std::uint16_t width, std::uint16_t height) {
   auto monitors = query_display_monitors(connection_, screen_);
   auto fullscreen_monitors = fullscreen_layout(connection_, screen_);
-  if (monitors.size() == 1 && monitors.front().x == 0 && monitors.front().y == 0 &&
+  // Only the explicitly enabled Xvfb synthetic-resize test may substitute
+  // root bounds. A real single output can be smaller than the framebuffer.
+  if (accept_synthetic_root_size_ && monitors.size() == 1 && monitors.front().x == 0 && monitors.front().y == 0 &&
       (monitors.front().width != width || monitors.front().height != height)) {
     monitors.front().width = width;
     monitors.front().height = height;

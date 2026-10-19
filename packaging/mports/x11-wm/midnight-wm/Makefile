@@ -16,6 +16,9 @@ LIB_DEPENDS=	libxcb-icccm.so:x11/xcb-util-wm \
 		libsqlite3.so:databases/sqlite3
 TEST_DEPENDS=	dbus-run-session:devel/dbus \
 		Xvfb:x11-servers/xorg-server@xvfb \
+		Xorg:x11-servers/xorg-server@xorg \
+		xrandr:x11/xrandr \
+		xauth:x11/xauth \
 		xdotool:x11/xdotool \
 		wmctrl:x11/wmctrl-fork \
 		xprop:x11/xprop \
