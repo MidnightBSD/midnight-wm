@@ -60,8 +60,10 @@ def session(args):
             run("xdotool", "mousemove", "12", "12", "click", "1")
             until(lambda: bool(popups()), "launcher did not open for package manager")
             run("xdotool", "mousemove", "100", "286", "click", "1")
-            until((Path(os.environ["HOME"]) / "mport manager.launched").exists,
+            manager_marker = Path(os.environ["HOME"]) / "mport manager.launched"
+            until(manager_marker.exists,
                   "Mport Manager desktop entry did not launch")
+            assert int(manager_marker.read_text()) == wm.pid, "pkexec lost its window-manager parent"
             until(lambda: not popups(), "package manager launch did not close menu")
 
             root, category = open_categories()
@@ -176,9 +178,14 @@ def main():
                     f'Exec={shutil.which("touch")} "{marker}"\nCategories={category};\n'
                     f'Actions=NewWindow;\n[Desktop Action NewWindow]\nName=New Window\n'
                     f'Exec={shutil.which("touch")} "{root / "home" / (name + ".action")}"\n')
+        fake_pkexec = root / "pkexec"
+        fake_pkexec.write_text(
+            f"#!{sys.executable}\nimport os, pathlib, sys\n"
+            "pathlib.Path(sys.argv[1]).write_text(str(os.getppid()))\n")
+        fake_pkexec.chmod(0o755)
         (root / "data/applications/mport-manager.desktop").write_text(
             "[Desktop Entry]\nType=Application\nName=Mport Manager\n"
-            f'Exec={shutil.which("touch")} "{root / "home" / "mport manager.launched"}"\n')
+            f'Exec={fake_pkexec} "{root / "home" / "mport manager.launched"}"\n')
         read_fd, write_fd = os.pipe()
         with (args.output / "xvfb.log").open("w") as log:
             xvfb = subprocess.Popen(["Xvfb", "-displayfd", str(write_fd), "-screen", "0",
