@@ -4,6 +4,7 @@
 #include "config.hpp"
 #include "session.hpp"
 #include "application_session.hpp"
+#include "application_defaults.hpp"
 
 #include <gtk/gtk.h>
 #include <glib/gstdio.h>
@@ -91,6 +92,9 @@ class Settings {
     checkbox(workspace, "Show Music", "Desktop", "show_music", false);
     checkbox(workspace, "Show Videos", "Desktop", "show_videos", false);
     checkbox(workspace, "Show Public Share", "Desktop", "show_public_share", false);
+    auto* defaults = page(notebook, "Application defaults");
+    row_ = 0;
+    application_defaults(defaults);
     auto* session = page(notebook, "Session");
     row_ = 0;
     checkbox(session, "_Restore folders at login", "Session", "restore_folders", false);
@@ -158,6 +162,13 @@ class Settings {
   GtkWidget* status_{};
   int row_{};
   std::vector<std::unique_ptr<Binding>> bindings_;
+  struct DefaultBinding {
+    midnight::AppDefaultRole role;
+    GtkWidget* combo{};
+    std::string initial;
+    bool changed{};
+  };
+  std::vector<std::unique_ptr<DefaultBinding>> default_bindings_;
 
   bool read_file(std::string& text, bool& exists, std::string& message) const {
     gchar* contents = nullptr;
@@ -215,6 +226,37 @@ class Settings {
     gtk_widget_set_hexpand(widget, TRUE);
     gtk_grid_attach(GTK_GRID(grid), label, 0, row_, 1, 1);
     gtk_grid_attach(GTK_GRID(grid), widget, 1, row_++, 1, 1);
+  }
+  void application_defaults(GtkWidget* grid) {
+    auto* help = gtk_label_new("Choose applications for web links, HTML files, and other content, then click Apply. The terminal choice also controls the panel button.");
+    gtk_label_set_line_wrap(GTK_LABEL(help), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(help), 0);
+    gtk_grid_attach(GTK_GRID(grid), help, 0, row_++, 2, 1);
+    for (const auto role : {midnight::AppDefaultRole::browser, midnight::AppDefaultRole::html,
+             midnight::AppDefaultRole::mail,
+             midnight::AppDefaultRole::calendar, midnight::AppDefaultRole::terminal,
+             midnight::AppDefaultRole::files, midnight::AppDefaultRole::text,
+             midnight::AppDefaultRole::images, midnight::AppDefaultRole::pdf}) {
+      auto* combo = gtk_combo_box_text_new();
+      const auto current = midnight::current_app_default(role);
+      if (!current) gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo), "", "Choose an application…");
+      const auto choices = midnight::app_default_choices(role);
+      for (const auto& choice : choices)
+        gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo), choice.id.c_str(),
+            (choice.name + " (" + choice.id + ")").c_str());
+      gtk_combo_box_set_active_id(GTK_COMBO_BOX(combo), current ? current->id.c_str() : "");
+      add(grid, midnight::app_default_label(role), combo);
+      auto binding = std::make_unique<DefaultBinding>();
+      binding->role = role;
+      binding->combo = combo;
+      binding->initial = current ? current->id : "";
+      g_signal_connect(combo, "changed", G_CALLBACK(+[](GtkComboBox* selected, gpointer data) {
+        auto& binding = *static_cast<DefaultBinding*>(data);
+        const char* id = gtk_combo_box_get_active_id(selected);
+        binding.changed = id && *id && id != binding.initial;
+      }), binding.get());
+      default_bindings_.push_back(std::move(binding));
+    }
   }
   void checkbox(GtkWidget* grid, const char* title, const char* group, const char* key, bool fallback) {
     auto* check = gtk_check_button_new_with_mnemonic(title);
@@ -398,39 +440,66 @@ class Settings {
   }
   void apply() {
     if (!valid_) return;
-    if (std::none_of(bindings_.begin(), bindings_.end(), [](const auto& binding) { return binding->changed; })) {
+    const bool ini_changed = std::ranges::any_of(bindings_, [](const auto& binding) { return binding->changed; });
+    const bool defaults_changed = std::ranges::any_of(default_bindings_, [](const auto& binding) { return binding->changed; });
+    if (!ini_changed && !defaults_changed) {
       gtk_label_set_text(GTK_LABEL(status_), "No changes to apply.");
       return;
     }
-    std::string current, error;
-    bool exists = false;
-    if (!read_file(current, exists, error)) { fail(error); return; }
-    if (exists != existed_ || current != original_) {
-      fail("The settings file changed outside this window. Close and reopen Settings before applying changes.");
-      return;
-    }
-    KeyFile updated(g_key_file_new());
-    if (existed_) g_key_file_load_from_data(updated.get(), original_.data(), original_.size(),
-        static_cast<GKeyFileFlags>(G_KEY_FILE_KEEP_COMMENTS | G_KEY_FILE_KEEP_TRANSLATIONS), nullptr);
-    for (const auto& binding : bindings_) if (binding->changed) binding->save(updated.get());
-    gsize length = 0;
-    auto* data = g_key_file_to_data(updated.get(), &length, nullptr);
-    if (g_mkdir_with_parents(path_.parent_path().c_str(), 0700) != 0) {
-      g_free(data);
-      fail("Could not create the settings directory.");
-      return;
-    }
-    GError* write_error = nullptr;
-    const bool saved = g_file_set_contents_full(path_.c_str(), data, static_cast<gssize>(length),
-        static_cast<GFileSetContentsFlags>(G_FILE_SET_CONTENTS_CONSISTENT | G_FILE_SET_CONTENTS_DURABLE), 0600, &write_error);
-    if (saved) {
+    if (ini_changed) {
+      std::string current, error;
+      bool exists = false;
+      if (!read_file(current, exists, error)) { fail(error); return; }
+      if (exists != existed_ || current != original_) {
+        fail("The settings file changed outside this window. Close and reopen Settings before applying changes.");
+        return;
+      }
+      KeyFile updated(g_key_file_new());
+      if (existed_) g_key_file_load_from_data(updated.get(), original_.data(), original_.size(),
+          static_cast<GKeyFileFlags>(G_KEY_FILE_KEEP_COMMENTS | G_KEY_FILE_KEEP_TRANSLATIONS), nullptr);
+      for (auto& binding : bindings_) if (binding->changed) binding->save(updated.get());
+      gsize length = 0;
+      auto* data = g_key_file_to_data(updated.get(), &length, nullptr);
+      if (g_mkdir_with_parents(path_.parent_path().c_str(), 0700) != 0) {
+        g_free(data);
+        fail("Could not create the settings directory.");
+        return;
+      }
+      GError* write_error = nullptr;
+      const bool saved = g_file_set_contents_full(path_.c_str(), data, static_cast<gssize>(length),
+          static_cast<GFileSetContentsFlags>(G_FILE_SET_CONTENTS_CONSISTENT | G_FILE_SET_CONTENTS_DURABLE), 0600, &write_error);
+      if (!saved) {
+        fail(write_error ? write_error->message : "Could not save settings");
+        g_clear_error(&write_error);
+        g_free(data);
+        return;
+      }
       original_.assign(data, length);
       existed_ = true;
       file_ = std::move(updated);
       for (auto& binding : bindings_) binding->changed = false;
-      gtk_label_set_text(GTK_LABEL(status_), "Settings applied. The running Midnight Workspace updates automatically.");
-    } else { fail(write_error->message); g_error_free(write_error); }
-    g_free(data);
+      g_free(data);
+    }
+    if (defaults_changed) {
+      std::vector<midnight::AppDefaultSetting> changes;
+      for (const auto& binding : default_bindings_) if (binding->changed) {
+        const char* id = gtk_combo_box_get_active_id(GTK_COMBO_BOX(binding->combo));
+        if (id && *id) changes.push_back({binding->role, id});
+      }
+      const auto result = midnight::save_app_defaults(changes);
+      if (!result) {
+        fail((ini_changed ? "Workspace settings saved, but application defaults failed: " :
+            "Could not save application defaults: ") + result.error());
+        return;
+      }
+      for (auto& binding : default_bindings_) if (binding->changed) {
+        binding->initial = gtk_combo_box_get_active_id(GTK_COMBO_BOX(binding->combo));
+        binding->changed = false;
+      }
+    }
+    gtk_label_set_text(GTK_LABEL(status_), ini_changed ?
+        "Settings applied. The running Midnight Workspace updates automatically." :
+        "Application defaults saved.");
   }
   void fail(const std::string& message) {
     auto* dialog = gtk_message_dialog_new(GTK_WINDOW(window_), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR,

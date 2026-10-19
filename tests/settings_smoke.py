@@ -188,6 +188,17 @@ def session(args):
             assert wm.poll() is None, "WM exited during Settings Apply"
             assert geometry(folder_window) == (620, 430), "Settings Apply lost the existing folder"
 
+            run("xdotool", "windowactivate", "--sync", settings)
+            run("xdotool", "key", "--clearmodifiers", "ctrl+Page_Down")
+            time.sleep(0.2)
+            run("import", "-window", "root", str(output / "application-defaults.png"))
+            x, y = window_position(settings)
+            width, height = geometry(settings)
+            left, right, top, bottom = frame_extents(settings)
+            assert x - left >= 0 and y - top >= 30 and \
+                x + width + right <= 1280 and y + height + bottom <= 720, \
+                "Application defaults page extends outside the 720p screen"
+
             # External atomic saves must follow the same reload path as the Settings app.
             atomic_write(gtk_settings, "[Settings]\ngtk-icon-theme-name=SmokeBlue\n")
             changed = ("[Workspace]\npanel_label=Smoke test\nui_scale=1.25\n"
