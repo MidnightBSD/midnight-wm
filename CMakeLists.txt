@@ -185,6 +185,7 @@ add_test(NAME thumbnail_test COMMAND thumbnail_test)
 add_executable(recent_files_test tests/recent_files_test.cpp)
 target_link_libraries(recent_files_test PRIVATE midnight_core)
 add_test(NAME recent_files_test COMMAND recent_files_test)
+set(MIDNIGHT_WM_RANDR_MODULE_PATH "" CACHE PATH "Private Xorg dummy 0.4.x module root for optional RandR smoke checks")
 find_program(DBUS_RUN_SESSION dbus-run-session)
 if(DBUS_RUN_SESSION)
   if(Python3_Interpreter_FOUND)
@@ -194,6 +195,19 @@ if(DBUS_RUN_SESSION)
       --fixture $<TARGET_FILE:xsmp_client_fixture>
       --output ${CMAKE_CURRENT_BINARY_DIR}/xsmp-test-results)
     set_tests_properties(xsmp_transport_test PROPERTIES TIMEOUT 140)
+    if(MIDNIGHT_WM_RANDR_MODULE_PATH)
+      find_program(XORG_SERVER Xorg REQUIRED)
+      find_program(XRANDR xrandr REQUIRED)
+      find_program(XAUTH xauth REQUIRED)
+      if(NOT EXISTS "${MIDNIGHT_WM_RANDR_MODULE_PATH}/drivers/dummy_drv.so")
+        message(FATAL_ERROR "RandR smoke checks require a dummy 0.4.x module in drivers/dummy_drv.so")
+      endif()
+      add_test(NAME session_randr_smoke COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/session_randr_smoke.py
+        --module-path ${MIDNIGHT_WM_RANDR_MODULE_PATH}
+        --binary $<TARGET_FILE:midnightbsd-session> --fixture $<TARGET_FILE:xsmp_restore_fixture>)
+      set_tests_properties(session_randr_smoke PROPERTIES TIMEOUT 130)
+    endif()
     if(XVFB)
       add_test(NAME application_restore_smoke COMMAND ${Python3_EXECUTABLE}
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/application_restore_smoke.py
