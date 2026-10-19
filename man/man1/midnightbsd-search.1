@@ -1,0 +1,44 @@
+." Copyright (c) 2026 Lucas Holt
+." SPDX-License-Identifier: BSD-2-Clause
+.Dd October 18, 2026
+.Dt MIDNIGHTBSD-SEARCH 1
+.Os
+.Sh NAME
+.Nm midnightbsd-search
+.Nd search indexed file names and paths
+.Sh SYNOPSIS
+.Nm
+.Op Fl h | Fl -help
+.Op Fl -display Ns = Ns Ar display
+.Sh DESCRIPTION
+.Nm
+opens the GTK 3 Search Files window.
+Enter part of a file name or path and click Find or press Enter.
+Search is case-insensitive and treats the text literally.
+It queries the system
+.Xr locate 1
+database, returns at most 20 matches, and times out after 15 seconds.
+Results depend on the age and availability of that database;
+this application does not search file contents.
+Click a result to open it with the default application.
+.Pp
+The application accepts standard GTK and GApplication options, including:
+.Bl -tag -width Ds
+.It Fl h , Fl -help
+Show available options and exit.
+.It Fl -display Ns = Ns Ar display
+Select the X display.
+.El
+There is no application-specific search term or version option;
+search text is entered in the window.
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev DISPLAY , XAUTHORITY
+Select and authenticate to the X server.
+.El
+.Sh SEE ALSO
+.Xr locate 1 ,
+.Xr midnight-wm 1 ,
+.Xr midnightbsd-settings 1
+.Sh AUTHORS
+.An Lucas Holt

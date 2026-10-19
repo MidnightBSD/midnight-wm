@@ -1,0 +1,224 @@
+." Copyright (c) 2026 Lucas Holt
+." SPDX-License-Identifier: BSD-2-Clause
+.Dd October 18, 2026
+.Dt MIDNIGHT-WM 1
+.Os
+.Sh NAME
+.Nm midnight-wm
+.Nd X11 desktop shell and window manager for MidnightBSD
+.Sh SYNOPSIS
+.Nm
+.Op Fl -version
+.Sh DESCRIPTION
+.Nm
+runs the Midnight Workspace desktop, including the window manager, panel,
+desktop folders, launcher, and system controls.
+Start it as the X11 session program, for example with
+.Li exec /usr/local/bin/midnight-wm
+in
+.Pa ~/.xinitrc ,
+or select Midnight Workspace in a display manager.
+Only one window manager can own an X screen.
+.Nm
+uses an existing reachable D-Bus session bus; when none is available, it
+re-executes through
+.Xr dbus-run-session 1
+if that program and
+.Ic dbus-daemon
+are installed.
+It preserves an existing Secret Service owner and a working inherited SSH
+agent socket.
+.Pp
+The only application-specific option is:
+.Bl -tag -width Ds
+.It Fl -version
+Print the project version and exit.
+.El
+Other command-line arguments print usage and return a nonzero status.
+.Sh CONFIGURATION
+.Nm
+reads
+.Pa $XDG_CONFIG_HOME/midnight-wm/config.ini ,
+or
+.Pa ~/.config/midnight-wm/config.ini
+when
+.Ev XDG_CONFIG_HOME
+is unset.
+The installed example is
+.Pa /usr/local/share/midnight-wm/config.ini .
+It uses INI sections and
+.Li key=value
+entries.
+Boolean values are
+.Li true
+or
+.Li false .
+Missing or invalid individual values use the defaults below.
+Most appearance and desktop settings apply when the file is saved;
+restoration choices apply at the next login.
+.Pp
+The
+.Sq Workspace
+section accepts:
+.Bl -tag -width Ds
+.It Cm panel_label
+Launcher button text; default
+.Li "Midnight ▾" .
+.It Cm clock_format
+.Xr strftime 3
+format for the panel clock; default
+.Li "%a %H:%M" .
+.It Cm show_battery
+Show the battery indicator when a battery exists; default
+.Li true .
+.It Cm dark_mode
+Use dark shell controls, decorations, and notifications; default
+.Li false .
+.It Cm compositing
+Start Picom for shadows when available, preserving an existing compositor;
+default
+.Li true .
+.It Cm ui_font , title_font
+Pango family/style descriptions for controls and window titles; defaults
+.Li Sans
+and
+.Li "Sans Bold" .
+An optional size is in points and is clamped to 6 through 32;
+omitting it preserves each widget's default size.
+.It Cm desktop_color
+Desktop background in
+.Li #RRGGBB
+form; default
+.Li #7866a8 .
+It remains visible behind transparency or letterboxing.
+.It Cm desktop_image
+Wallpaper path, supporting PNG, JPEG, GIF (first frame), and SVG through
+GdkPixbuf.
+An absolute path or
+.Li ~/
+path is used directly.
+A relative name is searched in the config directory, the user XDG data
+.Li backgrounds
+directory, system XDG data
+.Li backgrounds/midnightbsd
+and
+.Li backgrounds
+directories, and the installation prefix's
+.Li share/backgrounds/midnightbsd .
+An absent key uses
+.Li mnbsd_bg_purple.png
+when installed; an explicit empty value disables the image.
+An unreadable image leaves the solid background.
+The image repeats independently on each monitor.
+.It Cm desktop_image_mode
+.Li fill
+(default) crops the image to each monitor;
+.Li fit
+shows the whole image with the desktop color behind it.
+.It Cm panel_color
+Optional panel color in
+.Li #RRGGBB
+form; otherwise follows the light or dark preset.
+.It Cm accent_color
+Accent color in
+.Li #RRGGBB
+form; default
+.Li #3b205f .
+.It Cm ui_scale
+Override automatic UI scaling with a value from 0.75 to 3.0.
+When unset, scaling follows the primary monitor height.
+.El
+.Pp
+The
+.Sq Desktop
+section controls built-in shortcuts:
+.Bl -tag -width Ds
+.It Cm show_documents , show_pictures
+Display Documents and Pictures; both default to
+.Li true .
+.It Cm show_music , show_videos , show_public_share
+Display Music, Videos, and Public Share; all default to
+.Li false .
+.El
+.Pp
+The
+.Sq Session
+section accepts:
+.Bl -tag -width Ds
+.It Cm restore_folders
+Reopen saved built-in folders at login; default
+.Li false .
+.It Cm save_on_logout
+Save built-in folder state on a normal confirmed logout; default
+.Li false .
+.It Cm save_application_checkpoints
+Save successful XSMP application checkpoints; default
+.Li false .
+.It Cm restore_applications
+Restore participating applications through
+.Ic midnightbsd-session
+at login; default
+.Li false .
+.It Cm restore_desktop_applications
+With
+.Cm restore_applications
+also enabled, reopen recognized applications without XSMP support once
+through their installed desktop entries; default
+.Li false .
+This does not restore their documents.
+.El
+.Pp
+The
+.Xr midnightbsd-settings 1
+application edits these settings while preserving unknown INI keys and comments.
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev DISPLAY , XAUTHORITY
+Select and authenticate to the X server.
+.It Ev XDG_CONFIG_HOME , XDG_CONFIG_DIRS
+Locate the user INI file, menu layouts, and terminal preferences.
+.It Ev XDG_DATA_HOME , XDG_DATA_DIRS
+Locate wallpaper, desktop entries, icons, and application data.
+.It Ev XDG_STATE_HOME
+Base directory for saved session state.
+.It Ev XDG_RUNTIME_DIR
+Location checked for an existing user session bus socket.
+.It Ev DBUS_SESSION_BUS_ADDRESS
+Address of an existing session bus, used when reachable.
+.It Ev XDG_CURRENT_DESKTOP
+Preserved when set; otherwise set to
+.Li MidnightWorkspace
+for application and desktop integration.
+.It Ev SSH_AUTH_SOCK
+Preserved when reachable; otherwise a session SSH agent may be started.
+.It Ev TERMINAL
+Fallback terminal command for the panel button when no XDG terminal
+preference is found.
+.It Ev XDG_MENU_PREFIX
+Prefix for the freedesktop
+.Pa applications.menu
+file used by Programs.
+.It Ev SESSION_MANAGER
+XSMP session manager address, when supplied by the session companion.
+.El
+Internal
+.Li MIDNIGHT_WM_*
+variables are used for the D-Bus wrapper, session restoration, and tests;
+they are not configuration settings.
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa ~/.config/midnight-wm/config.ini
+User configuration when
+.Ev XDG_CONFIG_HOME
+is unset.
+.It Pa /usr/local/share/midnight-wm/config.ini
+Installed example configuration.
+.It Pa /usr/local/share/backgrounds/midnightbsd/
+Optional installed wallpaper directory.
+.El
+.Sh SEE ALSO
+.Xr midnightbsd-search 1 ,
+.Xr midnightbsd-settings 1 ,
+.Xr dbus-run-session 1
+.Sh AUTHORS
+.An Lucas Holt

@@ -1,0 +1,52 @@
+." Copyright (c) 2026 Lucas Holt
+." SPDX-License-Identifier: BSD-2-Clause
+.Dd October 18, 2026
+.Dt MIDNIGHTBSD-SETTINGS 1
+.Os
+.Sh NAME
+.Nm midnightbsd-settings
+.Nd graphical settings for Midnight Workspace
+.Sh SYNOPSIS
+.Nm
+.Op Fl -version
+.Sh DESCRIPTION
+.Nm
+opens the GTK 3 Midnight Workspace settings application.
+Its Appearance, Desktop and panel, and Session pages edit the user INI file
+used by
+.Xr midnight-wm 1 .
+Click Apply to save changes.
+Appearance and desktop changes update a running Midnight Workspace;
+session restoration choices take effect at the next login.
+The editor preserves unknown INI keys and comments.
+It reports malformed or externally changed files rather than overwriting them.
+The Session page can clear saved folder and application sessions.
+.Pp
+The application-specific option is:
+.Bl -tag -width Ds
+.It Fl -version
+Print the project version and exit without opening a window.
+.El
+GTK also accepts its standard display and help options.
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev DISPLAY , XAUTHORITY
+Select and authenticate to the X server.
+.It Ev XDG_CONFIG_HOME
+Base directory for
+.Pa midnight-wm/config.ini ;
+defaults to
+.Pa ~/.config .
+.El
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa ~/.config/midnight-wm/config.ini
+User configuration at the default XDG config location.
+.It Pa /usr/local/share/midnight-wm/config.ini
+Installed example with all supported settings.
+.El
+.Sh SEE ALSO
+.Xr midnight-wm 1 ,
+.Xr midnightbsd-search 1
+.Sh AUTHORS
+.An Lucas Holt
