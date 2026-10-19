@@ -49,7 +49,7 @@ target_compile_options(midnightbsd-search PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(midnightbsd-system-monitor src/system_monitor.cpp)
 target_link_libraries(midnightbsd-system-monitor PRIVATE PkgConfig::GTK3)
 if(CMAKE_SYSTEM_NAME MATCHES "^(MidnightBSD|FreeBSD)$")
-  target_link_libraries(midnightbsd-system-monitor PRIVATE util)
+  target_link_libraries(midnightbsd-system-monitor PRIVATE util geom)
 endif()
 target_compile_options(midnightbsd-system-monitor PRIVATE -Wall -Wextra -Wpedantic)
 

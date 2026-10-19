@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -28,8 +29,10 @@
 #include <net/if_dl.h>
 #include <ifaddrs.h>
 #include <libutil.h>
+#include <libgeom.h>
 #include <pwd.h>
 #include <unistd.h>
+#include <vm/vm_param.h>
 #endif
 
 namespace {
@@ -90,6 +93,7 @@ struct Graph {
 
 enum ProcessColumn { PID, NAME, USER, STATE, CPU, MEMORY, PROCESS_COLUMNS };
 enum MountColumn { DEVICE, MOUNT, TYPE, TOTAL, USED, AVAILABLE, PERCENT, MOUNT_COLUMNS };
+enum DriveColumn { DRIVE_DEVICE, DRIVE_TYPE, DRIVE_MODEL, DRIVE_SIZE, DRIVE_COLUMNS };
 
 GtkWidget* list_view(GtkListStore* store, const std::initializer_list<std::pair<const char*, int>>& columns) {
   auto* view = gtk_tree_view_new_with_model(GTK_TREE_MODEL(store));
@@ -119,6 +123,8 @@ struct Monitor {
   GtkWidget* status{};
   GtkListStore* processes{};
   GtkListStore* mounts{};
+  GtkListStore* drives{};
+  GtkWidget *hardware_cpu{}, *hardware_ram{}, *hardware_swap{}, *hardware_os{}, *hardware_status{};
   Graph cpu, memory, network;
   guint timer{};
   unsigned tick_count{};
@@ -133,6 +139,7 @@ struct Monitor {
     if (timer) g_source_remove(timer);
     if (processes) g_object_unref(processes);
     if (mounts) g_object_unref(mounts);
+    if (drives) g_object_unref(drives);
   }
 
   static GtkWidget* scroller(GtkWidget* child) {
@@ -157,6 +164,61 @@ struct Monitor {
     g_signal_connect(graph.area, "draw", G_CALLBACK(Graph::draw), &graph);
     gtk_box_pack_start(GTK_BOX(box), graph.area, TRUE, TRUE, 0);
     gtk_box_pack_start(GTK_BOX(parent), frame, TRUE, TRUE, 0);
+  }
+
+  static GtkWidget* hardware_row(GtkWidget* grid, int row, const char* title) {
+    auto* heading = gtk_label_new(title);
+    gtk_label_set_xalign(GTK_LABEL(heading), 0);
+    gtk_widget_set_halign(heading, GTK_ALIGN_START);
+    gtk_grid_attach(GTK_GRID(grid), heading, 0, row, 1, 1);
+    auto* value = gtk_label_new("Loading…");
+    gtk_label_set_xalign(GTK_LABEL(value), 0);
+    gtk_label_set_selectable(GTK_LABEL(value), TRUE);
+    gtk_label_set_line_wrap(GTK_LABEL(value), TRUE);
+    gtk_widget_set_hexpand(value, TRUE);
+    gtk_grid_attach(GTK_GRID(grid), value, 1, row, 1, 1);
+    return value;
+  }
+
+  void add_hardware_tab(GtkWidget* tabs) {
+    auto* scroll = gtk_scrolled_window_new(nullptr, nullptr);
+    auto* page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+    gtk_container_set_border_width(GTK_CONTAINER(page), 10);
+    gtk_container_add(GTK_CONTAINER(scroll), page);
+
+    auto* system = gtk_frame_new("System");
+    auto* grid = gtk_grid_new();
+    gtk_container_set_border_width(GTK_CONTAINER(grid), 12);
+    gtk_grid_set_row_spacing(GTK_GRID(grid), 10);
+    gtk_grid_set_column_spacing(GTK_GRID(grid), 18);
+    gtk_container_add(GTK_CONTAINER(system), grid);
+    gtk_box_pack_start(GTK_BOX(page), system, FALSE, FALSE, 0);
+    hardware_cpu = hardware_row(grid, 0, "CPU");
+    hardware_ram = hardware_row(grid, 1, "Physical memory");
+    hardware_swap = hardware_row(grid, 2, "Swap");
+    hardware_os = hardware_row(grid, 3, "OS release");
+
+    auto* frame = gtk_frame_new("Physical drives");
+    auto* drive_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_container_set_border_width(GTK_CONTAINER(drive_box), 8);
+    gtk_container_add(GTK_CONTAINER(frame), drive_box);
+    gtk_box_pack_start(GTK_BOX(page), frame, FALSE, FALSE, 0);
+    drives = gtk_list_store_new(DRIVE_COLUMNS, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING);
+    auto* drive_view = list_view(drives, {{"Device", DRIVE_DEVICE}, {"Type", DRIVE_TYPE},
+        {"Model", DRIVE_MODEL}, {"Capacity", DRIVE_SIZE}});
+    gtk_widget_set_size_request(drive_view, -1, 190);
+    gtk_box_pack_start(GTK_BOX(drive_box), scroller(drive_view), TRUE, TRUE, 0);
+    hardware_status = gtk_label_new("");
+    gtk_label_set_xalign(GTK_LABEL(hardware_status), 0);
+    gtk_box_pack_start(GTK_BOX(drive_box), hardware_status, FALSE, FALSE, 0);
+
+    auto* refresh_button = gtk_button_new_with_mnemonic("_Refresh hardware");
+    gtk_widget_set_halign(refresh_button, GTK_ALIGN_START);
+    g_signal_connect(refresh_button, "clicked", G_CALLBACK(+[](GtkButton*, gpointer data) {
+      static_cast<Monitor*>(data)->refresh_hardware();
+    }), this);
+    gtk_box_pack_start(GTK_BOX(page), refresh_button, FALSE, FALSE, 0);
+    gtk_notebook_append_page(GTK_NOTEBOOK(tabs), scroll, gtk_label_new("Hardware"));
   }
 
   void activate(GtkApplication* application) {
@@ -201,12 +263,14 @@ struct Monitor {
     auto* usage = gtk_tree_view_column_new_with_attributes("Usage", progress, "value", PERCENT, nullptr);
     gtk_tree_view_append_column(GTK_TREE_VIEW(mount_view), usage);
     gtk_notebook_append_page(GTK_NOTEBOOK(tabs), scroller(mount_view), gtk_label_new("File Systems"));
+    add_hardware_tab(tabs);
 
     status = gtk_label_new("");
     gtk_label_set_xalign(GTK_LABEL(status), 0);
     gtk_box_pack_start(GTK_BOX(box), status, FALSE, FALSE, 0);
     gtk_widget_show_all(window);
     refresh();
+    refresh_hardware();
     timer = g_timeout_add_seconds(2, +[](gpointer data) -> gboolean {
       static_cast<Monitor*>(data)->refresh();
       return G_SOURCE_CONTINUE;
@@ -223,10 +287,140 @@ struct Monitor {
 #endif
   }
 
+  void refresh_hardware() {
+#if defined(__FreeBSD__) || defined(__MidnightBSD__)
+    const auto model = sysctl_text("hw.model");
+    int logical_cpus = 0;
+    const bool has_cpu_count = sysctl_value("hw.ncpu", logical_cpus) && logical_cpus > 0;
+    set_hardware_label(hardware_cpu, model.empty() ? "Unavailable" :
+        has_cpu_count ? std::format("{} ({} logical CPUs)", model, logical_cpus) : model);
+
+    uint64_t physical = 0;
+    set_hardware_label(hardware_ram, sysctl_value("hw.physmem", physical) && physical ?
+        size_label(physical) : "Unavailable");
+
+    uint64_t swap_total = 0, swap_used = 0;
+    if (read_swap(swap_total, swap_used))
+      set_hardware_label(hardware_swap, swap_total ?
+          std::format("{} allocated · {} used · {} available", size_label(swap_total),
+              size_label(swap_used), size_label(swap_total - swap_used)) : "No swap configured");
+    else set_hardware_label(hardware_swap, "Unavailable");
+
+    const auto system = sysctl_text("kern.ostype");
+    const auto release = sysctl_text("kern.osrelease");
+    set_hardware_label(hardware_os, system.empty() || release.empty() ? "Unavailable" : system + " " + release);
+    sample_drives();
+#else
+    set_hardware_label(hardware_cpu, "Requires MidnightBSD or FreeBSD");
+    set_hardware_label(hardware_ram, "Unavailable");
+    set_hardware_label(hardware_swap, "Unavailable");
+    set_hardware_label(hardware_os, "Unavailable");
+    gtk_label_set_text(GTK_LABEL(hardware_status), "Drive information unavailable.");
+#endif
+  }
+
+  static void set_hardware_label(GtkWidget* label, const std::string& value) {
+    auto* safe = g_utf8_make_valid(value.c_str(), -1);
+    gtk_label_set_text(GTK_LABEL(label), safe);
+    g_free(safe);
+  }
+
 #if defined(__FreeBSD__) || defined(__MidnightBSD__)
   template <class T> static bool sysctl_value(const char* name, T& value) {
     size_t length = sizeof(value);
     return sysctlbyname(name, &value, &length, nullptr, 0) == 0 && length == sizeof(value);
+  }
+
+  static std::string sysctl_text(const char* name) {
+    size_t length = 0;
+    if (sysctlbyname(name, nullptr, &length, nullptr, 0) != 0 || length == 0 || length > 4096) return {};
+    std::string value(length, '\0');
+    if (sysctlbyname(name, value.data(), &length, nullptr, 0) != 0) return {};
+    value.resize(length);
+    if (!value.empty() && value.back() == '\0') value.pop_back();
+    return value;
+  }
+
+  static bool read_swap(uint64_t& total, uint64_t& used) {
+    std::array<int, CTL_MAXNAME> mib{};
+    size_t mib_size = mib.size() - 1;
+    if (sysctlnametomib("vm.swap_info", mib.data(), &mib_size) != 0) return false;
+    const long page_size = sysconf(_SC_PAGESIZE);
+    if (page_size <= 0) return false;
+    for (int index = 0; index < 256; ++index) {
+      mib[mib_size] = index;
+      xswdev device{};
+      size_t length = sizeof(device);
+      if (sysctl(mib.data(), static_cast<u_int>(mib_size + 1), &device, &length, nullptr, 0) != 0)
+        return errno == ENOENT;
+      if (length != sizeof(device) || device.xsw_version != XSWDEV_VERSION ||
+          device.xsw_nblks < 0 || device.xsw_used < 0) return false;
+      const auto blocks = static_cast<uint64_t>(device.xsw_nblks);
+      total += blocks * static_cast<uint64_t>(page_size);
+      used += std::min(blocks, static_cast<uint64_t>(device.xsw_used)) * static_cast<uint64_t>(page_size);
+    }
+    return false;
+  }
+
+  static std::string_view drive_type(std::string_view name, std::string_view rotation) {
+    if (name.starts_with("cd") || name.starts_with("acd")) return "Optical";
+    if (name.starts_with("vtbd") || name.starts_with("xbd")) return "Virtual disk";
+    if (name.starts_with("nvd") || name.starts_with("nda") || rotation == "0") return "SSD";
+    if (!rotation.empty()) {
+      const std::string rpm(rotation);
+      char* end = nullptr;
+      const long speed = std::strtol(rpm.c_str(), &end, 10);
+      if (end != rpm.c_str() && *end == '\0' && speed > 0) return "Hard disk";
+    }
+    return "Disk (type unknown)";
+  }
+
+  static std::string_view drive_config(const gprovider& provider, std::string_view key) {
+    gconfig* config = nullptr;
+    LIST_FOREACH(config, &provider.lg_config, lg_config)
+      if (config->lg_name && key == config->lg_name) return config->lg_val ? config->lg_val : "";
+    return {};
+  }
+
+  void sample_drives() {
+    gmesh mesh{};
+    const int error = geom_gettree(&mesh);
+    if (error != 0) {
+      gtk_label_set_text(GTK_LABEL(hardware_status),
+          std::format("Cannot read drive information: {}", std::strerror(error)).c_str());
+      return;
+    }
+    gtk_list_store_clear(drives);
+    int count = 0;
+    gclass* drive_class = nullptr;
+    LIST_FOREACH(drive_class, &mesh.lg_class, lg_class) {
+      if (!drive_class->lg_name || std::string_view(drive_class->lg_name) != "DISK") continue;
+      ggeom* geom = nullptr;
+      LIST_FOREACH(geom, &drive_class->lg_geom, lg_geom) {
+        if (!geom->lg_name) continue;
+        const std::string_view name(geom->lg_name);
+        // Memory disks are software devices, not physical drives.
+        if (name.starts_with("md") && name.size() > 2 && std::isdigit(static_cast<unsigned char>(name[2]))) continue;
+        auto* provider = LIST_FIRST(&geom->lg_provider);
+        if (!provider) continue;
+        const auto type = drive_type(name, drive_config(*provider, "rotationrate"));
+        const auto description = drive_config(*provider, "descr");
+        const std::string model = description.empty() ? "Unknown model" : std::string(description);
+        const std::string capacity = provider->lg_mediasize > 0 ?
+            size_label(static_cast<double>(provider->lg_mediasize)) : "No media";
+        const std::string device = std::format("/dev/{}", name);
+        auto* safe_model = g_utf8_make_valid(model.c_str(), -1);
+        GtkTreeIter row;
+        gtk_list_store_append(drives, &row);
+        gtk_list_store_set(drives, &row, DRIVE_DEVICE, device.c_str(), DRIVE_TYPE, type.data(),
+            DRIVE_MODEL, safe_model, DRIVE_SIZE, capacity.c_str(), -1);
+        g_free(safe_model);
+        ++count;
+      }
+    }
+    geom_deletetree(&mesh);
+    gtk_label_set_text(GTK_LABEL(hardware_status), count ?
+        std::format("{} drive{} found", count, count == 1 ? "" : "s").c_str() : "No drives found");
   }
 
   void sample_processes() {

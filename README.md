@@ -8,7 +8,8 @@ MidnightBSD. The current target is MidnightBSD 4.2 with Clang 19 and C++23.
 The build needs CMake, pkg-config, XCB (including icccm, keysyms, XFixes, and
 RandR, Xinerama), Cairo, Pango, GLib/GIO, GdkPixbuf, Garcon, and SQLite 3.
 The companion `midnightbsd-settings` application also needs GTK 3.
-The separate `midnightbsd-system-monitor` application uses GTK 3 and libutil.
+The separate `midnightbsd-system-monitor` application uses GTK 3, libutil,
+and libgeom.
 The `midnightbsd-session` launcher and XSMP tests also need libSM and libICE.
 Install the librsvg GdkPixbuf loader for SVG wallpapers; the mport includes
 this runtime dependency. PNG, JPEG, and GIF loaders must also be available.
@@ -541,9 +542,11 @@ XDG MIME association files and the desktop's `xdg-terminals.list` preference;
 they do not require a change to `midnight-wm/config.ini`.
 
 Run `midnightbsd-system-monitor` or open **System Monitor** from Programs.
-Its three tabs list processes, graph CPU, memory, and network activity, and
-show mounted file systems with capacity and available space. Process and
+Its four tabs list processes; graph CPU, memory, and network activity; show
+mounted file systems with capacity and available space; and summarize the CPU,
+physical memory, swap allocation, OS release, and physical drives. Process and
 resource data refresh every two seconds; mounts refresh every ten seconds.
+The Hardware tab has a Refresh button for changes to swap or attached drives.
 
 To edit preferences by hand, copy `share/midnight-wm/config.ini` to
 `$XDG_CONFIG_HOME/midnight-wm/config.ini` (normally

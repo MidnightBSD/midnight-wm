@@ -10,12 +10,17 @@
 .Nm
 .Sh DESCRIPTION
 .Nm
-opens a GTK 3 window with three tabs.
+opens a GTK 3 window with four tabs.
 Processes lists process IDs, owners, states, CPU use, and resident memory.
 Resources graphs total CPU use, physical memory use, and aggregate network
 receive and transmit rates.
 File Systems lists mounted file systems with capacity, used space, and
 space available to ordinary users.
+Hardware summarizes the CPU, installed memory, swap allocation and use,
+OS release, and physical drives.
+Drive types use reported rotation rates
+when available; optical drives and NVMe drives are identified by device type.
+The Refresh hardware button updates this summary after hardware changes.
 Processes and resources refresh every two seconds; file systems refresh
 every ten seconds.
 .Sh SEE ALSO
