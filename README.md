@@ -541,7 +541,8 @@ the terminal opened by the panel button. These choices are saved in the user
 XDG MIME association files and the desktop's `xdg-terminals.list` preference;
 they do not require a change to `midnight-wm/config.ini`.
 
-Run `midnightbsd-system-monitor` or open **System Monitor** from Programs.
+Run `midnightbsd-system-monitor`, choose **System Monitor** from the Midnight
+launcher below Mport Manager, or open it from Programs.
 Its four tabs list processes; graph CPU, memory, and network activity; show
 mounted file systems with capacity and available space; and summarize the CPU,
 physical memory, swap allocation, OS release, and physical drives. Process and

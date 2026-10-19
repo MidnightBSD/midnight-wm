@@ -66,6 +66,13 @@ def session(args):
             assert int(manager_marker.read_text()) == wm.pid, "pkexec lost its window-manager parent"
             until(lambda: not popups(), "package manager launch did not close menu")
 
+            run("xdotool", "mousemove", "12", "12", "click", "1")
+            until(lambda: bool(popups()), "launcher did not open for system monitor")
+            run("xdotool", "mousemove", "100", "310", "click", "1")
+            monitor_marker = Path(os.environ["HOME"]) / "system monitor.launched"
+            until(monitor_marker.exists, "System Monitor desktop entry did not launch")
+            until(lambda: not popups(), "system monitor launch did not close menu")
+
             root, category = open_categories()
             cx, cy, _, _ = popups()[category]
             move(cx + 50, cy + 16)
@@ -134,7 +141,7 @@ def session(args):
             assert not popups(), "pending animation or hover resurrected a closed menu"
             assert wm.poll() is None, "WM exited during menu checks"
             (args.output / "reveal.txt").write_text(f"Observed initial app height: {observed}; final: 248\n")
-            print("Mport Manager desktop launch, menu levels, 720p bounds, stable popup IDs, rapid category hover, launch, "
+            print("Mport Manager and System Monitor desktop launch, menu levels, 720p bounds, stable popup IDs, rapid category hover, launch, "
                   "dismissal during reveal, and second-WM rejection passed.")
         finally:
             wm.terminate()
@@ -186,6 +193,9 @@ def main():
         (root / "data/applications/mport-manager.desktop").write_text(
             "[Desktop Entry]\nType=Application\nName=Mport Manager\n"
             f'Exec={fake_pkexec} "{root / "home" / "mport manager.launched"}"\n')
+        (root / "data/applications/midnightbsd-system-monitor.desktop").write_text(
+            "[Desktop Entry]\nType=Application\nName=System Monitor\n"
+            f'Exec={shutil.which("touch")} "{root / "home" / "system monitor.launched"}"\n')
         read_fd, write_fd = os.pipe()
         with (args.output / "xvfb.log").open("w") as log:
             xvfb = subprocess.Popen(["Xvfb", "-displayfd", str(write_fd), "-screen", "0",
