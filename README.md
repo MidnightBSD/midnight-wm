@@ -192,9 +192,14 @@ in coordinated logout through the session companion. No restart
 commands, credentials, or bus addresses are stored in the folder snapshot.
 
 The Xsession entry now starts `midnightbsd-session`, which establishes the session
-bus and then starts an XSMP manager before launching `midnight-wm`. For `.xinitrc`
-sessions use `exec midnightbsd-session`; running `midnight-wm` directly continues
-to work without starting a session manager. A nonempty inherited `SESSION_MANAGER`
+bus and then starts an XSMP manager before launching `midnight-wm`. For a plain
+`startx`/`.xinitrc` session on MidnightBSD with ConsoleKit installed, use
+`exec ck-launch-session midnightbsd-session` so ConsoleKit registers the session
+before the window manager and its autostart applications begin. A display manager
+that already registers a ConsoleKit session should launch `midnightbsd-session`
+directly. Running `midnight-wm` directly continues to work without starting a
+session manager, but a plain `.xinitrc` must still arrange a ConsoleKit session
+for graphical Polkit authentication. A nonempty inherited `SESSION_MANAGER`
 is preserved, along with its authority configuration, so an existing manager is
 never replaced. The companion chooses its sibling `midnight-wm` executable when
 available, then the configured installation path. `midnightbsd-session -- program
