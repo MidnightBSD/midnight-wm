@@ -21,6 +21,11 @@ session restoration choices take effect at the next login.
 The editor preserves unknown INI keys and comments.
 It reports malformed or externally changed files rather than overwriting them.
 The Session page can clear saved folder and application sessions.
+The Application defaults page selects installed handlers for web links,
+HTML files, email links, calendar, folder, text, image, and PDF files,
+and the panel terminal.
+These choices are written to the current desktop's user XDG association and
+terminal preference files when Apply is clicked.
 .Pp
 The application-specific option is:
 .Bl -tag -width Ds
@@ -44,6 +49,10 @@ defaults to
 User configuration at the default XDG config location.
 .It Pa /usr/local/share/midnight-wm/config.ini
 Installed example with all supported settings.
+.It Pa ~/.config/midnightworkspace-mimeapps.list
+Application link and file defaults in Midnight Workspace.
+.It Pa ~/.config/midnightworkspace-xdg-terminals.list
+Preferred terminal in Midnight Workspace.
 .El
 .Sh SEE ALSO
 .Xr midnight-wm 1 ,

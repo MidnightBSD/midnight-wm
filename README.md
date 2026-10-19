@@ -522,6 +522,12 @@ change wallpaper, colors, fonts, scaling, panel text, clock format, and desktop
 shortcuts. **Apply** saves your preferences and the running window manager
 updates automatically within about two seconds. Closing without applying discards pending edits.
 The settings app preserves unrelated INI keys and reports save errors.
+The **Application defaults** page selects installed handlers for web links,
+HTML files (including web page editors), email links, calendar files, folders,
+text, PNG/JPEG images, and PDFs. It also selects
+the terminal opened by the panel button. These choices are saved in the user
+XDG MIME association files and the desktop's `xdg-terminals.list` preference;
+they do not require a change to `midnight-wm/config.ini`.
 
 To edit preferences by hand, copy `share/midnight-wm/config.ini` to
 `$XDG_CONFIG_HOME/midnight-wm/config.ini` (normally
