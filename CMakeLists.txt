@@ -71,6 +71,8 @@ install(FILES data/config.ini data/MidnightBSDLogo.svg data/MidnightBSDLogo22x22
 install(FILES data/midnight.portal DESTINATION ${CMAKE_INSTALL_DATADIR}/xdg-desktop-portal/portals)
 install(FILES data/midnightworkspace-portals.conf DESTINATION ${CMAKE_INSTALL_DATADIR}/xdg-desktop-portal)
 install(FILES README.md LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/midnight-wm)
+install(FILES man/man1/midnight-wm.1 man/man1/midnightbsd-settings.1 man/man1/midnightbsd-search.1
+        DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
 
 enable_testing()
 add_executable(folder_view_test tests/folder_view_test.cpp)
