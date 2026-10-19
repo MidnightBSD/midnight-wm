@@ -1,0 +1,41 @@
+.\" Copyright (c) 2026 Lucas Holt
+.\" SPDX-License-Identifier: BSD-2-Clause
+.Dd October 18, 2026
+.Dt MIDNIGHTBSD-OPEN-FOLDER 1
+.Os
+.Sh NAME
+.Nm midnightbsd-open-folder
+.Nd open local folders in Midnight Workspace
+.Sh SYNOPSIS
+.Nm
+.Op Ar folder-or-file-URI ...
+.Sh DESCRIPTION
+.Nm
+sends the specified local folders to the running Midnight Workspace over
+the session D-Bus and opens them in its built-in file manager.
+Arguments may be local paths or
+.Pa file://
+URIs.
+With no arguments, it opens the home directory.
+Remote URIs and folders that do not exist are rejected.
+It does not start a new window manager session.
+.Pp
+The installed
+.Pa org.midnightbsd.Workspace.Files.desktop
+entry associates this command with
+.Pa inode/directory .
+Select Midnight Workspace Files in the Application defaults page of
+.Xr midnightbsd-settings 1
+to make it the default folder handler.
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev DBUS_SESSION_BUS_ADDRESS
+Select the session bus used to contact the running workspace.
+.It Ev HOME
+Select the folder opened when no argument is supplied.
+.El
+.Sh SEE ALSO
+.Xr midnight-wm 1 ,
+.Xr midnightbsd-settings 1
+.Sh AUTHORS
+.An Lucas Holt

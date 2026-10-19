@@ -21,10 +21,12 @@ void completed(GObject* source, GAsyncResult* result, gpointer user_data) {
   g_main_loop_quit(reply.loop);
 }
 
-bool call(GDBusConnection* bus, const char* method, const char* uri, bool expect_success) {
+bool call(GDBusConnection* bus, const char* method, const char* uri, bool expect_success,
+          const char* destination = "org.freedesktop.FileManager1",
+          const char* path = "/org/freedesktop/FileManager1") {
   const gchar* uris[] = {uri, nullptr};
   Reply reply{.loop = g_main_loop_new(nullptr, FALSE)};
-  g_dbus_connection_call(bus, "org.freedesktop.FileManager1", "/org/freedesktop/FileManager1",
+  g_dbus_connection_call(bus, destination, path,
       "org.freedesktop.FileManager1", method, g_variant_new("(^ass)", uris, ""),
       nullptr, G_DBUS_CALL_FLAGS_NONE, 2000, nullptr, completed, &reply);
   g_main_loop_run(reply.loop);
@@ -92,6 +94,27 @@ int main() {
     std::cerr << "FileManager1 initialized while another process owned its name\n";
     g_object_unref(competitor);
     return 1;
+  }
+  std::vector<std::filesystem::path> private_folders;
+  {
+    midnight::FileManager1 workspace_service(
+        [&](const auto& path, const auto&) { private_folders.push_back(path); return true; },
+        [](const auto&) { return true; }, midnight::workspace_file_manager_name,
+        midnight::workspace_file_manager_path);
+    if (!workspace_service.initialize()) {
+      std::cerr << "Could not own the Workspace file manager name\n";
+      g_object_unref(competitor);
+      return 1;
+    }
+    auto* caller = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, &error);
+    const bool opened = caller && call(caller, "ShowFolders", "file:///tmp", true,
+        midnight::workspace_file_manager_name, midnight::workspace_file_manager_path);
+    if (caller) g_object_unref(caller);
+    if (!opened || private_folders != std::vector<std::filesystem::path>{"/tmp"}) {
+      std::cerr << "Workspace file manager failed with a competing FileManager1 owner\n";
+      g_object_unref(competitor);
+      return 1;
+    }
   }
   auto* own_bus = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, &error);
   const char* own_name = own_bus ? g_dbus_connection_get_unique_name(own_bus) : nullptr;

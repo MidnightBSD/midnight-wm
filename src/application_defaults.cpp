@@ -212,6 +212,13 @@ std::vector<AppDefaultChoice> app_default_choices(AppDefaultRole role) {
     for (GList* item = apps; item; item = item->next) add_choice(choices, G_APP_INFO(item->data));
     g_list_free_full(apps, g_object_unref);
   }
+  if (role == AppDefaultRole::files) {
+    // A freshly installed desktop entry may not be in mimeinfo.cache yet.
+    if (auto* app = g_desktop_app_info_new("org.midnightbsd.Workspace.Files.desktop")) {
+      add_choice(choices, G_APP_INFO(app));
+      g_object_unref(app);
+    }
+  }
   if (auto current = current_app_default(role);
       current && std::ranges::none_of(choices, [&](const auto& value) { return value.id == current->id; }))
     choices.push_back(std::move(*current));

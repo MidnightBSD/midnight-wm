@@ -8,8 +8,6 @@
 
 namespace midnight {
 namespace {
-constexpr auto service_name = "org.freedesktop.FileManager1";
-constexpr auto object_path = "/org/freedesktop/FileManager1";
 constexpr auto interface_xml = R"xml(
 <node><interface name="org.freedesktop.FileManager1">
   <method name="ShowFolders"><arg name="URIs" type="as" direction="in"/>
@@ -35,20 +33,23 @@ std::optional<std::filesystem::path> local_path(const char* uri) {
 struct FileManager1::Impl {
   ShowFolder show_folder;
   ShowProperties show_properties;
+  std::string service_name;
+  std::string object_path;
   GDBusConnection* bus{};
   GDBusNodeInfo* introspection{};
   guint registration{};
   bool owns_name{};
 
-  Impl(ShowFolder folder, ShowProperties properties)
-      : show_folder(std::move(folder)), show_properties(std::move(properties)) {}
+  Impl(ShowFolder folder, ShowProperties properties, std::string name, std::string path)
+      : show_folder(std::move(folder)), show_properties(std::move(properties)),
+        service_name(std::move(name)), object_path(std::move(path)) {}
 
   ~Impl() {
     if (registration) g_dbus_connection_unregister_object(bus, registration);
     if (owns_name && bus) {
       auto* reply = g_dbus_connection_call_sync(
           bus, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
-          "ReleaseName", g_variant_new("(s)", service_name), G_VARIANT_TYPE("(u)"),
+          "ReleaseName", g_variant_new("(s)", service_name.c_str()), G_VARIANT_TYPE("(u)"),
           G_DBUS_CALL_FLAGS_NONE, 1000, nullptr, nullptr);
       if (reply) g_variant_unref(reply);
     }
@@ -102,8 +103,10 @@ struct FileManager1::Impl {
   }
 };
 
-FileManager1::FileManager1(ShowFolder show_folder, ShowProperties show_properties)
-    : impl_(std::make_unique<Impl>(std::move(show_folder), std::move(show_properties))) {}
+FileManager1::FileManager1(ShowFolder show_folder, ShowProperties show_properties,
+                           std::string service_name, std::string object_path)
+    : impl_(std::make_unique<Impl>(std::move(show_folder), std::move(show_properties),
+                                   std::move(service_name), std::move(object_path))) {}
 
 FileManager1::~FileManager1() = default;
 
@@ -116,12 +119,12 @@ bool FileManager1::initialize() {
   if (!self.introspection) { if (error) g_error_free(error); return false; }
   static const GDBusInterfaceVTable methods{Impl::method, nullptr, nullptr, {nullptr}};
   self.registration = g_dbus_connection_register_object(
-      self.bus, object_path, self.introspection->interfaces[0], &methods,
+      self.bus, self.object_path.c_str(), self.introspection->interfaces[0], &methods,
       &self, nullptr, &error);
   if (!self.registration) { if (error) g_error_free(error); return false; }
   auto* reply = g_dbus_connection_call_sync(
       self.bus, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
-      "RequestName", g_variant_new("(su)", service_name, 4u), G_VARIANT_TYPE("(u)"),
+      "RequestName", g_variant_new("(su)", self.service_name.c_str(), 4u), G_VARIANT_TYPE("(u)"),
       G_DBUS_CALL_FLAGS_NONE, 1000, nullptr, &error);
   if (!reply) {
     if (error) g_error_free(error);
