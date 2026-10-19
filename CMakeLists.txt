@@ -46,6 +46,13 @@ add_executable(midnightbsd-search src/search.cpp)
 target_link_libraries(midnightbsd-search PRIVATE PkgConfig::GTK3)
 target_compile_options(midnightbsd-search PRIVATE -Wall -Wextra -Wpedantic)
 
+add_executable(midnightbsd-system-monitor src/system_monitor.cpp)
+target_link_libraries(midnightbsd-system-monitor PRIVATE PkgConfig::GTK3)
+if(CMAKE_SYSTEM_NAME MATCHES "^(MidnightBSD|FreeBSD)$")
+  target_link_libraries(midnightbsd-system-monitor PRIVATE util)
+endif()
+target_compile_options(midnightbsd-system-monitor PRIVATE -Wall -Wextra -Wpedantic)
+
 pkg_check_modules(GIO REQUIRED IMPORTED_TARGET gio-2.0)
 add_executable(midnightbsd-open-folder src/open_folder.cpp)
 target_include_directories(midnightbsd-open-folder PRIVATE src)
@@ -69,15 +76,15 @@ target_compile_options(midnightbsd-session PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_definitions(midnightbsd-session PRIVATE
   MIDNIGHT_WM_VERSION="${PROJECT_VERSION}"
   MIDNIGHT_WM_PROGRAM="${CMAKE_INSTALL_FULL_BINDIR}/midnight-wm")
-install(TARGETS midnight-wm midnightbsd-search midnightbsd-settings midnightbsd-session midnightbsd-open-folder RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(FILES data/midnightbsd-settings.desktop data/org.midnightbsd.Workspace.Files.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+install(TARGETS midnight-wm midnightbsd-search midnightbsd-system-monitor midnightbsd-settings midnightbsd-session midnightbsd-open-folder RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES data/midnightbsd-settings.desktop data/midnightbsd-system-monitor.desktop data/org.midnightbsd.Workspace.Files.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 install(FILES data/midnight-wm.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/xsessions)
 install(FILES data/config.ini data/MidnightBSDLogo.svg data/MidnightBSDLogo22x22.png
         DESTINATION ${CMAKE_INSTALL_DATADIR}/midnight-wm)
 install(FILES data/midnight.portal DESTINATION ${CMAKE_INSTALL_DATADIR}/xdg-desktop-portal/portals)
 install(FILES data/midnightworkspace-portals.conf DESTINATION ${CMAKE_INSTALL_DATADIR}/xdg-desktop-portal)
 install(FILES README.md LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/midnight-wm)
-install(FILES man/man1/midnight-wm.1 man/man1/midnightbsd-settings.1 man/man1/midnightbsd-search.1
+install(FILES man/man1/midnight-wm.1 man/man1/midnightbsd-settings.1 man/man1/midnightbsd-search.1 man/man1/midnightbsd-system-monitor.1
               man/man1/midnightbsd-open-folder.1
         DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
 

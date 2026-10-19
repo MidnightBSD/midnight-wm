@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=System Monitor
+Comment=View processes, resources, and file systems
+Exec=midnightbsd-system-monitor
+Icon=utilities-system-monitor
+Terminal=false
+Categories=System;Monitor;
+StartupNotify=true

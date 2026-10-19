@@ -1,0 +1,24 @@
+." Copyright (c) 2026 Lucas Holt
+." SPDX-License-Identifier: BSD-2-Clause
+.Dd October 19, 2026
+.Dt MIDNIGHTBSD-SYSTEM-MONITOR 1
+.Os
+.Sh NAME
+.Nm midnightbsd-system-monitor
+.Nd display system processes, resources, and mounted file systems
+.Sh SYNOPSIS
+.Nm
+.Sh DESCRIPTION
+.Nm
+opens a GTK 3 window with three tabs.
+Processes lists process IDs, owners, states, CPU use, and resident memory.
+Resources graphs total CPU use, physical memory use, and aggregate network
+receive and transmit rates.
+File Systems lists mounted file systems with capacity, used space, and
+space available to ordinary users.
+Processes and resources refresh every two seconds; file systems refresh
+every ten seconds.
+.Sh SEE ALSO
+.Xr midnight-wm 1
+.Sh AUTHORS
+.An Lucas Holt
