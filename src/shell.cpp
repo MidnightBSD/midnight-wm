@@ -3,6 +3,7 @@
 #include "audio.hpp"
 #include "battery.hpp"
 #include "network.hpp"
+#include "bluetooth.hpp"
 #include "media_player.hpp"
 #include "browser_launcher.hpp"
 #include "config.hpp"
@@ -674,6 +675,9 @@ struct Shell::Impl {
   xcb_window_t network_popup{};
   int network_popup_height{}, network_scroll{};
   NetworkMonitor network;
+  BluetoothMonitor bluetooth;
+  xcb_window_t bluetooth_popup{};
+  int bluetooth_popup_height{}, bluetooth_scroll{};
   std::chrono::steady_clock::time_point last_network_draw{};
   xcb_window_t audio_popup{};
   int audio_x{}, audio_y{};
@@ -880,6 +884,7 @@ struct Shell::Impl {
     if (app_menu) xcb_destroy_window(connection, app_menu);
     if (exit_dialog) xcb_destroy_window(connection, exit_dialog);
     if (network_popup) xcb_destroy_window(connection, network_popup);
+    if (bluetooth_popup) xcb_destroy_window(connection, bluetooth_popup);
     if (audio_popup) xcb_destroy_window(connection, audio_popup);
     if (drag_preview) xcb_destroy_window(connection, drag_preview);
     if (notice) xcb_destroy_window(connection, notice);
@@ -1779,6 +1784,19 @@ struct Shell::Impl {
           cairo_fill(cr);
         }
       }
+      if (show_bluetooth()) {
+        const int x = bluetooth_x();
+        bevel(cr, x, 4, network_group_width, 24, bluetooth_popup != 0);
+        cairo_save(cr);
+        if (bluetooth.available()) cairo_set_source_rgb(cr, .15, .45, .85);
+        else cairo_set_source_rgb(cr, config.text_color[0], config.text_color[1], config.text_color[2]);
+        cairo_set_line_width(cr, 1.8);
+        cairo_move_to(cr, x + 8, 10); cairo_line_to(cr, x + 17, 20);
+        cairo_line_to(cr, x + 12, 25); cairo_line_to(cr, x + 12, 7);
+        cairo_line_to(cr, x + 17, 12); cairo_line_to(cr, x + 8, 22);
+        cairo_stroke(cr);
+        cairo_restore(cr);
+      }
       if (show_network()) {
         const int x = network_x();
         bevel(cr, x, 4, network_group_width, 24, network_popup != 0);
@@ -1865,7 +1883,7 @@ struct Shell::Impl {
     // Leave room for the task overflow button even when every task is hidden.
     return std::clamp(requested_tray_width, 0,
                       std::max(0, search_x() - task_start_x - task_overflow_width - 4 -
-                          network_group_width - network_gap - volume_group_width - volume_clock_gap -
+                          2 * (network_group_width + network_gap) - volume_group_width - volume_clock_gap -
                           (config.show_battery && battery_state ? battery_group_width + battery_gap : 0)));
   }
 
@@ -1885,7 +1903,10 @@ struct Shell::Impl {
     return (show_battery() ? battery_x() : show_volume() ? volume_x() : tray_x()) - network_group_width - network_gap;
   }
   bool show_network() const { return network_x() >= task_start_x; }
+  int bluetooth_x() const { return (show_network() ? network_x() : tray_x()) - network_group_width - network_gap; }
+  bool show_bluetooth() const { return bluetooth_x() >= task_start_x; }
   int status_left() const {
+    if (show_bluetooth()) return bluetooth_x();
     return show_network() ? network_x() : show_battery() ? battery_x() : show_volume() ? volume_x() : tray_x();
   }
 
@@ -2379,6 +2400,7 @@ struct Shell::Impl {
     if (network_popup) { close_network_popup(); return; }
     close_audio_popup();
     close_menu();
+    close_bluetooth_popup();
     network.poll(true, true);
     network_scroll = 0;
     const auto area = primary_area();
@@ -2396,6 +2418,65 @@ struct Shell::Impl {
         XCB_EVENT_MASK_BUTTON_PRESS | XCB_EVENT_MASK_BUTTON_RELEASE | XCB_EVENT_MASK_POINTER_MOTION,
         XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC, XCB_NONE, XCB_NONE, XCB_CURRENT_TIME);
     xcb_grab_keyboard(connection, 0, network_popup, XCB_CURRENT_TIME, XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC);
+    draw_panel();
+  }
+
+  int bluetooth_visible_rows() const { return std::max(1, (bluetooth_popup_height - 48) / 22); }
+
+  void draw_bluetooth_popup() {
+    if (!bluetooth_popup) return;
+    const auto& rows = bluetooth.rows();
+    const int desired_height = std::clamp(static_cast<int>(rows.size()) * 22 + 48, 100,
+        std::max(100, primary_area().height - panel_height - 8));
+    if (bluetooth_popup_height != desired_height) {
+      bluetooth_popup_height = desired_height;
+      const std::uint32_t size[]{static_cast<std::uint32_t>(scaled_pixel(scale, desired_height))};
+      xcb_configure_window(connection, bluetooth_popup, XCB_CONFIG_WINDOW_HEIGHT, size);
+    }
+    bluetooth_scroll = std::clamp(bluetooth_scroll, 0, std::max(0, static_cast<int>(rows.size()) - bluetooth_visible_rows()));
+    paint_menu(bluetooth_popup, bluetooth_popup_height, true, [&](cairo_t* cr) {
+      themed_fill(cr, config.surface_color, .79, .79, .79, 0, 0, network_popup_width, bluetooth_popup_height);
+      bevel(cr, 0, 0, network_popup_width, bluetooth_popup_height);
+      text(cr, bluetooth.busy() ? "Bluetooth — working…" : "Bluetooth devices", 12, 9, 295, 12, false, true);
+      bevel(cr, 322, 5, 86, 26, false);
+      text(cr, bluetooth.busy() ? "Wait…" : "Scan", 334, 10, 70, 11);
+      for (int row = 0; row < bluetooth_visible_rows() && row + bluetooth_scroll < static_cast<int>(rows.size()); ++row)
+        text(cr, rows[row + bluetooth_scroll], 12, 38 + row * 22, network_popup_width - 28, 11);
+      if (static_cast<int>(rows.size()) > bluetooth_visible_rows())
+        text(cr, "↕", network_popup_width - 19, bluetooth_popup_height - 23, 16, 10);
+    }, network_popup_width);
+  }
+
+  void close_bluetooth_popup() {
+    if (!bluetooth_popup) return;
+    xcb_ungrab_pointer(connection, XCB_CURRENT_TIME);
+    xcb_ungrab_keyboard(connection, XCB_CURRENT_TIME);
+    destroy_menu_window(bluetooth_popup);
+    draw_panel();
+  }
+
+  void toggle_bluetooth_popup() {
+    if (bluetooth_popup) { close_bluetooth_popup(); return; }
+    close_audio_popup();
+    close_menu();
+    close_network_popup();
+    bluetooth.refresh();
+    bluetooth_scroll = 0;
+    const auto area = primary_area();
+    bluetooth_popup_height = std::clamp(static_cast<int>(bluetooth.rows().size()) * 22 + 48, 100,
+        std::max(100, area.height - panel_height - 8));
+    const int x = std::clamp(area.x + bluetooth_x() + network_group_width - network_popup_width,
+        area.x, std::max(area.x, area.x + area.width - network_popup_width));
+    bluetooth_popup = create_window(x, area.y + panel_height, network_popup_width, bluetooth_popup_height);
+    const char name[] = "Midnight Bluetooth devices";
+    xcb_change_property(connection, XCB_PROP_MODE_REPLACE, bluetooth_popup, XCB_ATOM_WM_NAME,
+        XCB_ATOM_STRING, 8, sizeof(name) - 1, name);
+    draw_bluetooth_popup();
+    xcb_map_window(connection, bluetooth_popup);
+    xcb_grab_pointer(connection, 1, bluetooth_popup,
+        XCB_EVENT_MASK_BUTTON_PRESS | XCB_EVENT_MASK_BUTTON_RELEASE | XCB_EVENT_MASK_POINTER_MOTION,
+        XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC, XCB_NONE, XCB_NONE, XCB_CURRENT_TIME);
+    xcb_grab_keyboard(connection, 0, bluetooth_popup, XCB_CURRENT_TIME, XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC);
     draw_panel();
   }
 
@@ -2458,6 +2539,7 @@ struct Shell::Impl {
   void toggle_audio_popup() {
     if (audio_popup) { close_audio_popup(); return; }
     close_network_popup();
+    close_bluetooth_popup();
     close_menu();
     const auto area = primary_area();
     audio_x = std::clamp(area.x + volume_x() + volume_group_width - audio_popup_width,
@@ -3500,6 +3582,21 @@ struct Shell::Impl {
   }
 
   void button(const xcb_button_press_event_t* event) {
+    if (bluetooth_popup && event->event == bluetooth_popup) {
+      if (event->event_x < 0 || event->event_x >= network_popup_width ||
+          event->event_y < 0 || event->event_y >= bluetooth_popup_height) close_bluetooth_popup();
+      else if (event->detail == 1 && event->event_x >= 322 && event->event_y >= 5 && event->event_y < 31) {
+        bluetooth.refresh(true);
+        draw_bluetooth_popup();
+      }
+      else if (event->detail == 4 || event->detail == 5) {
+        bluetooth_scroll += event->detail == 5 ? 1 : -1;
+        draw_bluetooth_popup();
+      }
+      return;
+    }
+    if (bluetooth_popup && !(event->event == panel && event->event_x >= bluetooth_x() &&
+        event->event_x < bluetooth_x() + network_group_width)) close_bluetooth_popup();
     if (network_popup && event->event == network_popup) {
       if (event->event_x < 0 || event->event_x >= network_popup_width ||
           event->event_y < 0 || event->event_y >= network_popup_height) close_network_popup();
@@ -3635,6 +3732,10 @@ struct Shell::Impl {
           else show_notice("Could not open Search Files.");
           if (error) g_error_free(error);
         }
+        return;
+      }
+      if (show_bluetooth() && event->event_x >= bluetooth_x() && event->event_x < bluetooth_x() + network_group_width) {
+        if (event->detail == 1) toggle_bluetooth_popup();
         return;
       }
       if (show_network() && event->event_x >= network_x() && event->event_x < network_x() + network_group_width) {
@@ -4153,7 +4254,7 @@ bool Shell::owns(xcb_window_t window) const {
   const auto& p = *impl_;
   return window && (window == p.desktop || window == p.panel || window == p.menu ||
                     window == p.submenu || window == p.app_menu || window == p.notice ||
-                    window == p.exit_dialog || window == p.audio_popup || window == p.network_popup || window == p.drag_preview ||
+                    window == p.exit_dialog || window == p.audio_popup || window == p.network_popup || window == p.bluetooth_popup || window == p.drag_preview ||
                     (p.icon_chooser && window == p.icon_chooser->window) ||
                     (p.open_with_dialog && window == p.open_with_dialog->window) ||
                     (p.properties && window == p.properties->window) || p.folders.contains(window));
@@ -4189,7 +4290,7 @@ bool Shell::handle(xcb_generic_event_t* event) {
   } else if (type == XCB_EXPOSE) {
     if (window == p.drag_preview) p.draw_drag_preview();
     else if (window == p.panel) p.draw_panel();
-    else if (window == p.audio_popup || window == p.network_popup) {}
+    else if (window == p.audio_popup || window == p.network_popup || window == p.bluetooth_popup) {}
     else if (window == p.desktop) {
       if (!p.desktop_pixmap) p.draw_desktop();
     }
@@ -4226,6 +4327,19 @@ bool Shell::handle(xcb_generic_event_t* event) {
     motion.root_x = static_cast<std::int16_t>(std::lround(motion.root_x / p.scale));
     motion.root_y = static_cast<std::int16_t>(std::lround(motion.root_y / p.scale));
     p.motion(&motion);
+  }
+  else if (type == XCB_KEY_PRESS && window == p.bluetooth_popup) {
+    const auto* key = reinterpret_cast<xcb_key_press_event_t*>(event);
+    const auto sym = p.key_symbols ? xcb_key_symbols_get_keysym(p.key_symbols, key->detail, 0) : 0;
+    if (sym == XK_Escape) p.close_bluetooth_popup();
+    else if (sym == XK_Return || sym == XK_space) { p.bluetooth.refresh(true); p.draw_bluetooth_popup(); }
+    else {
+      if (sym == XK_Up) --p.bluetooth_scroll;
+      else if (sym == XK_Down) ++p.bluetooth_scroll;
+      else if (sym == XK_Page_Up) p.bluetooth_scroll -= p.bluetooth_visible_rows();
+      else if (sym == XK_Page_Down) p.bluetooth_scroll += p.bluetooth_visible_rows();
+      p.draw_bluetooth_popup();
+    }
   }
   else if (type == XCB_KEY_PRESS && window == p.network_popup) {
     const auto* key = reinterpret_cast<xcb_key_press_event_t*>(event);
@@ -4293,6 +4407,7 @@ void Shell::tick() {
       p.draw_network_popup();
     }
   }
+  if (p.bluetooth.tick(p.bluetooth_popup != 0)) { p.draw_bluetooth_popup(); redraw = true; }
   if (redraw) p.draw_panel();
 }
 
@@ -4308,6 +4423,7 @@ void Shell::set_workspace(std::uint32_t desktop, bool showing_desktop) {
   p.showing_desktop = showing_desktop;
   p.close_menu();
   p.close_network_popup();
+  p.close_bluetooth_popup();
   p.close_audio_popup();
   p.focused_folder = 0;
   for (const auto& [window, folder] : p.folders) {
@@ -4373,6 +4489,7 @@ void Shell::set_tray_width(int width) {
   const int requested = std::max(0, width);
   if (p.requested_tray_width == requested) return;
   p.close_network_popup();
+  p.close_bluetooth_popup();
   p.close_audio_popup();
   p.requested_tray_width = requested;
   if (p.panel) p.draw_panel();
@@ -4454,6 +4571,7 @@ void Shell::refresh_display_layout() {
   auto& p = *impl_;
   p.close_menu();
   p.close_network_popup();
+  p.close_bluetooth_popup();
   p.close_audio_popup();
   p.update_monitor_geometry();
   p.scale = display_scale(p.primary_monitor.height, p.config.ui_scale);

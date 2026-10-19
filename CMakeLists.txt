@@ -10,7 +10,7 @@ pkg_check_modules(DEPS REQUIRED IMPORTED_TARGET
   xcb xcb-icccm xcb-keysyms xcb-xfixes xcb-randr xcb-xinerama xcb-sync xcb-screensaver cairo-xcb pangocairo
   gio-2.0 gio-unix-2.0 gdk-pixbuf-2.0 garcon-1 sqlite3)
 
-add_library(midnight_core src/folder_view.cpp src/content_size.cpp src/store.cpp src/model.cpp src/config.cpp src/session.cpp src/private_state.cpp src/session_bus.cpp src/application_session.cpp src/application_checkpoint.cpp src/session_windows.cpp src/application_restore.cpp src/audio.cpp src/battery.cpp src/network.cpp src/wallpaper.cpp
+add_library(midnight_core src/folder_view.cpp src/content_size.cpp src/store.cpp src/model.cpp src/config.cpp src/session.cpp src/private_state.cpp src/session_bus.cpp src/application_session.cpp src/application_checkpoint.cpp src/session_windows.cpp src/application_restore.cpp src/audio.cpp src/battery.cpp src/network.cpp src/bluetooth.cpp src/wallpaper.cpp
   src/desktop_launcher.cpp src/thumbnail.cpp src/recent_files.cpp
   src/startup_notification.cpp src/browser_launcher.cpp src/terminal_launcher.cpp src/task_icon.cpp)
 target_include_directories(midnight_core PUBLIC src)
@@ -256,3 +256,8 @@ set(CPACK_SOURCE_PACKAGE_FILE_NAME "midnight-wm-${PROJECT_VERSION}")
 set(CPACK_SOURCE_GENERATOR "TGZ")
 set(CPACK_SOURCE_IGNORE_FILES "/build/;/.git/;/.cache/;/_CPack_Packages/;[.]core$;/packaging/mports/.*/distinfo$;/packaging/mports/.*/work/;[.]tar[.]gz$")
 include(CPack)
+
+add_executable(bluetooth_fixture tests/bluetooth_fixture.cpp)
+add_executable(bluetooth_test tests/bluetooth_test.cpp)
+target_link_libraries(bluetooth_test PRIVATE midnight_core)
+add_test(NAME bluetooth_test COMMAND bluetooth_test $<TARGET_FILE:bluetooth_fixture>)
