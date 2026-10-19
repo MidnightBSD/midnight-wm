@@ -3423,8 +3423,22 @@ struct Shell::Impl {
         }
         GError* error = nullptr;
         auto* app = G_APP_INFO(desktop_entry);
-        const bool launched = startup ? startup->launch(app, nullptr, &error) :
-          g_app_info_launch(app, nullptr, nullptr, &error);
+        bool launched = false;
+        const char* command = g_app_info_get_commandline(app);
+        gchar** argv = nullptr;
+        if (command && g_shell_parse_argv(command, nullptr, &argv, &error)) {
+          if (argv[0] && std::filesystem::path(argv[0]).filename() == "pkexec") {
+            // pkexec rejects a reparented process. GAppInfo's detached spawn
+            // can leave it with PID 1 as its parent before authorization.
+            auto* process = g_subprocess_newv(argv, G_SUBPROCESS_FLAGS_NONE, &error);
+            launched = process != nullptr;
+            if (process) g_object_unref(process);
+          } else {
+            launched = startup ? startup->launch(app, nullptr, &error) :
+              g_app_info_launch(app, nullptr, nullptr, &error);
+          }
+        }
+        g_strfreev(argv);
         if (!launched) show_notice(std::string("Could not open Mport Manager: ") +
                                   (error ? error->message : "launch failed"));
         if (error) g_error_free(error);
