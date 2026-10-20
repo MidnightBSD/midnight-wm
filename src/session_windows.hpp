@@ -31,13 +31,15 @@ public:
   bool pending() const { return waiting_; }
   WindowReport result() const;
   bool take_logout_request();
+  bool take_final_report();
+  void acknowledge_final(bool saved);
   bool logout_aborted() const { return logout_aborted_ || disconnected_; }
   void logout_reply(bool approved);
 private:
   int parent_{-1}, child_{-1};
   std::filesystem::path path_;
   bool logout_requested_{}, logout_aborted_{}, disconnected_{};
-  bool ready_{}, waiting_{}, fresh_{}, finished_{}, failed_{};
+  bool ready_{}, waiting_{}, fresh_{}, finished_{}, final_report_{}, failed_{};
   std::chrono::steady_clock::time_point deadline_{};
 };
 // Consumes and clears inherited handoff variables before other children start.

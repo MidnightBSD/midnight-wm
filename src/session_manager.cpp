@@ -154,6 +154,7 @@ struct SessionManager::Impl {
   std::deque<SmsConn> interaction_queue;
   Clock::time_point logout_deadline{};
   bool saving{}, checkpoint_ok{true};
+  bool final_report_pending{}, final_checkpoint_started{}, final_checkpoint_complete{};
   Clock::time_point checkpoint_deadline{}, restore_deadline{};
   std::set<std::string> restore_ids;
 
@@ -600,6 +601,7 @@ struct SessionManager::Impl {
 
   void tick(int timeout_ms) {
     window_channel->tick();
+    if (window_channel->take_final_report()) final_report_pending = true;
     if (Clock::now() >= restore_deadline) restore_ids.clear();
     std::vector<pollfd> descriptors;
     const auto old_peer_count = peers.size();
@@ -688,6 +690,15 @@ struct SessionManager::Impl {
     }
     advance_logout();
     finish_checkpoint();
+    if (final_report_pending && !final_checkpoint_started && !saving && !pending()) {
+      final_checkpoint_started = true;
+      if (logout != Logout::complete) checkpoint(true, true);
+    }
+    if (final_report_pending && final_checkpoint_started && !saving && !pending()) {
+      final_report_pending = false;
+      final_checkpoint_complete = true;
+      window_channel->acknowledge_final(checkpoint_ok);
+    }
     if (logout == Logout::idle && !pending()) for (auto& [connection, client] : clients) {
       if (client->needs_complete) { SmsSaveComplete(connection); client->needs_complete = false; }
     }
@@ -700,6 +711,7 @@ std::expected<void, std::string> SessionManager::initialize() { return impl_->in
 int SessionManager::release_window_child_fd() { return impl_->window_channel->release_child_fd(); }
 void SessionManager::tick(int timeout_ms) { impl_->tick(timeout_ms); }
 bool SessionManager::logout_completed() const { return impl_->logout == Impl::Logout::complete; }
+bool SessionManager::final_checkpoint_complete() const { return impl_->final_checkpoint_complete; }
 void SessionManager::checkpoint(bool persist, bool final_checkpoint) { impl_->checkpoint(persist, final_checkpoint); }
 bool SessionManager::checkpoint_pending() const { return impl_->pending() || impl_->saving; }
 } // namespace midnight

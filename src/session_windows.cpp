@@ -10,6 +10,7 @@
 #include <cstring>
 #include <memory>
 #include <set>
+#include <poll.h>
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -136,6 +137,7 @@ void SessionWindowChannel::tick() {
     else if (byte == 'R') ready_ = true;
     else if ((byte == 'D' && waiting_) || byte == 'F') {
       fresh_ = true; waiting_ = false; finished_ = byte == 'F';
+      if (finished_) final_report_ = true;
     } else if (byte == 'E') { fresh_ = false; waiting_ = false; }
   }
 }
@@ -143,6 +145,14 @@ bool SessionWindowChannel::take_logout_request() {
   const bool requested = logout_requested_;
   logout_requested_ = false;
   return requested;
+}
+bool SessionWindowChannel::take_final_report() {
+  const bool reported = final_report_;
+  final_report_ = false;
+  return reported;
+}
+void SessionWindowChannel::acknowledge_final(bool saved) {
+  (void)send_byte(parent_, saved ? 'A' : 'E');
 }
 void SessionWindowChannel::logout_reply(bool approved) {
   (void)send_byte(parent_, approved ? 'A' : 'C');
@@ -220,5 +230,21 @@ void SessionWindowReporter::tick(const std::function<WindowReport()>& capture) {
   }
   if (requested) publish(capture(), 'D');
 }
-void SessionWindowReporter::finish(const WindowReport& windows) { publish(windows, 'F'); }
+void SessionWindowReporter::finish(const WindowReport& windows) {
+  if (fd_ < 0) return;
+  publish(windows, 'F');
+  // Keep applications alive until the companion completes its final XSMP save.
+  // A missing or unresponsive companion cannot hold up shutdown indefinitely.
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (std::chrono::steady_clock::now() < deadline) {
+    pollfd peer{fd_, POLLIN, 0};
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+      deadline - std::chrono::steady_clock::now());
+    if (poll(&peer, 1, std::max(1, static_cast<int>(remaining.count()))) <= 0) continue;
+    if (peer.revents & (POLLHUP | POLLERR | POLLNVAL)) break;
+    char reply{};
+    if (recv(fd_, &reply, 1, MSG_DONTWAIT) != 1) continue;
+    if (reply == 'A' || reply == 'E') break;
+  }
+}
 } // namespace midnight
