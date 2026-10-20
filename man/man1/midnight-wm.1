@@ -198,6 +198,16 @@ preference is found.
 Prefix for the freedesktop
 .Pa applications.menu
 file used by Programs.
+.It Ev MIDNIGHT_KEEP_SESSION_PROCESSES
+When set to
+.Li 1 ,
+processes started from the desktop are not terminated when the window manager
+exits.
+By default the window manager reaps them while it runs and, on exit, sends
+.Dv SIGTERM
+to every remaining descendant, then
+.Dv SIGKILL
+after three seconds.
 .It Ev SESSION_MANAGER
 XSMP session manager address, when supplied by the session companion.
 .El
