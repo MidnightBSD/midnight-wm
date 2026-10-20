@@ -253,6 +253,12 @@ that as a platform limitation and verify the source file remains intact.
 - When changing installed files, update `CMakeLists.txt` and `pkg-plist` together.
 - Keep the experimental mport version aligned with the published release and
   set `distinfo` from that release's exact source asset.
+- Keep the experimental mport in sync with `x11-wm/midnight-wm` in
+  MidnightBSD/mports. Copy dependency, `USES`, option, and plist changes made
+  there (for example the runtime `dbus-run-session`, portal, XScreenSaver, and
+  `desktop-file-utils` entries) instead of rebuilding the files from scratch.
+- `project(... VERSION ...)` in `CMakeLists.txt` names the next release on
+  `master`; the experimental mport keeps the last published version.
 - For a release, generate the source archive with
   `cpack --config build/CPackSourceConfig.cmake -G TGZ`. Set `distinfo` from the
   exact archive uploaded to GitHub: rerunning CPack can produce different
