@@ -186,12 +186,13 @@ struct DesktopServices::Impl {
     // activated backends. A bus started before the session was registered
     // (custom ~/.xinitrc, display manager wrapper) otherwise starts dconf and
     // portals with another runtime directory, or without the SSH agent socket.
+    // Skip empty values so they never replace a usable value already on the bus.
     // Do not replace the user's portal configuration or restart an existing portal.
     GVariantBuilder environment;
     g_variant_builder_init(&environment, G_VARIANT_TYPE("a{ss}"));
     for (auto key : {"DISPLAY", "XAUTHORITY", "XDG_CURRENT_DESKTOP", "XDG_RUNTIME_DIR", "XDG_SESSION_COOKIE",
                      "XDG_SESSION_ID", "XDG_SESSION_TYPE", "XDG_SESSION_CLASS", "XDG_SEAT", "XDG_VTNR", "SSH_AUTH_SOCK"})
-      if (const auto* value = g_getenv(key)) g_variant_builder_add(&environment, "{ss}", key, value);
+      if (const auto* value = g_getenv(key); value && *value) g_variant_builder_add(&environment, "{ss}", key, value);
     g_dbus_connection_call(bus, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "UpdateActivationEnvironment",
         g_variant_new("(a{ss})", &environment), nullptr, G_DBUS_CALL_FLAGS_NONE, 2000, nullptr, nullptr, nullptr);
     return settings_object && idle_object && idle_alias;
