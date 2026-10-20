@@ -337,9 +337,18 @@ After every participating client saves successfully, the companion captures
 window placement and, when application checkpoint saving is enabled, writes the
 final snapshot before sending `Die`. Capture or snapshot-write failure cancels
 logout. It waits up to three seconds for clients to disconnect, then lets the WM
-save its built-in folders and end the desktop. Clients ignoring `Die` are not
-signalled or killed. Disabling application checkpoint saving still allows save
+save its built-in folders and end the desktop. The companion does not signal
+clients ignoring `Die`; see the session process cleanup below. Disabling application checkpoint saving still allows save
 prompts and orderly logout, without replacing the saved application session.
+
+On MidnightBSD the WM is the reaper for the processes it starts: applications
+launched from the desktop, XDG autostart entries, and anything they leave running
+in the background. Exited orphans are reaped while the desktop runs. When the WM
+exits, it sends `SIGTERM` to every remaining descendant, waits up to three
+seconds, and then sends `SIGKILL`, so nothing keeps a stale display, session bus,
+or runtime directory after logout. Set `MIDNIGHT_KEEP_SESSION_PROCESSES=1` in
+the session environment (for example in `.xinitrc`) to let tmux, screen, and
+`nohup` jobs survive logout instead.
 
 Only the WM's confirmed exit action initiates this flow; application requests to
 end the desktop remain ignored. Standalone WMs and sessions under an existing

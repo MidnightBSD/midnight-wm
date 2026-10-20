@@ -11,6 +11,7 @@ pkg_check_modules(DEPS REQUIRED IMPORTED_TARGET
   gio-2.0 gio-unix-2.0 gdk-pixbuf-2.0 garcon-1 sqlite3)
 
 add_library(midnight_core src/folder_view.cpp src/content_size.cpp src/store.cpp src/model.cpp src/config.cpp src/session.cpp src/private_state.cpp src/session_bus.cpp src/application_session.cpp src/application_checkpoint.cpp src/session_windows.cpp src/application_restore.cpp src/audio.cpp src/battery.cpp src/application_defaults.cpp src/network.cpp src/bluetooth.cpp src/wallpaper.cpp
+  src/session_reaper.cpp
   src/desktop_launcher.cpp src/thumbnail.cpp src/recent_files.cpp
   src/startup_notification.cpp src/browser_launcher.cpp src/terminal_launcher.cpp src/task_icon.cpp)
 target_include_directories(midnight_core PUBLIC src)
@@ -149,6 +150,9 @@ add_test(NAME session_test COMMAND session_test)
 add_executable(session_windows_test tests/session_windows_test.cpp)
 target_link_libraries(session_windows_test PRIVATE midnight_core Threads::Threads)
 add_test(NAME session_windows_test COMMAND session_windows_test)
+add_executable(session_reaper_test tests/session_reaper_test.cpp)
+target_link_libraries(session_reaper_test PRIVATE midnight_core)
+add_test(NAME session_reaper_test COMMAND session_reaper_test)
 
 add_executable(application_restore_test tests/application_restore_test.cpp)
 target_link_libraries(application_restore_test PRIVATE midnight_core)

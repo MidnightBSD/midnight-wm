@@ -14,6 +14,7 @@
 #include "session.hpp"
 #include "session_windows.hpp"
 #include "session_bus.hpp"
+#include "session_reaper.hpp"
 #include "startup_notification.hpp"
 #include "status_notifier.hpp"
 #include "status_panel.hpp"
@@ -127,6 +128,9 @@ int main(int argc, char** argv) {
     g_setenv("XDG_CURRENT_DESKTOP", "MidnightWorkspace", true);
 
   midnight::ensure_session_bus(argc, argv);
+  // After the bus bootstrap, so the dbus-run-session re-exec is not a reaper.
+  // Declared before everything that launches processes so it is destroyed last.
+  midnight::SessionReaper reaper;
   midnight::SessionWindowReporter window_reporter;
   auto application_plan = midnight::take_application_restore_plan(midnight::load_config().restore_applications);
 
@@ -282,6 +286,7 @@ int main(int argc, char** argv) {
             menu_popup.refresh_geometry();
           }
           applications.tick();
+          reaper.tick();
           wm.tick();
           window_reporter.tick([&wm] { return wm.application_windows(); });
           if (auto logout = window_reporter.logout_result()) {

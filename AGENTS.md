@@ -13,6 +13,12 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   project version through `MIDNIGHT_WM_VERSION`. Startup re-execs through
   `dbus-run-session` only if no reachable session bus is available; preserve
   the recursion guard and the wrapper's ownership of the new bus.
+- `src/session_reaper.*` makes the WM a procctl(2) reaper for the processes it
+  starts. Construct it after the session bus bootstrap and before anything that
+  launches processes. Only reap reparented orphans while running (pidinfo
+  subtree differs from pid); never wait for a child this process forked, since
+  GLib or its owner waits for it. stop() terminates the subtree (TERM, bounded
+  grace, KILL) unless `MIDNIGHT_KEEP_SESSION_PROCESSES=1`.
 - `src/keyring_session.*` initializes the configured Secret Service and SSH
   agent before XDG autostart. Preserve an existing Secret Service owner and a
   reachable inherited `SSH_AUTH_SOCK`; stop only the fallback ssh-agent owned
