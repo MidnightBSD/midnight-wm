@@ -120,7 +120,7 @@ int main(int argc, char** argv) {
   }
   // Coordinated logout already saved before asking clients to exit. Keep the
   // standalone/termination fallback without overwriting that completed snapshot.
-  if (!manager.logout_completed())
+  if (!manager.logout_completed() && !manager.final_checkpoint_complete())
     manager.checkpoint(!stop_signal && WIFEXITED(status) && WEXITSTATUS(status) == 0, true);
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
   while (manager.checkpoint_pending() && std::chrono::steady_clock::now() < deadline) manager.tick();

@@ -21,6 +21,7 @@ public:
   void checkpoint(bool persist = true, bool final_checkpoint = false);
   bool checkpoint_pending() const;
   bool logout_completed() const;
+  bool final_checkpoint_complete() const;
 private:
   struct Impl;
   std::unique_ptr<Impl> impl_;
