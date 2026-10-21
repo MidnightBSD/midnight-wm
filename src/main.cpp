@@ -250,6 +250,9 @@ int main(int argc, char** argv) {
           }
         }
         midnight::launch_autostart(applications.launched_executables(), applications.launched_desktop_commands());
+        const bool start_xscreensaver = shell.theme().start_xscreensaver;
+        const auto screensaver_check = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        bool screensaver_checked = false;
         ConfigReload config_reload;
 
         pollfd display{.fd = xcb_get_file_descriptor(connection), .events = POLLIN, .revents = 0};
@@ -275,6 +278,10 @@ int main(int argc, char** argv) {
             std::free(event);
           }
           while (g_main_context_pending(nullptr)) g_main_context_iteration(nullptr, false);
+          if (!screensaver_checked && std::chrono::steady_clock::now() >= screensaver_check) {
+            screensaver_checked = true;
+            if (start_xscreensaver) midnight::launch_xscreensaver(connection, screen->root);
+          }
           if (auto config = config_reload.poll()) {
             shell.apply_config(std::move(*config));
             compositor.set_enabled(shell.theme().compositing);

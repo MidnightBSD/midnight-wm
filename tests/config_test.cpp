@@ -37,6 +37,11 @@ int main() {
         "battery indicator can be disabled");
   check(midnight::parse_config("[Workspace]\nshow_battery=invalid\n")->show_battery,
         "invalid battery setting must retain enabled default");
+  check(defaults.start_xscreensaver, "XScreenSaver startup must default to enabled");
+  check(!midnight::parse_config("[Session]\nstart_xscreensaver=false\n")->start_xscreensaver,
+        "XScreenSaver startup can be disabled");
+  check(midnight::parse_config("[Session]\nstart_xscreensaver=invalid\n")->start_xscreensaver,
+        "invalid XScreenSaver setting must retain enabled default");
   write("[Workspace]\ndark_mode=true\nui_font=DejaVu Sans 12\ntitle_font=DejaVu Serif Bold 14\n");
   const auto dark = midnight::load_config();
   check(dark.dark_mode && dark.panel_color[0] < .3 && dark.text_color[0] > .8,

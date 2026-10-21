@@ -4,6 +4,7 @@
 #include <vector>
 #include <span>
 #include <string>
+#include <xcb/xcb.h>
 
 namespace midnight {
 
@@ -19,5 +20,9 @@ std::vector<std::filesystem::path> find_autostart_entries(
 // complete installed command. Never execute these command strings ourselves.
 void launch_autostart(std::span<const std::string> restored_executables = {},
     std::span<const std::string> restored_desktop_commands = {});
+
+// Start the optional saver after other autostart entries have had time to
+// register. An already running saver belongs to its original owner.
+void launch_xscreensaver(xcb_connection_t* connection, xcb_window_t root);
 
 } // namespace midnight

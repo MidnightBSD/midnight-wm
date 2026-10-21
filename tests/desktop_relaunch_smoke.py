@@ -58,9 +58,11 @@ def main():
     def command(*arguments):
         return subprocess.check_output(arguments, env=env, text=True, timeout=10)
 
-    def configure(restore=False, fallback=False):
-        config.write_text('[Workspace]\ncompositing=false\n[Session]\nsave_application_checkpoints=true\n'
-            f'restore_applications={str(restore).lower()}\nrestore_desktop_applications={str(fallback).lower()}\n')
+    def configure(restore=False, fallback=False, save=True):
+        config.write_text('[Workspace]\ncompositing=false\n[Session]\n'
+            f'save_application_checkpoints={str(save).lower()}\n'
+            f'restore_applications={str(restore).lower()}\nrestore_desktop_applications={str(fallback).lower()}\n'
+            'start_xscreensaver=false\n')
 
     def start():
         nonlocal process
@@ -80,6 +82,8 @@ def main():
             except ProcessLookupError:
                 pass
             process.wait(timeout=10)
+            until(lambda: 'window id #' not in command('xprop', '-root', '_NET_SUPPORTING_WM_CHECK'),
+                  'WM did not release the display after logout')
         for child in children:
             if child.poll() is None:
                 child.terminate()
@@ -131,7 +135,7 @@ def main():
         known.update((root / 'clients').glob('*.txt'))
         before = snapshot.read_bytes()
         stop()
-        configure(restore=True)
+        configure(restore=True, save=False)
         start()
         time.sleep(.8)
         assert set((root / 'clients').glob('*.txt')) == known, 'fallback restored without separate opt-in'

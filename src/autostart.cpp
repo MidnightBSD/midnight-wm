@@ -6,6 +6,7 @@
 #include <glib.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <map>
@@ -107,6 +108,40 @@ void launch_autostart(std::span<const std::string> restored_executables,
     }
     if (error) g_error_free(error);
   }
+}
+
+void launch_xscreensaver(xcb_connection_t* connection, xcb_window_t root) {
+  if (!connection || xcb_connection_has_error(connection)) return;
+  const char name[] = "_SCREENSAVER_VERSION";
+  auto* atom = xcb_intern_atom_reply(connection,
+      xcb_intern_atom(connection, true, sizeof(name) - 1, name), nullptr);
+  if (atom && atom->atom != XCB_ATOM_NONE) {
+    auto* existing = xcb_get_property_reply(connection,
+        xcb_get_property(connection, false, root, atom->atom, XCB_GET_PROPERTY_TYPE_ANY, 0, 1), nullptr);
+    const bool running = existing && xcb_get_property_value_length(existing) > 0;
+    std::free(existing);
+    std::free(atom);
+    if (running) return;
+  } else {
+    std::free(atom);
+  }
+
+  char* program = g_find_program_in_path("xscreensaver");
+  if (!program) return;
+  const char* argv[]{program, "--no-splash", nullptr};
+  GError* error = nullptr;
+  auto* process = g_subprocess_newv(argv, G_SUBPROCESS_FLAGS_STDOUT_SILENCE, &error);
+  g_free(program);
+  if (!process) {
+    std::cerr << "XScreenSaver: " << (error ? error->message : "launch failed") << '\n';
+    g_clear_error(&error);
+    return;
+  }
+  // GLib owns this direct child's wait; the session reaper must not consume it.
+  g_subprocess_wait_async(process, nullptr, [](GObject* source, GAsyncResult* result, gpointer) {
+    (void)g_subprocess_wait_finish(G_SUBPROCESS(source), result, nullptr);
+    g_object_unref(source);
+  }, nullptr);
 }
 
 } // namespace midnight

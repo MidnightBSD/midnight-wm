@@ -199,6 +199,12 @@ def session(args):
                 x + width + right <= 1280 and y + height + bottom <= 720, \
                 "Application defaults page extends outside the 720p screen"
 
+            run("xdotool", "key", "--clearmodifiers", "ctrl+Page_Down")
+            run("xdotool", "key", "--clearmodifiers", "alt+x")
+            run("xdotool", "key", "--clearmodifiers", "alt+a")
+            until(lambda: "start_xscreensaver=false" in config.read_text(),
+                  "Settings did not save the XScreenSaver startup toggle")
+
             # External atomic saves must follow the same reload path as the Settings app.
             atomic_write(gtk_settings, "[Settings]\ngtk-icon-theme-name=SmokeBlue\n")
             changed = ("[Workspace]\npanel_label=Smoke test\nui_scale=1.25\n"

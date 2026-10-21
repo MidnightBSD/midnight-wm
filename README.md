@@ -86,9 +86,11 @@ and urgency handling. Critical notifications remain until dismissed; resident
 notifications can remain after an action. An existing notification daemon keeps
 control.
 The lock button asks a
-running `xscreensaver` daemon to lock the screen with `xscreensaver-command -lock`;
-if the daemon is unavailable, the desktop shows a notice. Start `xscreensaver`
-in your X session to use the button. The terminal button opens the terminal
+running `xscreensaver` daemon to lock the screen with `xscreensaver-command -lock`.
+Midnight Workspace starts that daemon at login when it is installed, unless
+**Start XScreenSaver at login** is disabled in Settings → **Session**. It leaves
+an existing daemon running. The choice takes effect at the next login. If no
+daemon is available, the desktop shows a notice. The terminal button opens the terminal
 selected by an `xdg-terminals.list` preference, or `$TERMINAL` if set. It opens
 xterm when neither is configured.
 The browser button opens the configured XDG default web browser. If no browser
