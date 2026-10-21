@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Midnight Chat
+Comment=Chat with a local AI model
+Exec=midnightbsd-chat
+Icon=applications-internet
+Terminal=false
+Categories=Network;Chat;
+StartupNotify=true

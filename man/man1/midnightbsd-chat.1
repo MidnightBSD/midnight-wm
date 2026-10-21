@@ -1,0 +1,55 @@
+.\" Copyright (c) 2026 Lucas Holt
+.\" SPDX-License-Identifier: BSD-2-Clause
+.Dd October 21, 2026
+.Dt MIDNIGHTBSD-CHAT 1
+.Os
+.Sh NAME
+.Nm midnightbsd-chat
+.Nd local AI chat companion for Midnight Workspace
+.Sh SYNOPSIS
+.Nm
+.Sh DESCRIPTION
+.Nm
+provides saved conversations with an OpenAI-compatible chat endpoint.
+Choose Settings to configure an HTTP or HTTPS base URL, port, optional bearer
+token, and context and reply token limits.
+The default endpoint is http://localhost/v1 on port 11434 (Ollama).
+For llama.cpp use port 8080.
+Port zero preserves the URL port or the scheme default.
+Use Refresh models to populate the editable model dropdown from /v1/models.
+The base path defaults to /v1; /chat/completions is appended for chat requests.
+.Pp
+Select conversations on the left or create a new conversation.
+Control+Enter sends a message; Enter inserts a newline.
+Stop cancels a request. Send / Retry retries an unanswered message;
+entering replacement text edits that pending message.
+Only one request runs at a time; conversations can be viewed while waiting.
+.Pp
+Older complete turns are summarized automatically through the same endpoint
+when the conservative byte-based token estimate exceeds the context budget.
+Reply space and template overhead are reserved. The complete transcript is
+retained locally. Summaries can lose details. Reset context excludes earlier
+turns from future requests without deleting them from the transcript.
+Set the context size to the server's actual configured capacity.
+This setting does not reconfigure the server.
+.Pp
+Responses are displayed as plain text after generation completes.
+This application does not execute model output or provide tools or agents.
+TLS certificates are verified, redirects are rejected, and environment proxies
+are not used. Authentication is omitted unless explicitly enabled.
+Tokens are stored in a private file, not encrypted; use HTTPS when appropriate.
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa $XDG_CONFIG_HOME/midnightbsd-chat/settings.json
+Endpoint, model, authentication and token limits (mode 0600).
+.It Pa $XDG_DATA_HOME/midnightbsd-chat/conversations.json
+Conversation transcripts and summaries (mode 0600).
+.El
+.Pp
+XDG defaults are ~/.config and ~/.local/share.
+Invalid or insecure files are reported and preserved, not overwritten.
+History is limited to 16 MiB and 1000 conversations; delete older conversations
+when the limit is reached. Responses are limited to 1 MiB.
+.Sh SEE ALSO
+.Xr midnight-wm 1 ,
+.Xr midnightbsd-search 1
