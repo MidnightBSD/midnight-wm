@@ -72,6 +72,35 @@ def session(args):
                 "org.freedesktop.FileManager1.ShowFolders", repr([folder.as_uri()]), "")
             target = until(lambda: window_for_size(620, 430), "folder missing")
             check_launcher_shortcut(target)
+            # Navigate all three launcher levels without pointer input.
+            run("xdotool", "key", "--clearmodifiers", "ctrl+Escape", "Down", "Down", "Down", "Right")
+            until(lambda: len(popups()) == 2, "Right did not open Programs")
+            run("xdotool", "key", "Down", "Right")  # Development category.
+            until(lambda: len(popups()) == 3, "Right did not open the category")
+            run("xdotool", "key", "Left")
+            until(lambda: len(popups()) == 2, "Left did not return to categories")
+            run("xdotool", "key", "Right", "Up", "Down", "Down")  # Wrap in both directions.
+            until(lambda: len(popups()) == 3, "Right did not reopen the selected category")
+            run("import", "-window", "root", str(args.output / "keyboard-menu.png"))
+            run("xdotool", "key", "Return")
+            until((Path(os.environ["HOME"]) / "Development-01.launched").exists,
+                  "keyboard selection did not launch the second Development application")
+            until(lambda: not popups(), "keyboard activation did not dismiss menus")
+            # Empty informational submenus must not activate a placeholder.
+            run("xdotool", "key", "--clearmodifiers", "ctrl+Escape", "Home", "Down", "Down", "Down", "Return")
+            until(lambda: len(popups()) == 2, "Enter did not open Recent Documents")
+            run("xdotool", "key", "Down", "Return")
+            assert len(popups()) == 2, "empty submenu placeholder was activated"
+            run("xdotool", "key", "Left")
+            until(lambda: len(popups()) == 1, "Left did not return to root")
+            run("xdotool", "key", "Escape")
+            until(lambda: not popups(), "Escape did not dismiss menu chain")
+            # Mouse opening must support the same keyboard actions; Down wraps to Home.
+            run("xdotool", "mousemove", "12", "12", "click", "1")
+            until(lambda: bool(popups()), "mouse launcher missing")
+            run("xdotool", "key", "End", "Down", "Return")
+            until(lambda: visible_window("Folder: " + os.environ["HOME"]), "wrapped selection did not open Home")
+            until(lambda: not popups(), "Home activation did not close menu")
             # Rebinding and None must update the global grab after a live reload.
             config = Path(os.environ["XDG_CONFIG_HOME"]) / "midnight-wm/config.ini"
             run("xdotool", "key", "--clearmodifiers", "ctrl+Escape")

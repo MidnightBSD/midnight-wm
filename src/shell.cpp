@@ -3081,7 +3081,16 @@ struct Shell::Impl {
                                    {"System Monitor", MenuAction::system_monitor},
                                    {"Exit X11 session…", MenuAction::exit_session}};
     const auto area = primary_area();
+    close_audio_popup();
+    close_network_popup();
+    close_bluetooth_popup();
     show_menu(area.x + 3, area.y + panel_height, desktop, std::move(entries));
+    // Mouse and shortcut launches share keyboard navigation without changing input focus.
+    const auto cookie = xcb_grab_keyboard(connection, 0, menu, XCB_CURRENT_TIME,
+                                          XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC);
+    auto* reply = xcb_grab_keyboard_reply(connection, cookie, nullptr);
+    launcher_keyboard_grab = reply && reply->status == XCB_GRAB_STATUS_SUCCESS;
+    std::free(reply);
   }
 
   void lock_screen() {
@@ -3997,10 +4006,71 @@ struct Shell::Impl {
     } else { last_click_time = event->time; last_click_index = index; last_click_window = event->event; }
   }
 
+  void finish_menu_reveals() {
+    for (auto& [window, cache] : menu_surfaces) {
+      if (!cache.revealing) continue;
+      cache.revealing = false;
+      cache.visible_height = cache.height;
+      const std::uint32_t height = scaled_pixel(scale, cache.height);
+      xcb_configure_window(connection, window, XCB_CONFIG_WINDOW_HEIGHT, &height);
+    }
+  }
+
+  void launcher_key(xcb_keysym_t sym) {
+    pending_category_row = -1;
+    if (sym == XK_Escape) { close_menu(); return; }
+    if (sym == XK_Left) {
+      if (app_menu) close_app_menu();
+      else if (submenu) close_submenu();
+      return;
+    }
+    const int depth = app_menu ? 2 : submenu ? 1 : 0;
+    auto& entries = depth == 2 ? app_menu_entries : depth == 1 ? submenu_entries : menu_entries;
+    auto& selected = depth == 2 ? app_menu_hover : depth == 1 ? submenu_hover : menu_hover;
+    const auto redraw = [&] {
+      if (depth == 2) draw_app_menu();
+      else if (depth == 1) draw_submenu();
+      else draw_menu();
+    };
+    if (sym == XK_Up || sym == XK_Down || sym == XK_Home || sym == XK_End) {
+      const int count = static_cast<int>(entries.size());
+      const int step = sym == XK_Up || sym == XK_End ? -1 : 1;
+      if (sym == XK_Home || sym == XK_End) selected = -1;
+      for (int attempts = 0; attempts < count; ++attempts) {
+        selected = selected < 0 ? (step > 0 ? 0 : count - 1) : (selected + step + count) % count;
+        if (entries[selected].action != MenuAction::noop) break;
+      }
+      if (selected >= 0 && entries[selected].action == MenuAction::noop) selected = -1;
+      finish_menu_reveals();
+      redraw();
+      return;
+    }
+    if (sym != XK_Return && sym != XK_KP_Enter && sym != XK_Right) return;
+    if (selected < 0 || static_cast<std::size_t>(selected) >= entries.size()) return;
+    const auto entry = entries[selected]; // execute may replace or destroy the menu vectors.
+    if (entry.action == MenuAction::noop) return;
+    const bool child = entry.action == MenuAction::show_programs || entry.action == MenuAction::show_recent ||
+                       entry.action == MenuAction::workspaces || entry.action == MenuAction::show_category;
+    if (sym == XK_Right && !child) return;
+    execute(entry, selected);
+    if (!menu) return;
+    // Entering a submenu or changing a page selects its first actionable row.
+    auto& next_entries = app_menu ? app_menu_entries : submenu ? submenu_entries : menu_entries;
+    auto& next_selected = app_menu ? app_menu_hover : submenu ? submenu_hover : menu_hover;
+    next_selected = -1;
+    for (std::size_t i = 0; i < next_entries.size(); ++i) {
+      if (next_entries[i].action != MenuAction::noop) { next_selected = static_cast<int>(i); break; }
+    }
+    finish_menu_reveals();
+    if (app_menu) draw_app_menu();
+    else if (submenu) draw_submenu();
+    else draw_menu();
+  }
+
   void key(const xcb_key_press_event_t* event) {
     if (launcher_keyboard_grab) {
       const auto sym = key_symbols ? xcb_key_symbols_get_keysym(key_symbols, event->detail, 0) : 0;
-      if (sym == XK_Escape) close_menu();
+      launcher_key(sym);
       return;
     }
     if (open_with_dialog && event->event == open_with_dialog->window) {
@@ -4467,17 +4537,7 @@ void Shell::tick() {
 }
 
 void Shell::open_launcher() {
-  auto& p = *impl_;
-  p.close_audio_popup();
-  p.close_network_popup();
-  p.close_bluetooth_popup();
-  p.show_launcher();
-  // Keep the application's input focus; dismissing the menu releases this grab.
-  const auto cookie = xcb_grab_keyboard(p.connection, 0, p.menu, XCB_CURRENT_TIME,
-                                        XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC);
-  auto* reply = xcb_grab_keyboard_reply(p.connection, cookie, nullptr);
-  p.launcher_keyboard_grab = reply && reply->status == XCB_GRAB_STATUS_SUCCESS;
-  std::free(reply);
+  impl_->show_launcher();
 }
 
 bool Shell::menu_animation_active() const {
