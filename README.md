@@ -37,6 +37,53 @@ session-owned OpenSSH `ssh-agent`. The fallback agent ends with the session.
 Keyring unlock at login depends on the display manager's PAM configuration;
 starting a keyring here may prompt for its password when first used.
 
+## AI chat companion
+
+Run `midnightbsd-chat` or choose **Midnight Chat** from Programs. This separate
+GTK 3 application provides plain-text chat with local or LAN OpenAI-compatible
+servers; it has no tools, command execution, or agent functionality. Building
+it requires `libsoup-3.0` and `json-glib-1.0` in addition to GTK 3.
+
+In **Settings**, enter a base URL (normally `http://localhost/v1`) and port:
+11434 for Ollama or 8080 for llama.cpp. Port 0 uses the port in the URL or its
+scheme default. Authentication is off by default; enable it for an optional
+bearer token. **Refresh models** fills the editable model dropdown from
+`/v1/models`. Select a downloaded chat model, or type its name when discovery
+is unavailable. The protocol follows the [Ollama compatibility API](https://docs.ollama.com/api/openai-compatibility)
+and [llama.cpp server API](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md).
+
+Conversations appear on the left. **Ctrl+Enter** sends; Enter adds a newline.
+**Stop** cancels generation. **Send / Retry** with an empty input retries an
+unanswered message; replacement text edits that pending message. Replies appear
+when generation completes. Requests have a three-minute deadline and run off
+the UI thread. You can switch conversations while waiting; drafts stay with
+their conversation for the lifetime of the application.
+
+Set **Context tokens** to the server's actual configured context size; this
+setting does not change the server. The client reserves reply space and uses
+a conservative UTF-8 byte estimate plus template overhead. When necessary,
+older complete turns are summarized by the same model in bounded batches.
+Summaries can lose details; full original transcripts remain visible locally.
+**Reset context** excludes previous turns from subsequent requests while
+preserving the transcript. Very large individual turns produce an error
+instead of being silently truncated.
+
+Settings (including any token) are stored in
+`$XDG_CONFIG_HOME/midnightbsd-chat/settings.json`, and transcripts and summaries
+in `$XDG_DATA_HOME/midnightbsd-chat/conversations.json`. Defaults are `~/.config`
+and `~/.local/share`. Directories are private (0700), files are private (0600),
+and saves use atomic replacement. Tokens are not encrypted at rest. HTTP is
+unencrypted; HTTPS verifies certificates. Redirects and environment proxies
+are disabled. No request is made until you refresh models or send a message.
+Invalid or insecure files are reported and left intact; repair or move the
+reported file before restarting. History is bounded to 16 MiB and 1000 threads.
+
+`ctest --test-dir build -R chat_protocol_test --output-on-failure` verifies
+local HTTP fixtures, authentication, summaries, storage and error handling.
+`python3 tests/chat_smoke.py` exercises the GUI in isolated Xvfb/HOME/XDG
+settings. To test an actual backend sequentially, use
+`python3 tests/chat_smoke.py --live http://HOST:11434/v1 --model mistral:7b`.
+
 ## Window shadows and compositing
 
 Install [Picom](https://picom.app/) to enable soft window shadows. Midnight

@@ -10,7 +10,9 @@ WWW=		https://github.com/MidnightBSD/midnight-wm
 LICENSE=	bsd2
 LICENSE_FILE=	${WRKSRC}/LICENSE
 
-LIB_DEPENDS=	libxcb-icccm.so:x11/xcb-util-wm \
+LIB_DEPENDS=	libsoup-3.0.so:devel/libsoup3 \
+		libjson-glib-1.0.so:devel/json-glib \
+		libxcb-icccm.so:x11/xcb-util-wm \
 		libxcb-keysyms.so:x11/xcb-util-keysyms \
 		libgarcon-1.so:sysutils/garcon \
 		libsqlite3.so:databases/sqlite3

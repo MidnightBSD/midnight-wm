@@ -43,6 +43,15 @@ target_link_libraries(midnightbsd-settings PRIVATE midnight_core PkgConfig::GTK3
 target_compile_options(midnightbsd-settings PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_definitions(midnightbsd-settings PRIVATE MIDNIGHT_WM_VERSION="${PROJECT_VERSION}")
 
+pkg_check_modules(CHAT REQUIRED IMPORTED_TARGET libsoup-3.0 json-glib-1.0)
+add_library(midnight_chat src/chat_core.cpp src/private_state.cpp)
+target_include_directories(midnight_chat PUBLIC src)
+target_link_libraries(midnight_chat PUBLIC PkgConfig::CHAT)
+target_compile_options(midnight_chat PRIVATE -Wall -Wextra -Wpedantic)
+add_executable(midnightbsd-chat src/chat.cpp)
+target_link_libraries(midnightbsd-chat PRIVATE midnight_chat PkgConfig::GTK3)
+target_compile_options(midnightbsd-chat PRIVATE -Wall -Wextra -Wpedantic)
+
 add_executable(midnightbsd-search src/search.cpp)
 target_link_libraries(midnightbsd-search PRIVATE PkgConfig::GTK3)
 target_compile_options(midnightbsd-search PRIVATE -Wall -Wextra -Wpedantic)
@@ -77,15 +86,15 @@ target_compile_options(midnightbsd-session PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_definitions(midnightbsd-session PRIVATE
   MIDNIGHT_WM_VERSION="${PROJECT_VERSION}"
   MIDNIGHT_WM_PROGRAM="${CMAKE_INSTALL_FULL_BINDIR}/midnight-wm")
-install(TARGETS midnight-wm midnightbsd-search midnightbsd-system-monitor midnightbsd-settings midnightbsd-session midnightbsd-open-folder RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(FILES data/midnightbsd-settings.desktop data/midnightbsd-system-monitor.desktop data/org.midnightbsd.Workspace.Files.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+install(TARGETS midnight-wm midnightbsd-chat midnightbsd-search midnightbsd-system-monitor midnightbsd-settings midnightbsd-session midnightbsd-open-folder RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES data/midnightbsd-chat.desktop data/midnightbsd-settings.desktop data/midnightbsd-system-monitor.desktop data/org.midnightbsd.Workspace.Files.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 install(FILES data/midnight-wm.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/xsessions)
 install(FILES data/config.ini data/MidnightBSDLogo.svg data/MidnightBSDLogo22x22.png
         DESTINATION ${CMAKE_INSTALL_DATADIR}/midnight-wm)
 install(FILES data/midnight.portal DESTINATION ${CMAKE_INSTALL_DATADIR}/xdg-desktop-portal/portals)
 install(FILES data/midnightworkspace-portals.conf DESTINATION ${CMAKE_INSTALL_DATADIR}/xdg-desktop-portal)
 install(FILES README.md LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/midnight-wm)
-install(FILES man/man1/midnight-wm.1 man/man1/midnightbsd-settings.1 man/man1/midnightbsd-search.1 man/man1/midnightbsd-system-monitor.1
+install(FILES man/man1/midnightbsd-chat.1 man/man1/midnight-wm.1 man/man1/midnightbsd-settings.1 man/man1/midnightbsd-search.1 man/man1/midnightbsd-system-monitor.1
               man/man1/midnightbsd-open-folder.1
         DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
 
@@ -290,3 +299,11 @@ add_executable(bluetooth_fixture tests/bluetooth_fixture.cpp)
 add_executable(bluetooth_test tests/bluetooth_test.cpp)
 target_link_libraries(bluetooth_test PRIVATE midnight_core)
 add_test(NAME bluetooth_test COMMAND bluetooth_test $<TARGET_FILE:bluetooth_fixture>)
+
+add_executable(chat_test tests/chat_test.cpp)
+target_link_libraries(chat_test PRIVATE midnight_chat Threads::Threads)
+if(Python3_Interpreter_FOUND)
+  add_test(NAME chat_protocol_test COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/chat_protocol_test.py $<TARGET_FILE:chat_test>)
+  set_tests_properties(chat_protocol_test PROPERTIES TIMEOUT 50)
+endif()
