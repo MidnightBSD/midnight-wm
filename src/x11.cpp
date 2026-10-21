@@ -2197,6 +2197,7 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
       set_current_desktop(desktop_layout_.neighbor(current_desktop_, desktop_count_, horizontal, forward));
       break;
     }
+    case ShortcutAction::open_launcher: shell_.open_launcher(); break;
     case ShortcutAction::show_desktop: set_showing_desktop(!showing_desktop_); break;
     case ShortcutAction::switch_window: cycle_focus(true); break;
     case ShortcutAction::switch_window_backward: cycle_focus(true, true); break;

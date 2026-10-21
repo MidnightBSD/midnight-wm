@@ -22,8 +22,8 @@ int main() {
     }
   }
   check(!midnight::shortcuts_conflict(defaults), "default shortcuts conflict");
-  const std::array<const char*, 5> added_defaults{
-    "Alt+F7", "Alt+F8", "Alt+F9", "Alt+F10", "Alt+Shift+Tab"};
+  const std::array<const char*, 6> added_defaults{
+    "Alt+F7", "Alt+F8", "Alt+F9", "Alt+F10", "Alt+Shift+Tab", "Ctrl+Escape"};
   for (std::size_t i = 0; i < added_defaults.size(); ++i) {
     const auto action = static_cast<midnight::ShortcutAction>(7 + i);
     check(defaults[7 + i] == midnight::parse_shortcut(added_defaults[i]).value(), "wrong operation default");

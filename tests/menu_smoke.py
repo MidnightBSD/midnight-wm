@@ -20,7 +20,7 @@ import tempfile
 import time
 
 sys.dont_write_bytecode = True
-from settings_smoke import run, until, window_for_size, window_tree
+from settings_smoke import run, until, window_for_size, window_tree, visible_window, atomic_write
 
 
 def popups():
@@ -44,6 +44,50 @@ def session(args):
             second = subprocess.run([str(args.binary)], capture_output=True, text=True, timeout=10)
             (args.output / "second-wm.log").write_text(second.stdout + second.stderr)
             assert second.returncode != 0, "second WM took over test display"
+
+            def check_launcher_shortcut(target):
+                run("xdotool", "windowfocus", "--sync", target)
+                run("xdotool", "key", "--clearmodifiers", "ctrl+Escape")
+                until(lambda: len(popups()) == 1, "Ctrl+Escape did not open Midnight")
+                run("xdotool", "key", "Escape")
+                until(lambda: not popups(), "Escape did not dismiss keyboard launcher")
+                assert int(run("xdotool", "getwindowfocus").strip()) == int(target, 0), "launcher changed input focus"
+
+            desktop = until(lambda: window_for_size(1280, 720), "desktop missing")
+            check_launcher_shortcut(desktop)
+            # GTK needs the system MIME/icon data; keep the WM's menu fixtures isolated.
+            settings_env = dict(os.environ, XDG_DATA_DIRS="/usr/local/share:/usr/share")
+            settings = subprocess.Popen([str(args.binary.parent / "midnightbsd-settings")],
+                                        env=settings_env, stdout=log, stderr=subprocess.STDOUT)
+            try:
+                target = until(lambda: visible_window("Midnight Workspace Settings"), "Settings missing")
+                check_launcher_shortcut(target)
+            finally:
+                settings.terminate()
+                settings.wait(timeout=5)
+            folder = Path(os.environ["HOME"]) / "shortcut-folder"
+            folder.mkdir()
+            run("gdbus", "call", "--session", "--dest", "org.freedesktop.FileManager1",
+                "--object-path", "/org/freedesktop/FileManager1", "--method",
+                "org.freedesktop.FileManager1.ShowFolders", repr([folder.as_uri()]), "")
+            target = until(lambda: window_for_size(620, 430), "folder missing")
+            check_launcher_shortcut(target)
+            # Rebinding and None must update the global grab after a live reload.
+            config = Path(os.environ["XDG_CONFIG_HOME"]) / "midnight-wm/config.ini"
+            run("xdotool", "key", "--clearmodifiers", "ctrl+Escape")
+            until(lambda: bool(popups()), "launcher missing before reload")
+            atomic_write(config, "[Workspace]\nui_scale=1.0\n[Shortcuts]\nopen_launcher=Super+F6\n")
+            until(lambda: not popups(), "reload did not dismiss grabbed menu")
+            run("xdotool", "key", "--clearmodifiers", "ctrl+Escape")
+            time.sleep(.2)
+            assert not popups(), "old launcher binding still active"
+            run("xdotool", "key", "--clearmodifiers", "super+F6")
+            until(lambda: bool(popups()), "custom launcher binding not active")
+            atomic_write(config, "[Workspace]\nui_scale=1.0\n[Shortcuts]\nopen_launcher=None\n")
+            until(lambda: not popups(), "disabling shortcut did not reload")
+            run("xdotool", "key", "--clearmodifiers", "super+F6", "ctrl+Escape")
+            time.sleep(.2)
+            assert not popups(), "disabled launcher binding still active"
 
             def open_categories():
                 run("xdotool", "mousemove", "--sync", "12", "12", "click", "1")
@@ -144,7 +188,6 @@ def session(args):
             cx, cy, _, _ = popups()[category]
             move(cx + 50, cy + 16)
             config = Path(os.environ["XDG_CONFIG_HOME"]) / "midnight-wm/config.ini"
-            from settings_smoke import atomic_write
             atomic_write(config, "[Workspace]\nui_scale=1.0\nreduced_motion=true\n")
             until(lambda: not popups(), "live motion reload did not cancel menus")
             time.sleep(.3)

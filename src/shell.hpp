@@ -38,6 +38,7 @@ public:
   [[nodiscard]] bool initialize();
   [[nodiscard]] bool handle(xcb_generic_event_t* event);
   void tick();
+  void open_launcher();
   [[nodiscard]] bool menu_animation_active() const;
   void set_tasks(std::vector<Task> tasks);
   void set_workspace(std::uint32_t desktop, bool showing_desktop);
