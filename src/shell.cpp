@@ -754,6 +754,7 @@ struct Shell::Impl {
   std::size_t app_page{};
   std::size_t task_page{};
   xcb_window_t menu_owner{};
+  bool launcher_keyboard_grab{};
   int menu_x{}, menu_y{}, menu_width{250};
   int submenu_x{}, submenu_y{}, category_row{};
   int menu_hover{-1};
@@ -3000,6 +3001,10 @@ struct Shell::Impl {
   }
 
   void close_menu() {
+    if (launcher_keyboard_grab) {
+      xcb_ungrab_keyboard(connection, XCB_CURRENT_TIME);
+      launcher_keyboard_grab = false;
+    }
     close_submenu();
     destroy_menu_window(menu);
     menu_entries.clear();
@@ -3993,6 +3998,11 @@ struct Shell::Impl {
   }
 
   void key(const xcb_key_press_event_t* event) {
+    if (launcher_keyboard_grab) {
+      const auto sym = key_symbols ? xcb_key_symbols_get_keysym(key_symbols, event->detail, 0) : 0;
+      if (sym == XK_Escape) close_menu();
+      return;
+    }
     if (open_with_dialog && event->event == open_with_dialog->window) {
       auto& dialog = *open_with_dialog;
       const auto sym = key_symbols ? xcb_key_symbols_get_keysym(key_symbols, event->detail, 0) : 0;
@@ -4316,6 +4326,13 @@ bool Shell::handle(xcb_generic_event_t* event) {
     default: return false;
   }
   if (!owns(window)) return false;
+  // Passive grabs use owner_events, so shell windows can receive this global shortcut.
+  if (type == XCB_KEY_PRESS && !p.launcher_keyboard_grab) {
+    const auto* press = reinterpret_cast<xcb_key_press_event_t*>(event);
+    const auto sym = p.key_symbols ? xcb_key_symbols_get_keysym(p.key_symbols, press->detail, 0) : 0;
+    if (shortcut_action(p.config.shortcuts, sym, press->state) == ShortcutAction::open_launcher)
+      return false;
+  }
   if (p.startup && type == XCB_BUTTON_PRESS)
     p.startup->record_user_time(reinterpret_cast<xcb_button_press_event_t*>(event)->time);
   else if (p.startup && type == XCB_KEY_PRESS)
@@ -4447,6 +4464,20 @@ void Shell::tick() {
   }
   if (p.bluetooth.tick(p.bluetooth_popup != 0)) { p.draw_bluetooth_popup(); redraw = true; }
   if (redraw) p.draw_panel();
+}
+
+void Shell::open_launcher() {
+  auto& p = *impl_;
+  p.close_audio_popup();
+  p.close_network_popup();
+  p.close_bluetooth_popup();
+  p.show_launcher();
+  // Keep the application's input focus; dismissing the menu releases this grab.
+  const auto cookie = xcb_grab_keyboard(p.connection, 0, p.menu, XCB_CURRENT_TIME,
+                                        XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC);
+  auto* reply = xcb_grab_keyboard_reply(p.connection, cookie, nullptr);
+  p.launcher_keyboard_grab = reply && reply->status == XCB_GRAB_STATUS_SUCCESS;
+  std::free(reply);
 }
 
 bool Shell::menu_animation_active() const {
