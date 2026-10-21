@@ -4382,6 +4382,12 @@ bool Shell::handle(xcb_generic_event_t* event) {
   if (!event) return false;
   auto& p = *impl_;
   const auto type = event->response_type & ~0x80;
+  if (type == XCB_MAPPING_NOTIFY) {
+    auto* mapping = reinterpret_cast<xcb_mapping_notify_event_t*>(event);
+    if (p.key_symbols) xcb_refresh_keyboard_mapping(p.key_symbols, mapping);
+    // The WM must also see this event to refresh its passive shortcut grabs.
+    return false;
+  }
   xcb_window_t window{};
   switch (type) {
     case XCB_EXPOSE: window = reinterpret_cast<xcb_expose_event_t*>(event)->window; break;

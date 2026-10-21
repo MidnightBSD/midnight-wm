@@ -47,8 +47,11 @@ def session(args):
 
             def check_launcher_shortcut(target):
                 run("xdotool", "windowfocus", "--sync", target)
-                run("xdotool", "key", "--clearmodifiers", "ctrl+Escape")
+                run("xdotool", "keydown", "ctrl", "keydown", "Escape")
                 until(lambda: len(popups()) == 1, "Ctrl+Escape did not open Midnight")
+                time.sleep(.3)
+                run("xdotool", "keyup", "Escape", "keyup", "ctrl")
+                time.sleep(.2)
                 run("xdotool", "key", "Escape")
                 until(lambda: not popups(), "Escape did not dismiss keyboard launcher")
                 assert int(run("xdotool", "getwindowfocus").strip()) == int(target, 0), "launcher changed input focus"
@@ -72,6 +75,9 @@ def session(args):
                 "org.freedesktop.FileManager1.ShowFolders", repr([folder.as_uri()]), "")
             target = until(lambda: window_for_size(620, 430), "folder missing")
             check_launcher_shortcut(target)
+            # A device/keymap update can move navigation keys after shell startup.
+            run("xmodmap", "-e", "keysym Down = F12", "-e", "keycode 200 = Down")
+            time.sleep(.2)
             # Navigate all three launcher levels without pointer input.
             run("xdotool", "key", "--clearmodifiers", "ctrl+Escape", "Down", "Down", "Down", "Right")
             until(lambda: len(popups()) == 2, "Right did not open Programs")
@@ -258,7 +264,7 @@ def main():
     if args.session:
         session(args)
         return
-    for command in ("Xvfb", "dbus-run-session", "xdotool", "xwininfo", "import", "touch"):
+    for command in ("Xvfb", "dbus-run-session", "xmodmap", "xdotool", "xwininfo", "import", "touch"):
         if not shutil.which(command):
             parser.error(f"required command not found: {command}")
     if not args.binary.is_file():
