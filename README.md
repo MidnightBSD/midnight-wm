@@ -551,6 +551,13 @@ text, PNG/JPEG images, and PDFs. It also selects
 the terminal opened by the panel button. These choices are saved in the user
 XDG MIME association files and the desktop's `xdg-terminals.list` preference;
 they do not require a change to `midnight-wm/config.ini`.
+The **Startup applications** page lists the effective XDG autostart entries,
+including entries disabled for this desktop. Toggle an available entry to start
+or skip it at the next login. Disabling a system entry writes a user override
+under `$XDG_CONFIG_HOME/autostart` and leaves the system file intact. Add a
+named desktop entry command, or remove a user entry after confirmation. These
+changes save immediately and take effect at the next login; the other Settings
+pages continue to use **Apply**.
 
 Run `midnightbsd-system-monitor`, choose **System Monitor** from the Midnight
 launcher below Mport Manager, or open it from Programs.

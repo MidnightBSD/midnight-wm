@@ -10,7 +10,7 @@ pkg_check_modules(DEPS REQUIRED IMPORTED_TARGET
   xcb xcb-icccm xcb-keysyms xcb-xfixes xcb-randr xcb-xinerama xcb-sync xcb-screensaver cairo-xcb pangocairo
   gio-2.0 gio-unix-2.0 gdk-pixbuf-2.0 garcon-1 sqlite3)
 
-add_library(midnight_core src/folder_view.cpp src/content_size.cpp src/store.cpp src/model.cpp src/config.cpp src/session.cpp src/private_state.cpp src/session_bus.cpp src/application_session.cpp src/application_checkpoint.cpp src/session_windows.cpp src/application_restore.cpp src/audio.cpp src/battery.cpp src/application_defaults.cpp src/network.cpp src/bluetooth.cpp src/wallpaper.cpp
+add_library(midnight_core src/folder_view.cpp src/content_size.cpp src/store.cpp src/model.cpp src/config.cpp src/session.cpp src/private_state.cpp src/session_bus.cpp src/application_session.cpp src/application_checkpoint.cpp src/session_windows.cpp src/application_restore.cpp src/audio.cpp src/battery.cpp src/application_defaults.cpp src/startup_applications.cpp src/network.cpp src/bluetooth.cpp src/wallpaper.cpp
   src/session_reaper.cpp
   src/desktop_launcher.cpp src/thumbnail.cpp src/recent_files.cpp
   src/startup_notification.cpp src/browser_launcher.cpp src/terminal_launcher.cpp src/task_icon.cpp)
@@ -182,6 +182,9 @@ add_test(NAME model_test COMMAND model_test)
 add_executable(autostart_test tests/autostart_test.cpp src/autostart.cpp)
 target_link_libraries(autostart_test PRIVATE midnight_core)
 add_test(NAME autostart_test COMMAND autostart_test)
+add_executable(startup_applications_test tests/startup_applications_test.cpp src/autostart.cpp)
+target_link_libraries(startup_applications_test PRIVATE midnight_core)
+add_test(NAME startup_applications_test COMMAND startup_applications_test)
 add_executable(keyring_session_test tests/keyring_session_test.cpp src/keyring_session.cpp)
 target_link_libraries(keyring_session_test PRIVATE midnight_core)
 add_test(NAME keyring_inherited_test COMMAND keyring_session_test inherited)

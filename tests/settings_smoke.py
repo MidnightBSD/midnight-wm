@@ -200,6 +200,18 @@ def session(args):
                 "Application defaults page extends outside the 720p screen"
 
             run("xdotool", "key", "--clearmodifiers", "ctrl+Page_Down")
+            time.sleep(0.2)
+            run("import", "-window", "root", str(output / "startup-applications.png"))
+            run("xdotool", "key", "--clearmodifiers", "alt+n")
+            run("xdotool", "type", "--clearmodifiers", "Smoke startup")
+            run("xdotool", "key", "--clearmodifiers", "alt+c")
+            run("xdotool", "type", "--clearmodifiers", "/usr/bin/true")
+            run("xdotool", "key", "--clearmodifiers", "alt+r")
+            autostart = Path(os.environ["XDG_CONFIG_HOME"]) / "autostart"
+            until(lambda: any("Name=Smoke startup" in path.read_text()
+                              for path in autostart.glob("midnight-*.desktop")),
+                  "Startup applications page did not create an XDG autostart entry")
+            run("xdotool", "key", "--clearmodifiers", "ctrl+Page_Down")
             run("xdotool", "key", "--clearmodifiers", "alt+x")
             run("xdotool", "key", "--clearmodifiers", "alt+a")
             until(lambda: "start_xscreensaver=false" in config.read_text(),
