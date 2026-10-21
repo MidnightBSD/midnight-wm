@@ -193,6 +193,9 @@ struct DesktopServices::Impl {
     for (auto key : {"DISPLAY", "XAUTHORITY", "XDG_CURRENT_DESKTOP", "XDG_RUNTIME_DIR", "XDG_SESSION_COOKIE",
                      "XDG_SESSION_ID", "XDG_SESSION_TYPE", "XDG_SESSION_CLASS", "XDG_SEAT", "XDG_VTNR", "SSH_AUTH_SOCK"})
       if (const auto* value = g_getenv(key); value && *value) g_variant_builder_add(&environment, "{ss}", key, value);
+    // Include an explicitly empty Qt override, too, to clear any stale bus value.
+    if (const auto* value = g_getenv("QT_QPA_PLATFORMTHEME"))
+      g_variant_builder_add(&environment, "{ss}", "QT_QPA_PLATFORMTHEME", value);
     g_dbus_connection_call(bus, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "UpdateActivationEnvironment",
         g_variant_new("(a{ss})", &environment), nullptr, G_DBUS_CALL_FLAGS_NONE, 2000, nullptr, nullptr, nullptr);
     return settings_object && idle_object && idle_alias;

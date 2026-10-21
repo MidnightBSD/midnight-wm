@@ -127,6 +127,9 @@ int main(int argc, char** argv) {
   if (!std::getenv("XDG_CURRENT_DESKTOP") || !*std::getenv("XDG_CURRENT_DESKTOP"))
     g_setenv("XDG_CURRENT_DESKTOP", "MidnightWorkspace", true);
 
+  // Qt follows our GTK theme unless the user explicitly selected a platform theme.
+  // Set this before bus bootstrap so a new bus and restored children inherit it.
+  g_setenv("QT_QPA_PLATFORMTHEME", "gtk3", FALSE);
   midnight::ensure_session_bus(argc, argv);
   // After the bus bootstrap, so the dbus-run-session re-exec is not a reaper.
   // Declared before everything that launches processes so it is destroyed last.
