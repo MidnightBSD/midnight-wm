@@ -226,6 +226,7 @@ int main(int argc, char** argv) {
         (void)notifications.initialize();
         if (!file_manager.initialize()) std::cerr << "FileManager1 D-Bus unavailable\n";
         if (!workspace_file_manager.initialize()) std::cerr << "Workspace file manager D-Bus unavailable\n";
+        xsettings.set_dark_mode(shell.theme().dark_mode);
         (void)xsettings.initialize();
         (void)desktop_services.initialize();
         midnight::Compositor compositor(connection, screen_number);
@@ -287,6 +288,7 @@ int main(int argc, char** argv) {
             compositor.set_enabled(shell.theme().compositing);
             wm.refresh_theme();
             desktop_services.refresh(shell.theme());
+            xsettings.set_dark_mode(shell.theme().dark_mode);
             tray.refresh();
             status_panel.refresh();
             notifications.refresh();

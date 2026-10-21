@@ -21,9 +21,11 @@ public:
   [[nodiscard]] bool initialize();
   [[nodiscard]] bool handle(const xcb_generic_event_t* event);
   void tick();
+  void set_dark_mode(bool enabled);
 
 private:
   struct Values {
+    std::string theme_name{"Adwaita"};
     std::string icon_theme{"hicolor"};
     std::string font_name{"Sans 10"};
     std::int32_t dpi{96 * 1024};
@@ -46,6 +48,7 @@ private:
   xcb_atom_t manager_atom_{};
   std::uint32_t serial_{};
   Values values_;
+  bool dark_mode_{};
   std::chrono::steady_clock::time_point next_check_{};
 };
 

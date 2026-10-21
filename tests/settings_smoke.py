@@ -304,7 +304,7 @@ def apply_ui(window):
     run("xdotool", "key", "--clearmodifiers", "alt+a")
 
 
-def main():
+def main(session_script=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, default=Path("build/midnight-wm"))
     parser.add_argument("--output", type=Path)
@@ -356,7 +356,7 @@ def main():
                                    XDG_CONFIG_HOME=str(root / "config"), XDG_CONFIG_DIRS=str(root / "config-system"),
                                    XDG_DATA_HOME=str(root / "data"), XDG_RUNTIME_DIR=str(root / "runtime"),
                                    PATH=str(args.binary.parent) + os.pathsep + os.environ["PATH"])
-                process = subprocess.Popen(["dbus-run-session", "--", sys.executable, str(Path(__file__).resolve()),
+                process = subprocess.Popen(["dbus-run-session", "--", sys.executable, str(Path(session_script or __file__).resolve()),
                                             "--session", "--binary", str(args.binary), "--output", str(args.output)],
                                            env=environment, start_new_session=True)
                 try:
