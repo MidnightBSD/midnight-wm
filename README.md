@@ -112,7 +112,7 @@ Launcher icons follow the selected freedesktop icon theme, including inherited
 themes and the `hicolor` fallback.
 Launching an application that supports startup notification shows “Starting…”
 until its window appears or the launch times out. The XSETTINGS owner publishes
-the GTK icon theme, font, DPI, and double-click values to X11 clients, while
+the GTK theme, icon theme, font, DPI, and double-click values to X11 clients, while
 leaving an existing settings owner in control.
 Click the single speaker icon in the top panel to open the audio popup directly
 below it; click again, click outside, or press Escape to close it. Drag the volume
@@ -577,10 +577,19 @@ To edit preferences by hand, copy `share/midnight-wm/config.ini` to
 workspace appearance, or desktop shortcuts. In its `[Workspace]` section,
 `dark_mode` defaults to `false` and selects the dark shell preset when set to
 `true`. It applies to the shell, window frames, notifications, and D-Bus menus.
+It also publishes the portal dark preference and selects `Adwaita-dark` for
+GTK X11 apps through XSETTINGS. Disabling it restores `gtk-theme-name` from
+`gtk-3.0/settings.ini`, then the GNOME `gtk-theme` setting, or `Adwaita` as a
+fallback. No GTK configuration files are modified. An existing XSETTINGS
+manager remains in control, and applications can override system appearance.
+
+Run `python3 tests/gtk_theme_smoke.py` (requires PyGObject for GTK 3) to
+check initial dark appearance, live GTK theme switching, and restoration of
+user theme preferences in an isolated Xvfb session.
+
 `ui_font` and `title_font` accept Pango family/style
 descriptions, optionally followed by a point size from 6 to 32. Omitting the
-size keeps each UI element's default size. The dark preset does not change
-controls drawn by application toolkits. `desktop_color` remains a `#RRGGBB`
+size keeps each UI element's default size. `desktop_color` remains a `#RRGGBB`
 desktop background in either mode; `panel_color` optionally overrides the
 panel color, and `accent_color` sets the accent color. The shared `ui_scale`
 override is also configured here. By default the desktop shows

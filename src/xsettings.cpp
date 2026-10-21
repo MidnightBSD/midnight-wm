@@ -100,6 +100,7 @@ XSettings::Values XSettings::read_values() const {
   const auto path = std::filesystem::path(g_get_user_config_dir()) / "gtk-3.0" / "settings.ini";
   auto* file = g_key_file_new();
   if (g_key_file_load_from_file(file, path.c_str(), G_KEY_FILE_NONE, nullptr)) {
+    result.theme_name = keyfile_string(file, "gtk-theme-name");
     result.icon_theme = keyfile_string(file, "gtk-icon-theme-name");
     result.font_name = keyfile_string(file, "gtk-font-name");
     result.double_click_time = keyfile_positive_integer(file, "gtk-double-click-time", 400);
@@ -107,10 +108,17 @@ XSettings::Values XSettings::read_values() const {
     // GTK stores gtk-xft-dpi in the same 1024ths-of-a-point unit as Xft/DPI.
     result.dpi = keyfile_positive_integer(file, "gtk-xft-dpi", 96 * 1024);
   } else {
+    result.theme_name.clear();
     result.icon_theme.clear();
     result.font_name.clear();
   }
   g_key_file_unref(file);
+  if (result.theme_name.empty())
+    result.theme_name = gsettings_string("org.gnome.desktop.interface", "gtk-theme");
+  if (result.theme_name.empty()) result.theme_name = "Adwaita";
+  // Adwaita ships with GTK 3. Do not guess dark variants of custom themes.
+  // The configured theme remains untouched and is restored in light mode.
+  if (dark_mode_) result.theme_name = "Adwaita-dark";
   if (result.icon_theme.empty())
     result.icon_theme = gsettings_string("org.gnome.desktop.interface", "icon-theme");
   if (result.font_name.empty())
@@ -128,7 +136,8 @@ void XSettings::publish(const Values& values) {
   bytes.push_back(std::endian::native == std::endian::little ? 0 : 1);
   bytes.insert(bytes.end(), 3, 0);
   append_native(bytes, current_serial);
-  append_native(bytes, std::uint32_t{5});
+  append_native(bytes, std::uint32_t{6});
+  append_string(bytes, "Net/ThemeName", values.theme_name, current_serial);
   append_string(bytes, "Net/IconThemeName", values.icon_theme, current_serial);
   append_string(bytes, "Gtk/FontName", values.font_name, current_serial);
   append_integer(bytes, "Xft/DPI", values.dpi, current_serial);
@@ -202,6 +211,12 @@ bool XSettings::handle(const xcb_generic_event_t* event) {
   if (clear->owner != owner_ || clear->selection != selection_) return false;
   release();
   return true;
+}
+
+void XSettings::set_dark_mode(bool enabled) {
+  if (dark_mode_ == enabled) return;
+  dark_mode_ = enabled;
+  if (owner_) publish(read_values());
 }
 
 void XSettings::tick() {
