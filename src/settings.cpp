@@ -5,6 +5,7 @@
 #include "session.hpp"
 #include "application_session.hpp"
 #include "application_defaults.hpp"
+#include "startup_applications.hpp"
 
 #include <gtk/gtk.h>
 #include <glib/gstdio.h>
@@ -95,6 +96,9 @@ class Settings {
     auto* defaults = page(notebook, "Application defaults");
     row_ = 0;
     application_defaults(defaults);
+    auto* startup = page(notebook, "Startup applications");
+    row_ = 0;
+    startup_applications_page(startup);
     auto* session = page(notebook, "Session");
     row_ = 0;
     checkbox(session, "_Restore folders at login", "Session", "restore_folders", false);
@@ -170,6 +174,119 @@ class Settings {
     bool changed{};
   };
   std::vector<std::unique_ptr<DefaultBinding>> default_bindings_;
+  GtkWidget* startup_list_{};
+  GtkWidget* startup_name_{};
+  GtkWidget* startup_command_{};
+
+  static std::vector<std::filesystem::path> startup_roots() {
+    std::vector<std::filesystem::path> roots{g_get_user_config_dir()};
+    for (auto dirs = g_get_system_config_dirs(); dirs && *dirs; ++dirs) roots.emplace_back(*dirs);
+    return roots;
+  }
+
+  void refresh_startup_applications() {
+    auto* children = gtk_container_get_children(GTK_CONTAINER(startup_list_));
+    for (auto* item = children; item; item = item->next) gtk_widget_destroy(GTK_WIDGET(item->data));
+    g_list_free(children);
+    const auto applications = midnight::startup_applications(startup_roots());
+    if (applications.empty()) {
+      auto* empty = gtk_label_new("No startup applications were found.");
+      gtk_label_set_xalign(GTK_LABEL(empty), 0);
+      gtk_box_pack_start(GTK_BOX(startup_list_), empty, FALSE, FALSE, 0);
+    }
+    for (const auto& application : applications) {
+      auto* row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+      auto* check = gtk_check_button_new();
+      gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(check), application.enabled);
+      gtk_widget_set_sensitive(check, application.available);
+      gtk_widget_set_tooltip_text(check, application.available ?
+          "Start this application at the next login" : "This entry does not apply to Midnight Workspace");
+      auto* details = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+      auto* name = gtk_label_new(application.name.c_str());
+      gtk_label_set_xalign(GTK_LABEL(name), 0);
+      auto* command = gtk_label_new((application.command + "  ·  " +
+          (application.user_entry ? "User" : "System")).c_str());
+      gtk_label_set_xalign(GTK_LABEL(command), 0);
+      gtk_label_set_ellipsize(GTK_LABEL(command), PANGO_ELLIPSIZE_END);
+      gtk_widget_set_tooltip_text(command, application.path.c_str());
+      gtk_box_pack_start(GTK_BOX(details), name, FALSE, FALSE, 0);
+      gtk_box_pack_start(GTK_BOX(details), command, FALSE, FALSE, 0);
+      gtk_box_pack_start(GTK_BOX(row), check, FALSE, FALSE, 0);
+      gtk_box_pack_start(GTK_BOX(row), details, TRUE, TRUE, 0);
+      auto* copy = new midnight::StartupApplication(application);
+      g_object_set_data_full(G_OBJECT(check), "startup-application", copy,
+          +[](gpointer data) { delete static_cast<midnight::StartupApplication*>(data); });
+      g_signal_connect(check, "toggled", G_CALLBACK(+[](GtkToggleButton* toggle, gpointer data) {
+        auto* self = static_cast<Settings*>(data);
+        const auto* selected = static_cast<midnight::StartupApplication*>(
+            g_object_get_data(G_OBJECT(toggle), "startup-application"));
+        const auto result = midnight::set_startup_application_enabled(*selected,
+            gtk_toggle_button_get_active(toggle), g_get_user_config_dir());
+        if (!result) self->fail(result.error());
+        else gtk_label_set_text(GTK_LABEL(self->status_), "Startup change saved; it takes effect at the next login.");
+        self->refresh_startup_applications();
+      }), this);
+      if (application.user_entry) {
+        auto* remove = gtk_button_new_with_label("Remove…");
+        auto* remove_copy = new midnight::StartupApplication(application);
+        g_object_set_data_full(G_OBJECT(remove), "startup-application", remove_copy,
+            +[](gpointer data) { delete static_cast<midnight::StartupApplication*>(data); });
+        g_signal_connect(remove, "clicked", G_CALLBACK(+[](GtkButton* button, gpointer data) {
+          auto* self = static_cast<Settings*>(data);
+          const auto* selected = static_cast<midnight::StartupApplication*>(
+              g_object_get_data(G_OBJECT(button), "startup-application"));
+          auto* dialog = gtk_message_dialog_new(GTK_WINDOW(self->window_), GTK_DIALOG_MODAL,
+              GTK_MESSAGE_QUESTION, GTK_BUTTONS_NONE,
+              "Remove the user startup entry for %s?", selected->name.c_str());
+          gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(dialog),
+              "This deletes %s. If a system entry has the same filename, it will become active again.",
+              selected->path.c_str());
+          gtk_dialog_add_buttons(GTK_DIALOG(dialog), "_Cancel", GTK_RESPONSE_CANCEL,
+              "_Remove", GTK_RESPONSE_ACCEPT, nullptr);
+          const bool confirmed = gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT;
+          gtk_widget_destroy(dialog);
+          if (!confirmed) return;
+          const auto result = midnight::remove_startup_application(*selected, g_get_user_config_dir());
+          if (!result) self->fail(result.error());
+          else gtk_label_set_text(GTK_LABEL(self->status_), "Startup entry removed; the change takes effect at the next login.");
+          self->refresh_startup_applications();
+        }), this);
+        gtk_box_pack_start(GTK_BOX(row), remove, FALSE, FALSE, 0);
+      }
+      gtk_box_pack_start(GTK_BOX(startup_list_), row, FALSE, FALSE, 0);
+    }
+    gtk_widget_show_all(startup_list_);
+  }
+
+  void startup_applications_page(GtkWidget* grid) {
+    auto* help = gtk_label_new("Choose what starts at the next login. Changes on this page save immediately. System entries are disabled through a user override.");
+    gtk_label_set_line_wrap(GTK_LABEL(help), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(help), 0);
+    gtk_grid_attach(GTK_GRID(grid), help, 0, row_++, 2, 1);
+    startup_list_ = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    gtk_widget_set_hexpand(startup_list_, TRUE);
+    gtk_grid_attach(GTK_GRID(grid), startup_list_, 0, row_++, 2, 1);
+    startup_name_ = gtk_entry_new();
+    gtk_entry_set_placeholder_text(GTK_ENTRY(startup_name_), "Application name");
+    add(grid, "_Name", startup_name_);
+    startup_command_ = gtk_entry_new();
+    gtk_entry_set_placeholder_text(GTK_ENTRY(startup_command_), "Desktop entry command, e.g. /usr/local/bin/example");
+    add(grid, "_Command", startup_command_);
+    auto* add_button = gtk_button_new_with_mnemonic("C_reate startup application");
+    gtk_grid_attach(GTK_GRID(grid), add_button, 0, row_++, 2, 1);
+    g_signal_connect(add_button, "clicked", G_CALLBACK(+[](GtkButton*, gpointer data) {
+      auto* self = static_cast<Settings*>(data);
+      const auto result = midnight::add_startup_application(
+          gtk_entry_get_text(GTK_ENTRY(self->startup_name_)),
+          gtk_entry_get_text(GTK_ENTRY(self->startup_command_)), g_get_user_config_dir());
+      if (!result) { self->fail(result.error()); return; }
+      gtk_entry_set_text(GTK_ENTRY(self->startup_name_), "");
+      gtk_entry_set_text(GTK_ENTRY(self->startup_command_), "");
+      gtk_label_set_text(GTK_LABEL(self->status_), "Startup application added; it starts at the next login.");
+      self->refresh_startup_applications();
+    }), this);
+    refresh_startup_applications();
+  }
 
   bool read_file(std::string& text, bool& exists, std::string& message) const {
     gchar* contents = nullptr;
