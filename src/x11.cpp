@@ -86,6 +86,7 @@ std::vector<DisplayMonitor> fullscreen_layout(xcb_connection_t* connection, xcb_
 
 X11WindowManager::X11WindowManager(xcb_connection_t* connection, xcb_screen_t* screen, Shell& shell)
   : connection_(connection), screen_(screen), shell_(shell),
+    shortcuts_(shell.theme().shortcuts),
     screen_width_(screen->width_in_pixels), screen_height_(screen->height_in_pixels),
     monitors_(query_display_monitors(connection, screen)),
     fullscreen_layout_(fullscreen_layout(connection, screen)) {
@@ -1809,13 +1810,7 @@ void X11WindowManager::install_key_grabs() {
                      XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC);
     std::free(codes);
   };
-  grab(XK_Left, XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1);
-  grab(XK_Right, XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1);
-  grab(XK_Up, XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1);
-  grab(XK_Down, XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1);
-  grab(XK_d, XCB_MOD_MASK_4);
-  grab(XK_Tab, XCB_MOD_MASK_1);
-  grab(XK_F4, XCB_MOD_MASK_1);
+  for (const auto& chord : shortcuts_) if (chord) grab(chord->keysym, chord->modifiers);
   xcb_key_symbols_free(symbols);
 }
 
@@ -1837,6 +1832,10 @@ void X11WindowManager::update_screen_size(std::uint16_t width, std::uint16_t hei
 }
 
 void X11WindowManager::refresh_theme() {
+  if (shortcuts_ != shell_.theme().shortcuts) {
+    shortcuts_ = shell_.theme().shortcuts;
+    install_key_grabs();
+  }
   update_geometry_properties();
   for (auto& [client, frame] : frames_) {
     const std::uint32_t extents[]{static_cast<std::uint32_t>(decorated(frame) ? border_pixels() : 0),
@@ -2180,19 +2179,23 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
       send_configure_notify(f);
       break;
     }
-    if (key == XK_d && (e->state & XCB_MOD_MASK_4)) {
-      set_showing_desktop(!showing_desktop_); break;
-    }
-    if ((e->state & (XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1)) ==
-        (XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1) &&
-        (key == XK_Left || key == XK_Right || key == XK_Up || key == XK_Down)) {
-      set_current_desktop(desktop_layout_.neighbor(current_desktop_, desktop_count_,
-                          key == XK_Left || key == XK_Right, key == XK_Right || key == XK_Down));
+    const auto action = shortcut_action(shortcuts_, key, e->state);
+    if (!action) break;
+    switch (*action) {
+    case ShortcutAction::workspace_left:
+    case ShortcutAction::workspace_right:
+    case ShortcutAction::workspace_up:
+    case ShortcutAction::workspace_down: {
+      const bool horizontal = *action == ShortcutAction::workspace_left || *action == ShortcutAction::workspace_right;
+      const bool forward = *action == ShortcutAction::workspace_right || *action == ShortcutAction::workspace_down;
+      set_current_desktop(desktop_layout_.neighbor(current_desktop_, desktop_count_, horizontal, forward));
       break;
     }
-    if (!(e->state & XCB_MOD_MASK_1)) break;
-    if (key == XK_Tab) cycle_focus(true);
-    else if (key == XK_F4 && active_) close(active_);
+    case ShortcutAction::show_desktop: set_showing_desktop(!showing_desktop_); break;
+    case ShortcutAction::switch_window: cycle_focus(true); break;
+    case ShortcutAction::close_window: if (active_) close(active_); break;
+    case ShortcutAction::count: break;
+    }
     break;
   }
   case XCB_CLIENT_MESSAGE: {

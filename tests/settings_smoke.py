@@ -212,6 +212,27 @@ def session(args):
                               for path in autostart.glob("midnight-*.desktop")),
                   "Startup applications page did not create an XDG autostart entry")
             run("xdotool", "key", "--clearmodifiers", "ctrl+Page_Down")
+            time.sleep(0.2)
+            run("import", "-window", "root", str(output / "keyboard-shortcuts.png"))
+            shortcut_x, shortcut_y = window_position(settings)
+            run("xdotool", "mousemove", str(shortcut_x + 300), str(shortcut_y + 107), "click", "1")
+            run("xdotool", "key", "--clearmodifiers", "ctrl+a")
+            run("xdotool", "type", "--clearmodifiers", "Alt+Tab")
+            run("xdotool", "key", "--clearmodifiers", "alt+a")
+            time.sleep(0.2)
+            assert "workspace_left" not in config.read_text(), "conflicting shortcut was saved"
+            settings_width, settings_height = geometry(settings)
+            for _ in range(2):
+                run("xdotool", "mousemove", str(shortcut_x + settings_width // 2),
+                    str(shortcut_y + settings_height // 2 + 20), "click", "1")
+                time.sleep(0.2)
+            run("xdotool", "mousemove", str(shortcut_x + 300), str(shortcut_y + 107), "click", "1")
+            run("xdotool", "key", "--clearmodifiers", "ctrl+a")
+            run("xdotool", "type", "--clearmodifiers", "Super+F9")
+            run("xdotool", "key", "--clearmodifiers", "alt+a")
+            until(lambda: "workspace_left=Super+F9" in config.read_text(),
+                  "Settings did not save a valid shortcut")
+            run("xdotool", "key", "--clearmodifiers", "ctrl+Page_Down")
             run("xdotool", "key", "--clearmodifiers", "alt+x")
             run("xdotool", "key", "--clearmodifiers", "alt+a")
             until(lambda: "start_xscreensaver=false" in config.read_text(),

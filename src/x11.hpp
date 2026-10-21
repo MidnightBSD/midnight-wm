@@ -6,6 +6,7 @@
 #include "desktop_layout.hpp"
 #include "task_icon.hpp"
 #include "session_windows.hpp"
+#include "shortcuts.hpp"
 
 #include <cstdint>
 #include <chrono>
@@ -176,6 +177,7 @@ private:
   xcb_connection_t* connection_{};
   xcb_screen_t* screen_{};
   Shell& shell_;
+  Shortcuts shortcuts_{};
   StartupNotification* startup_{};
   std::map<xcb_window_t, Frame> frames_;
   std::vector<xcb_window_t> client_order_;

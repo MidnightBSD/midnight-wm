@@ -1,5 +1,7 @@
 #pragma once
 
+#include "shortcuts.hpp"
+
 #include <array>
 #include <string>
 #include <string_view>
@@ -11,6 +13,7 @@ namespace midnight {
 inline constexpr const char* default_desktop_image = "mnbsd_bg_purple.png";
 
 struct ThemeConfig {
+  Shortcuts shortcuts{default_shortcuts()};
   std::string panel_label{"Midnight ▾"};
   std::string clock_format{"%a %H:%M"};
   bool dark_mode{};
