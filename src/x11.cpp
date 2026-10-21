@@ -1814,17 +1814,23 @@ void X11WindowManager::install_key_grabs() {
   xcb_key_symbols_free(symbols);
 }
 
-void X11WindowManager::cycle_focus(bool expand_shaded) {
+void X11WindowManager::cycle_focus(bool expand_shaded, bool backward) {
   if (frames_.empty()) return;
-  auto it = frames_.upper_bound(active_);
-  if (it == frames_.end()) it = frames_.begin();
-  auto first = it;
-  while (!it->second.visible) {
-    if (++it == frames_.end()) it = frames_.begin();
-    if (it == first) return;
+  auto it = frames_.find(active_);
+  for (std::size_t remaining = frames_.size(); remaining; --remaining) {
+    if (backward) {
+      if (it == frames_.begin() || it == frames_.end()) it = frames_.end();
+      --it;
+    } else {
+      if (it == frames_.end() || ++it == frames_.end()) it = frames_.begin();
+    }
+    const auto& frame = it->second;
+    if (!frame.visible || frame.role == WindowRole::splash ||
+        (!frame.accepts_input && !frame.takes_focus)) continue;
+    if (expand_shaded) set_shaded(it->first, false);
+    focus(it->first);
+    return;
   }
-  if (expand_shaded) set_shaded(it->first, false);
-  focus(it->first);
 }
 
 void X11WindowManager::update_screen_size(std::uint16_t width, std::uint16_t height) {
@@ -2193,6 +2199,17 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
     }
     case ShortcutAction::show_desktop: set_showing_desktop(!showing_desktop_); break;
     case ShortcutAction::switch_window: cycle_focus(true); break;
+    case ShortcutAction::switch_window_backward: cycle_focus(true, true); break;
+    case ShortcutAction::move_window:
+    case ShortcutAction::resize_window:
+      if (auto frame = frames_.find(active_); frame != frames_.end()) {
+        const bool move = *action == ShortcutAction::move_window;
+        begin_drag(frame->second, move ? DragMode::keyboard_move : DragMode::keyboard_resize,
+                   0, 0, move ? 10 : 9, 0);
+      }
+      break;
+    case ShortcutAction::minimize_window: if (active_) minimize(active_); break;
+    case ShortcutAction::maximize_window: if (active_) toggle_maximize(active_); break;
     case ShortcutAction::close_window: if (active_) close(active_); break;
     case ShortcutAction::count: break;
     }

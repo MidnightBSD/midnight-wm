@@ -166,7 +166,7 @@ private:
   void update_title(Frame& frame);
   void install_key_grabs();
   bool install_root_cursor();
-  void cycle_focus(bool expand_shaded = false);
+  void cycle_focus(bool expand_shaded = false, bool backward = false);
   [[nodiscard]] int border_pixels() const;
   [[nodiscard]] int title_height_pixels() const;
   xcb_window_t client_for(xcb_window_t window) const;

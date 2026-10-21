@@ -15,10 +15,13 @@ namespace midnight {
 namespace {
 constexpr std::array<const char*, static_cast<std::size_t>(ShortcutAction::count)> keys{
     "workspace_left", "workspace_right", "workspace_up", "workspace_down",
-    "show_desktop", "switch_window", "close_window"};
+    "show_desktop", "switch_window", "close_window",
+    "move_window", "resize_window", "minimize_window", "maximize_window", "switch_window_backward"};
 constexpr std::array<const char*, keys.size()> labels{
     "Workspace left", "Workspace right", "Workspace up", "Workspace down",
-    "Show desktop", "Switch window", "Close active window"};
+    "Show desktop", "Switch window", "Close active window",
+    "Move active window", "Resize active window", "Minimize active window",
+    "Maximize/restore active window", "Switch window backward"};
 constexpr std::uint16_t primary_modifiers = XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1 | XCB_MOD_MASK_4;
 constexpr std::uint16_t supported_modifiers = primary_modifiers | XCB_MOD_MASK_SHIFT;
 
@@ -94,7 +97,12 @@ Shortcuts default_shortcuts() {
            KeyChord{XK_Down, XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1},
            KeyChord{XK_d, XCB_MOD_MASK_4},
            KeyChord{XK_Tab, XCB_MOD_MASK_1},
-           KeyChord{XK_F4, XCB_MOD_MASK_1}}};
+           KeyChord{XK_F4, XCB_MOD_MASK_1},
+           KeyChord{XK_F7, XCB_MOD_MASK_1},
+           KeyChord{XK_F8, XCB_MOD_MASK_1},
+           KeyChord{XK_F9, XCB_MOD_MASK_1},
+           KeyChord{XK_F10, XCB_MOD_MASK_1},
+           KeyChord{XK_Tab, XCB_MOD_MASK_1 | XCB_MOD_MASK_SHIFT}}};
 }
 
 const char* shortcut_key(ShortcutAction action) { return keys[static_cast<std::size_t>(action)]; }

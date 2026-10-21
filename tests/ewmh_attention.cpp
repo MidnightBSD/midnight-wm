@@ -347,7 +347,7 @@ int main(int argc, char** argv) {
     multiple_monitor_requests(); xcb_disconnect(connection); return 0;
   }
   if (argc > 1 && std::string(argv[1]) == "--visual") {
-    for (const auto* title : {"Attention example", "Foreground example"}) {
+    for (const auto* title : {"Attention example", "Foreground example", "Third example"}) {
       auto window = create(false);
       if (std::string(title) == "Attention example")
         set(window, "_NET_WM_STATE", XCB_ATOM_ATOM, atom("_NET_WM_STATE_SHADED"));

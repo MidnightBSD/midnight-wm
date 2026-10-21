@@ -13,7 +13,7 @@ import sys
 import tempfile
 import time
 sys.dont_write_bytecode = True
-from settings_smoke import run, until, window_for_size, visible_window
+from settings_smoke import run, until, window_for_size, visible_window, geometry, window_position
 
 def session(args):
     flags = subprocess.check_output(["pkg-config", "--cflags", "--libs", "xcb", "xcb-xinerama"], text=True).split()
@@ -54,6 +54,66 @@ def session(args):
                 until(lambda: "_NET_WM_STATE_SHADED" not in run("xprop", "-id", first_window, "_NET_WM_STATE"),
                       "task click did not unshade window")
                 run("import", "-window", "root", str(args.output / "attention-cleared.png"))
+                third_window = until(lambda: visible_window("Third example"), "third example missing")
+                # Exercise passive shortcut grabs using real keyboard events.
+                def key(*keys):
+                    run("xdotool", "key", "--clearmodifiers", *keys)
+                def active(window):
+                    return run("xdotool", "getactivewindow").strip() == window
+                key("alt+shift+Tab")
+                until(lambda: active(third_window), "reverse shortcut did not select previous window")
+                key("alt+Tab")
+                until(lambda: active(first_window), "forward shortcut did not reverse the cycle")
+                original = window_position(first_window)
+                size = geometry(first_window)
+                key("alt+F7", "Right", "ctrl+Down", "Return")
+                until(lambda: window_position(first_window) == (original[0] + 10, original[1] + 1),
+                      "keyboard move did not apply coarse/fine steps")
+                moved = window_position(first_window)
+                key("alt+F7", "Left", "Escape")
+                until(lambda: window_position(first_window) == moved, "move cancellation lost geometry")
+                key("alt+F8", "Right", "ctrl+Down", "Return")
+                until(lambda: geometry(first_window) == (size[0] + 10, size[1] + 1),
+                      "keyboard resize did not apply coarse/fine steps")
+                resized = geometry(first_window)
+                key("alt+F8", "Down", "Escape")
+                until(lambda: geometry(first_window) == resized, "resize cancellation lost geometry")
+                key("alt+F10")
+                until(lambda: "MAXIMIZED_VERT" in run("xprop", "-id", first_window, "_NET_WM_STATE"),
+                      "maximize shortcut failed")
+                maximized = (window_position(first_window), geometry(first_window))
+                key("alt+F7", "Right", "Return", "alt+F8", "Down", "Return")
+                assert (window_position(first_window), geometry(first_window)) == maximized, "maximized window moved/resized"
+                key("alt+F10")
+                until(lambda: (window_position(first_window), geometry(first_window)) == (moved, resized),
+                      "maximize toggle did not restore geometry")
+                key("alt+F9")
+                until(lambda: "HIDDEN" in run("xprop", "-id", first_window, "_NET_WM_STATE"),
+                      "minimize shortcut failed")
+                key("alt+shift+Tab")
+                until(lambda: active(third_window), "switch did not skip minimized window")
+                # A config reload changes passive grabs, including None disabling.
+                from settings_smoke import atomic_write
+                config = Path(os.environ["XDG_CONFIG_HOME"]) / "midnight-wm/config.ini"
+                atomic_write(config, "[Workspace]\nui_scale=1.25\n[Shortcuts]\nmove_window=Alt+F6\nresize_window=None\n")
+                until(lambda: window_for_size(1280, 38), "shortcut config did not reload")
+                before = window_position(third_window)
+                key("alt+F7", "Right", "Return")
+                assert window_position(third_window) == before, "old move binding remained grabbed"
+                key("alt+F6", "Right", "Return")
+                until(lambda: window_position(third_window) == (before[0] + 10, before[1]),
+                      "new move binding did not apply live")
+                before_size = geometry(third_window)
+                key("alt+F8", "Down", "Return")
+                assert geometry(third_window) == before_size, "disabled resize still operated"
+                # Destroy a client during a keyboard operation; grabs must be released.
+                key("alt+F6")
+                app.terminate()
+                app.wait(timeout=5)
+                key("ctrl+alt+Right")
+                until(lambda: "= 1" in run("xprop", "-root", "_NET_CURRENT_DESKTOP"),
+                      "destroyed client left keyboard grabbed")
+                print("Window operation shortcuts passed.")
                 print("Task attention marker and explicit task activation passed.")
             finally:
                 for app in apps:
