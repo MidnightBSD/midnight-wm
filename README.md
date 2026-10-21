@@ -149,6 +149,10 @@ permission are checked again before launching.
 **Workspaces** in the Midnight menu switches between four desktops. Ctrl+Alt+Left
 and Ctrl+Alt+Right also switch workspaces. **Show desktop** or Super+D hides
 application and folder windows temporarily; activating a task restores them.
+Settings → **Keyboard shortcuts** edits the four workspace directions, Show
+Desktop, task switching, and closing the active window. Enter combinations such
+as `Ctrl+Alt+Left`, or `None` to disable an action. Settings rejects invalid or
+duplicate combinations before saving, and valid changes take effect live.
 Applications can use standard EWMH workspace and Show Desktop requests. Clients
 supporting `_NET_WM_PING` are marked unresponsive after a timeout, and clients
 supporting `_NET_WM_SYNC_REQUEST` can acknowledge interactive resize updates.

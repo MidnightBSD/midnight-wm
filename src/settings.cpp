@@ -99,6 +99,9 @@ class Settings {
     auto* startup = page(notebook, "Startup applications");
     row_ = 0;
     startup_applications_page(startup);
+    auto* shortcuts = page(notebook, "Keyboard shortcuts");
+    row_ = 0;
+    shortcut_page(shortcuts);
     auto* session = page(notebook, "Session");
     row_ = 0;
     checkbox(session, "_Restore folders at login", "Session", "restore_folders", false);
@@ -177,6 +180,58 @@ class Settings {
   GtkWidget* startup_list_{};
   GtkWidget* startup_name_{};
   GtkWidget* startup_command_{};
+  std::array<GtkWidget*, static_cast<std::size_t>(midnight::ShortcutAction::count)> shortcut_entries_{};
+  std::array<bool, static_cast<std::size_t>(midnight::ShortcutAction::count)> shortcut_changed_{};
+
+  void shortcut_page(GtkWidget* grid) {
+    auto* help = gtk_label_new("Type a shortcut such as Ctrl+Alt+Left or Super+D. Use None to disable it. Changes apply to the running desktop after Apply.");
+    gtk_label_set_line_wrap(GTK_LABEL(help), TRUE);
+    gtk_label_set_xalign(GTK_LABEL(help), 0);
+    gtk_grid_attach(GTK_GRID(grid), help, 0, row_++, 2, 1);
+    const auto defaults = midnight::default_shortcuts();
+    for (std::size_t i = 0; i < shortcut_entries_.size(); ++i) {
+      const auto action = static_cast<midnight::ShortcutAction>(i);
+      auto* widget = gtk_entry_new();
+      char* configured = g_key_file_get_string(file_.get(), "Shortcuts", midnight::shortcut_key(action), nullptr);
+      const auto value = configured ? std::string(configured) : midnight::format_shortcut(defaults[i]);
+      g_free(configured);
+      gtk_entry_set_text(GTK_ENTRY(widget), value.c_str());
+      gtk_widget_set_tooltip_text(widget, "Ctrl, Alt, Super and Shift modifiers; letters, digits, F1-F35, arrows, Tab, and common navigation keys. None disables.");
+      add(grid, midnight::shortcut_label(action), widget);
+      shortcut_entries_[i] = widget;
+      g_signal_connect(widget, "changed", G_CALLBACK(+[](GtkEditable* editable, gpointer data) {
+        auto* self = static_cast<Settings*>(data);
+        for (std::size_t index = 0; index < self->shortcut_entries_.size(); ++index)
+          if (self->shortcut_entries_[index] == GTK_WIDGET(editable)) self->shortcut_changed_[index] = true;
+      }), this);
+    }
+    auto* reset = gtk_button_new_with_label("Reset shortcuts to defaults");
+    gtk_grid_attach(GTK_GRID(grid), reset, 0, row_++, 2, 1);
+    g_signal_connect(reset, "clicked", G_CALLBACK(+[](GtkButton*, gpointer data) {
+      auto* self = static_cast<Settings*>(data);
+      const auto defaults = midnight::default_shortcuts();
+      for (std::size_t i = 0; i < self->shortcut_entries_.size(); ++i) {
+        gtk_entry_set_text(GTK_ENTRY(self->shortcut_entries_[i]), midnight::format_shortcut(defaults[i]).c_str());
+        self->shortcut_changed_[i] = true;
+      }
+    }), this);
+  }
+
+  std::expected<midnight::Shortcuts, std::string> edited_shortcuts() const {
+    midnight::Shortcuts shortcuts{};
+    for (std::size_t i = 0; i < shortcuts.size(); ++i) {
+      const auto action = static_cast<midnight::ShortcutAction>(i);
+      const auto parsed = midnight::parse_shortcut(gtk_entry_get_text(GTK_ENTRY(shortcut_entries_[i])));
+      if (!parsed) return std::unexpected(std::string(midnight::shortcut_label(action)) + ": " + parsed.error());
+      shortcuts[i] = *parsed;
+    }
+    for (std::size_t i = 0; i < shortcuts.size(); ++i)
+      for (std::size_t j = i + 1; j < shortcuts.size(); ++j)
+        if (shortcuts[i] && shortcuts[i] == shortcuts[j])
+          return std::unexpected(std::string(midnight::shortcut_label(static_cast<midnight::ShortcutAction>(i))) +
+              " conflicts with " + midnight::shortcut_label(static_cast<midnight::ShortcutAction>(j)));
+    return shortcuts;
+  }
 
   static std::vector<std::filesystem::path> startup_roots() {
     std::vector<std::filesystem::path> roots{g_get_user_config_dir()};
@@ -558,13 +613,21 @@ class Settings {
   }
   void apply() {
     if (!valid_) return;
-    const bool ini_changed = std::ranges::any_of(bindings_, [](const auto& binding) { return binding->changed; });
+    const bool shortcuts_changed = std::ranges::any_of(shortcut_changed_, [](bool changed) { return changed; });
+    const bool ini_changed = shortcuts_changed ||
+        std::ranges::any_of(bindings_, [](const auto& binding) { return binding->changed; });
     const bool defaults_changed = std::ranges::any_of(default_bindings_, [](const auto& binding) { return binding->changed; });
     if (!ini_changed && !defaults_changed) {
       gtk_label_set_text(GTK_LABEL(status_), "No changes to apply.");
       return;
     }
     if (ini_changed) {
+      std::optional<midnight::Shortcuts> shortcuts;
+      if (shortcuts_changed) {
+        const auto edited = edited_shortcuts();
+        if (!edited) { fail(edited.error()); return; }
+        shortcuts = *edited;
+      }
       std::string current, error;
       bool exists = false;
       if (!read_file(current, exists, error)) { fail(error); return; }
@@ -576,6 +639,17 @@ class Settings {
       if (existed_) g_key_file_load_from_data(updated.get(), original_.data(), original_.size(),
           static_cast<GKeyFileFlags>(G_KEY_FILE_KEEP_COMMENTS | G_KEY_FILE_KEEP_TRANSLATIONS), nullptr);
       for (auto& binding : bindings_) if (binding->changed) binding->save(updated.get());
+      if (shortcuts) {
+        const auto builtins = midnight::default_shortcuts();
+        for (std::size_t i = 0; i < shortcuts->size(); ++i) {
+          if (!shortcut_changed_[i]) continue;
+          const auto action = static_cast<midnight::ShortcutAction>(i);
+          if ((*shortcuts)[i] == builtins[i])
+            g_key_file_remove_key(updated.get(), "Shortcuts", midnight::shortcut_key(action), nullptr);
+          else g_key_file_set_string(updated.get(), "Shortcuts", midnight::shortcut_key(action),
+              midnight::format_shortcut((*shortcuts)[i]).c_str());
+        }
+      }
       gsize length = 0;
       auto* data = g_key_file_to_data(updated.get(), &length, nullptr);
       if (g_mkdir_with_parents(path_.parent_path().c_str(), 0700) != 0) {
@@ -596,6 +670,7 @@ class Settings {
       existed_ = true;
       file_ = std::move(updated);
       for (auto& binding : bindings_) binding->changed = false;
+      shortcut_changed_.fill(false);
       g_free(data);
     }
     if (defaults_changed) {

@@ -115,6 +115,18 @@ std::optional<ThemeConfig> parse_config(std::string_view contents) {
     if (end && *end == '\0' && std::isfinite(scale) && scale >= .75 && scale <= 3.0)
       config.ui_scale = scale;
   }
+  auto shortcuts = default_shortcuts();
+  bool valid_shortcuts = true;
+  for (std::size_t i = 0; i < shortcuts.size(); ++i) {
+    const auto action = static_cast<ShortcutAction>(i);
+    if (!g_key_file_has_key(keyfile, "Shortcuts", shortcut_key(action), nullptr)) continue;
+    char* raw = g_key_file_get_string(keyfile, "Shortcuts", shortcut_key(action), nullptr);
+    const auto parsed = parse_shortcut(raw ? std::string_view(raw) : std::string_view{});
+    g_free(raw);
+    if (!parsed) { valid_shortcuts = false; break; }
+    shortcuts[i] = *parsed;
+  }
+  if (valid_shortcuts && !shortcuts_conflict(shortcuts)) config.shortcuts = shortcuts;
   auto read_desktop_bool = [keyfile](const char* key, bool& value) {
     GError* error = nullptr;
     const bool configured = g_key_file_get_boolean(keyfile, "Desktop", key, &error);
