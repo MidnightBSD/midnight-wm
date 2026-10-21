@@ -139,6 +139,30 @@ def session(args):
             until(lambda: not popups(), "outside click did not close menus")
             time.sleep(0.5)
             assert not popups(), "pending animation or hover resurrected a closed menu"
+            # Reload closes existing menus and cancels any pending reveal/hover.
+            root, category = open_categories()
+            cx, cy, _, _ = popups()[category]
+            move(cx + 50, cy + 16)
+            config = Path(os.environ["XDG_CONFIG_HOME"]) / "midnight-wm/config.ini"
+            from settings_smoke import atomic_write
+            atomic_write(config, "[Workspace]\nui_scale=1.0\nreduced_motion=true\n")
+            until(lambda: not popups(), "live motion reload did not cancel menus")
+            time.sleep(.3)
+            assert not popups(), "live reload resurrected a menu"
+            root, category = open_categories()
+            cx, cy, _, _ = popups()[category]
+            move(cx + 50, cy + 16)
+            deadline = time.monotonic() + 5
+            initial = None
+            while time.monotonic() < deadline:
+                windows = popups()
+                children = [w for w in windows if w not in (root, category)]
+                if children:
+                    initial = windows[children[0]][3]
+                    break
+            assert initial == 248, f"reduced-motion popup appeared clipped: {initial}"
+            atomic_write(config, "[Workspace]\nui_scale=1.0\nreduced_motion=false\n")
+            until(lambda: not popups(), "disabling reduced motion did not reload")
             assert wm.poll() is None, "WM exited during menu checks"
             (args.output / "reveal.txt").write_text(f"Observed initial app height: {observed}; final: 248\n")
             print("Mport Manager and System Monitor desktop launch, menu levels, 720p bounds, stable popup IDs, rapid category hover, launch, "

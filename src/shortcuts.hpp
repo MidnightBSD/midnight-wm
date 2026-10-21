@@ -15,7 +15,8 @@ namespace midnight {
 
 enum class ShortcutAction : std::size_t {
   workspace_left, workspace_right, workspace_up, workspace_down,
-  show_desktop, switch_window, close_window, count
+  show_desktop, switch_window, close_window,
+  move_window, resize_window, minimize_window, maximize_window, switch_window_backward, count
 };
 
 struct KeyChord {

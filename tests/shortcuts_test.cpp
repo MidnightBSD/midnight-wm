@@ -22,6 +22,28 @@ int main() {
     }
   }
   check(!midnight::shortcuts_conflict(defaults), "default shortcuts conflict");
+  const std::array<const char*, 5> added_defaults{
+    "Alt+F7", "Alt+F8", "Alt+F9", "Alt+F10", "Alt+Shift+Tab"};
+  for (std::size_t i = 0; i < added_defaults.size(); ++i) {
+    const auto action = static_cast<midnight::ShortcutAction>(7 + i);
+    check(defaults[7 + i] == midnight::parse_shortcut(added_defaults[i]).value(), "wrong operation default");
+    const auto chord = *defaults[7 + i];
+    check(midnight::shortcut_action(defaults, chord.keysym, chord.modifiers) == action,
+          "operation dispatch failed");
+    const std::string prefix = std::string("[Shortcuts]\n") + midnight::shortcut_key(action) + "=";
+    const auto disabled_action = midnight::parse_config(prefix + "None\n");
+    check(disabled_action && !disabled_action->shortcuts[7 + i], "operation disable failed");
+    const auto rebound = midnight::parse_config(prefix + "Super+F6\n");
+    check(rebound && midnight::shortcut_action(rebound->shortcuts, XK_F6, XCB_MOD_MASK_4) == action,
+          "operation rebinding failed");
+    const auto collision = midnight::parse_config(prefix + "Alt+Tab\n");
+    check(collision && collision->shortcuts == defaults, "operation conflict accepted");
+  }
+  check(!midnight::parse_config("[Workspace]\n")->reduced_motion, "motion default changed");
+  check(midnight::parse_config("[Workspace]\nreduced_motion=true\n")->reduced_motion,
+        "reduced motion did not load");
+  check(!midnight::parse_config("[Workspace]\nreduced_motion=invalid\n")->reduced_motion,
+        "invalid motion preference changed default");
   const auto alias = midnight::parse_shortcut(" Control + Alt + LEFT ");
   check(alias && *alias == defaults[0], "modifier/key aliases failed");
   const auto function = midnight::parse_shortcut("Super+Shift+F12");

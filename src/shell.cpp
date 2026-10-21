@@ -2214,6 +2214,7 @@ struct Shell::Impl {
     auto it = menu_surfaces.find(window);
     if (it == menu_surfaces.end()) return;
     auto& cache = it->second;
+    reveal = reveal && !config.reduced_motion;
     cache.revealing = reveal;
     cache.started = std::chrono::steady_clock::now();
     cache.visible_height = reveal ? std::min(8, cache.height) : cache.height;

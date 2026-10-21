@@ -90,6 +90,7 @@ std::optional<ThemeConfig> parse_config(std::string_view contents) {
   const bool compositing = g_key_file_get_boolean(keyfile, "Workspace", "compositing", &compositor_error);
   if (compositor_error) g_error_free(compositor_error);
   else config.compositing = compositing;
+  config.reduced_motion = g_key_file_get_boolean(keyfile, "Workspace", "reduced_motion", nullptr);
   config.dark_mode = g_key_file_get_boolean(keyfile, "Workspace", "dark_mode", nullptr);
   if (config.dark_mode) {
     config.panel_color = {.18, .18, .21};

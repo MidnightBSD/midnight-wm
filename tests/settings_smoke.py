@@ -188,6 +188,11 @@ def session(args):
             assert wm.poll() is None, "WM exited during Settings Apply"
             assert geometry(folder_window) == (620, 430), "Settings Apply lost the existing folder"
 
+            # Return to Appearance and toggle the keyboard-accessible motion preference.
+            run("xdotool", "key", "--clearmodifiers", "ctrl+Page_Up", "alt+r", "alt+a")
+            until(lambda: "reduced_motion=true" in config.read_text(), "motion preference not saved")
+            assert "preserve this comment" in config.read_text(), "motion Apply removed comments"
+            run("xdotool", "key", "--clearmodifiers", "ctrl+Page_Down")
             run("xdotool", "windowactivate", "--sync", settings)
             run("xdotool", "key", "--clearmodifiers", "ctrl+Page_Down")
             time.sleep(0.2)
@@ -232,6 +237,14 @@ def session(args):
             run("xdotool", "key", "--clearmodifiers", "alt+a")
             until(lambda: "workspace_left=Super+F9" in config.read_text(),
                   "Settings did not save a valid shortcut")
+            # Tab to the final new action; GTK must scroll it into view at 720p.
+            run("xdotool", "mousemove", str(shortcut_x + 300), str(shortcut_y + 107), "click", "1")
+            run("xdotool", "key", "--clearmodifiers", *(["Tab"] * 11), "ctrl+a")
+            run("xdotool", "type", "--clearmodifiers", "Super+F8")
+            run("import", "-window", "root", str(output / "window-shortcuts.png"))
+            run("xdotool", "key", "--clearmodifiers", "alt+a")
+            until(lambda: "switch_window_backward=Super+F8" in config.read_text(),
+                  "Settings did not save the new window shortcut")
             run("xdotool", "key", "--clearmodifiers", "ctrl+Page_Down")
             run("xdotool", "key", "--clearmodifiers", "alt+x")
             run("xdotool", "key", "--clearmodifiers", "alt+a")

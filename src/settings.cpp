@@ -79,6 +79,7 @@ class Settings {
     bind(mode, "changed", [mode](GKeyFile* file) {
       g_key_file_set_string(file, "Workspace", "desktop_image_mode", gtk_combo_box_get_active_id(GTK_COMBO_BOX(mode)));
     });
+    checkbox(appearance, "_Reduce motion (show menus immediately)", "Workspace", "reduced_motion", false);
     auto* workspace = page(notebook, "Desktop and panel");
     row_ = 0;
     entry(workspace, "_Menu label", "panel_label", "Midnight ▾");
