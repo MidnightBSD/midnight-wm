@@ -583,9 +583,19 @@ GTK X11 apps through XSETTINGS. Disabling it restores `gtk-theme-name` from
 fallback. No GTK configuration files are modified. An existing XSETTINGS
 manager remains in control, and applications can override system appearance.
 
+At session startup, `QT_QPA_PLATFORMTHEME` defaults to `gtk3` so Qt applications
+can follow the same GTK theme and live dark-mode changes. Explicit environment
+overrides (including an empty value) are preserved. The Qt GTK platform-theme
+plugin must be installed; MidnightBSD's `qt6-base` includes it. Already running
+apps need restarting once to pick up the platform-theme selection. Apps with
+custom palettes or styles may override the system appearance.
+
 Run `python3 tests/gtk_theme_smoke.py` (requires PyGObject for GTK 3) to
 check initial dark appearance, live GTK theme switching, and restoration of
 user theme preferences in an isolated Xvfb session.
+Run `python3 tests/qt_theme_smoke.py` with Qt 6 development files installed
+to check autostart and D-Bus activation inheritance, explicit overrides, and live Qt palette changes
+through both session entry points.
 
 `ui_font` and `title_font` accept Pango family/style
 descriptions, optionally followed by a point size from 6 to 32. Omitting the

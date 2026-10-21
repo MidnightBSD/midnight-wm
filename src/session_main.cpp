@@ -52,6 +52,9 @@ int main(int argc, char** argv) {
     std::cerr << "Usage: midnightbsd-session [--version | -- program [argument ...]]\n";
     return 2;
   }
+  // Qt follows our GTK theme unless the user explicitly selected a platform theme.
+  // Set this before bus bootstrap so a new bus and restored children inherit it.
+  g_setenv("QT_QPA_PLATFORMTHEME", "gtk3", FALSE);
   // Start the bus outside this process's managed child. The existing helper
   // keeps display-manager buses and its wrapper retains ownership of new buses.
   midnight::ensure_session_bus(argc, argv);
