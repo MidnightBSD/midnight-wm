@@ -102,11 +102,12 @@ class Settings {
     checkbox(session, "Restore applications at _login", "Session", "restore_applications", false);
     checkbox(session, "Also reopen identified apps _without session support", "Session", "restore_desktop_applications", false);
     checkbox(session, "Save application chec_kpoints", "Session", "save_application_checkpoints", false);
+    checkbox(session, "Start _XScreenSaver at login (if installed)", "Session", "start_xscreensaver", true);
     auto* session_hint = gtk_label_new(
       "Disable both restore options to start fresh at the next login.\n"
       "Restores participating apps through the Midnight session companion.\n"
       "Fallback starts one copy; document restoration depends on the app.\n"
-      "Saving changes apply after Apply; restore changes apply at next login.");
+      "Saving changes apply after Apply; login choices apply at next login.");
     gtk_label_set_line_wrap(GTK_LABEL(session_hint), TRUE);
     gtk_label_set_max_width_chars(GTK_LABEL(session_hint), 50);
     gtk_label_set_xalign(GTK_LABEL(session_hint), 0);

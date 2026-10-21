@@ -145,6 +145,11 @@ The
 .Sq Session
 section accepts:
 .Bl -tag -width Ds
+.It Cm start_xscreensaver
+Start the XScreenSaver background daemon at login when installed; preserve an
+existing daemon on the display. Default
+.Li true .
+Changes take effect at the next login.
 .It Cm restore_folders
 Reopen saved built-in folders at login; default
 .Li false .

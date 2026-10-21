@@ -128,6 +128,10 @@ std::optional<ThemeConfig> parse_config(std::string_view contents) {
   read_desktop_bool("show_public_share", config.show_public_share);
   config.restore_session = g_key_file_get_boolean(keyfile, "Session", "restore_folders", nullptr);
   config.restore_desktop_applications = g_key_file_get_boolean(keyfile, "Session", "restore_desktop_applications", nullptr);
+  GError* screensaver_error = nullptr;
+  const bool start_xscreensaver = g_key_file_get_boolean(keyfile, "Session", "start_xscreensaver", &screensaver_error);
+  if (screensaver_error) g_error_free(screensaver_error);
+  else config.start_xscreensaver = start_xscreensaver;
   config.restore_applications = g_key_file_get_boolean(keyfile, "Session", "restore_applications", nullptr);
   config.save_application_checkpoints = g_key_file_get_boolean(keyfile, "Session", "save_application_checkpoints", nullptr);
   config.save_session = g_key_file_get_boolean(keyfile, "Session", "save_on_logout", nullptr);
