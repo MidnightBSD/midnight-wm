@@ -10,9 +10,16 @@ namespace midnight::chat {
 struct Settings {
   std::string url{"http://localhost/v1"}, model, token;
   int port{11434}, context{8192}, reply{1024};
+  int tool_rounds{12}, tool_calls{24}, request_timeout{900};
   bool authenticate{};
+  bool file_search{}, system_information{}, package_queries{}, web_search{};
+  std::string search_provider{"brave"}, search_url, search_token;
 };
-struct Message { std::string role, text; };
+struct ToolUse { std::string id, name, arguments, result; };
+struct Message {
+  std::string role, text;
+  std::vector<ToolUse> tools{};
+};
 struct Thread {
   std::string id, title{"New conversation"}, summary;
   std::size_t compacted{};

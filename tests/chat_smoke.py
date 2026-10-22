@@ -16,6 +16,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--live', help='Base URL, e.g. http://localhost:11434/v1')
 parser.add_argument('--model', default='mistral:7b')
 parser.add_argument('--binary', help='Chat executable to test')
+parser.add_argument('--tools', action='store_true', help='Exercise enabled system-information tool and Tools settings')
 args = parser.parse_args()
 repo = Path(__file__).resolve().parent.parent
 root = Path(tempfile.mkdtemp(prefix='midnight-chat-ui-'))
@@ -45,7 +46,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         data = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         if data['messages'][-1]['content'] == 'slow request':
             time.sleep(3)
-        self.respond({'choices': [{'message': {'content': 'Hello Robin. This is a chat reply.'}}]})
+        if args.tools and data.get('tools') and data['messages'][-1]['role'] == 'user':
+            self.respond({'choices': [{'message': {'content': None, 'tool_calls': [
+                {'id': 'system_test', 'type': 'function', 'function': {'name': 'system_information', 'arguments': '{}'}}]}}]})
+        else:
+            self.respond({'choices': [{'message': {'content': 'Hello Robin. This is a chat reply.'}}]})
 
 server = None
 if not args.live:
@@ -55,7 +60,7 @@ if not args.live:
 config = root / 'config/midnightbsd-chat'
 config.mkdir(mode=0o700)
 settings = config / 'settings.json'
-settings.write_text(json.dumps(dict(url=args.live, port=0, model=args.model, token='', authenticate=False, context=8192, reply=128)))
+settings.write_text(json.dumps(dict(url=args.live, port=0, model=args.model, token='', authenticate=False, context=8192, reply=128, system_information=args.tools)))
 settings.chmod(0o600)
 history = root / 'data/midnightbsd-chat/conversations.json'
 
@@ -114,6 +119,8 @@ try:
     key('ctrl+Return')
     until(lambda: threads() and len(threads()[0]['messages']) == 2, 'first response missing')
     first_id = threads()[0]['id']
+    if args.tools:
+        assert threads()[0]['messages'][1]['tools'][0]['name'] == 'system_information'
     focus_input(window)
     type_text('What is my name? Answer briefly.')
     key('ctrl+Return')
@@ -130,10 +137,19 @@ try:
     run('import', '-window', window, str(root / 'chat.png'))
     key('alt+e')
     dialog = until(lambda: visible('Chat Settings'), 'settings missing')
+    key('alt+d'); key('ctrl+a'); type_text('1200')
     run('import', '-window', dialog, str(root / 'settings.png'))
+    if args.tools:
+        key('ctrl+Page_Down')
+        run('import', '-window', dialog, str(root / 'tools.png'))
     key('alt+s')
     until(lambda: not visible('Chat Settings'), 'settings did not save')
-    assert json.loads(settings.read_text())['url'] == args.live
+    saved = json.loads(settings.read_text())
+    assert saved['url'] == args.live
+    assert saved['request_timeout'] == 1200
+    assert saved['tool_rounds'] == 12 and saved['tool_calls'] == 24
+    if args.tools:
+        assert json.loads(settings.read_text())['system_information'] is True
     if server:
         focus_input(window)
         type_text('slow request')

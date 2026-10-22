@@ -34,7 +34,30 @@ Set the context size to the server's actual configured capacity.
 This setting does not reconfigure the server.
 .Pp
 Responses are displayed as plain text after generation completes.
-This application does not execute model output or provide tools or agents.
+The Tools settings tab optionally enables filename search, system information,
+read-only mport package queries, and web search. All tools are disabled by default.
+A tool-capable model is required when enabled. File search returns readable
+indexed paths without reading contents. Package queries use the installed
+registry or cached index without updating either. A dedicated count tool returns
+the exact total; searches report exact totals before their limited previews.
+Search text is literal, not a wildcard. Web search supports Brave
+with an API key, or a configured SearXNG JSON search URL.
+.Pp
+Local tool results are sent to the configured model server. Web queries go to
+the selected search provider. Calls and result previews are saved in the
+transcript. Replies default to 12 rounds and 24 calls. Settings / Tools allows
+1–32 rounds and 1–64 calls per reply. Repeated identical searches refer to earlier
+results without executing again, and still count toward the limits.
+Settings / Connection sets a request deadline of 60–3600 seconds (default 900),
+including model exchanges and compaction.
+At the limit, the model is asked to state findings and unresolved questions
+from collected results with tools disabled.
+Further tool requests are ignored; collected results are preserved with a notice
+if the model provides no final answer.
+Output is
+bounded and explicitly truncated when needed to fit context. Stop also cancels
+tools. The application cannot execute arbitrary model-generated commands or
+install or remove packages.
 TLS certificates are verified, redirects are rejected, and environment proxies
 are not used. Authentication is omitted unless explicitly enabled.
 Tokens are stored in a private file, not encrypted; use HTTPS when appropriate.
