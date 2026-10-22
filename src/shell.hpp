@@ -41,6 +41,8 @@ public:
   void open_launcher();
   [[nodiscard]] bool menu_animation_active() const;
   void set_tasks(std::vector<Task> tasks);
+  // Share application icon lookup and fallback artwork with window decorations.
+  void draw_task_icon(cairo_t* cr, const TaskIcon& icon, int x, int y, int size);
   void set_workspace(std::uint32_t desktop, bool showing_desktop);
   [[nodiscard]] SessionSnapshot session_snapshot() const;
   void restore_session(const SessionSnapshot& snapshot);

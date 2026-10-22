@@ -1654,11 +1654,11 @@ struct Shell::Impl {
     }
   }
 
-  cairo_surface_t* task_icon_surface(const Task& task) {
-    if (task.icon.image) return task.icon.image.get();
-    if (!task.icon.theme_name.empty()) return themed_icon_surface(task.icon.theme_name);
-    if (task.icon.wm_class.empty() && task.icon.instance.empty()) return nullptr;
-    const auto key = task.icon.wm_class + "\n" + task.icon.instance;
+  cairo_surface_t* task_icon_surface(const TaskIcon& icon) {
+    if (icon.image) return icon.image.get();
+    if (!icon.theme_name.empty()) return themed_icon_surface(icon.theme_name);
+    if (icon.wm_class.empty() && icon.instance.empty()) return nullptr;
+    const auto key = icon.wm_class + "\n" + icon.instance;
     std::string icon_name;
     const auto found = task_app_icons.find(key);
     if (found != task_app_icons.end()) icon_name = found->second;
@@ -1669,8 +1669,8 @@ struct Shell::Impl {
         auto* app = G_APP_INFO(node->data);
         const auto matches = [&](const char* candidate) {
           return candidate && *candidate &&
-              ((!task.icon.wm_class.empty() && !g_ascii_strcasecmp(candidate, task.icon.wm_class.c_str())) ||
-               (!task.icon.instance.empty() && !g_ascii_strcasecmp(candidate, task.icon.instance.c_str())));
+              ((!icon.wm_class.empty() && !g_ascii_strcasecmp(candidate, icon.wm_class.c_str())) ||
+               (!icon.instance.empty() && !g_ascii_strcasecmp(candidate, icon.instance.c_str())));
         };
         std::string id = g_app_info_get_id(app) ? g_app_info_get_id(app) : "";
         if (id.ends_with(".desktop")) id.resize(id.size() - 8);
@@ -1694,11 +1694,11 @@ struct Shell::Impl {
     return surface;
   }
 
-  void draw_task_icon(cairo_t* cr, const Task& task, int x, int y) {
+  void draw_task_icon(cairo_t* cr, const TaskIcon& icon, int x, int y) {
     cairo_save(cr);
     cairo_rectangle(cr, x, y, 16, 16);
     cairo_clip(cr);
-    if (auto* surface = task_icon_surface(task)) {
+    if (auto* surface = task_icon_surface(icon)) {
       const int w = cairo_image_surface_get_width(surface);
       const int h = cairo_image_surface_get_height(surface);
       if (w > 0 && h > 0) {
@@ -1709,11 +1709,11 @@ struct Shell::Impl {
         cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_BILINEAR);
         cairo_paint(cr);
       }
-    } else if (task.icon.theme_name == "user-trash") {
+    } else if (icon.theme_name == "user-trash") {
       cairo_translate(cr, x, y);
       cairo_scale(cr, 16.0 / 48, 16.0 / 48);
       trash_icon(cr, 0, 0);
-    } else if (task.icon.theme_name == "folder") {
+    } else if (icon.theme_name == "folder") {
       fill(cr, .99, .88, .51, x, y + 2, 8, 5);
       fill(cr, .95, .78, .35, x, y + 5, 16, 10);
       draw_bevel(cr, x, y + 5, 16, 10);
@@ -1768,7 +1768,7 @@ struct Shell::Impl {
           text(cr, "!", x + 4, 8, 8, 11, false, true);
         }
         const int icon_x = x + (task.attention && !task.active ? 14 : 5);
-        draw_task_icon(cr, task, icon_x, 9);
+        draw_task_icon(cr, task.icon, icon_x, 9);
         const int label_x = icon_x + 20;
         text(cr, task.title, label_x, 8, x + task_button_width - 5 - label_x, 11, task.active);
       }
@@ -2274,7 +2274,7 @@ struct Shell::Impl {
         } else if (entry.action == MenuAction::activate_task) {
           const auto all_tasks = panel_tasks();
           const auto task = std::ranges::find(all_tasks, entry.window, &Task::window);
-          if (task != all_tasks.end()) draw_task_icon(cr, *task, 9, y + 4);
+          if (task != all_tasks.end()) draw_task_icon(cr, task->icon, 9, y + 4);
         } else if (entry.action == MenuAction::settings) {
           // Match midnightbsd-settings.desktop in the selected icon theme.
           if (auto* surface = themed_icon_surface("preferences-desktop")) {
@@ -4640,6 +4640,15 @@ const ThemeConfig& Shell::theme() const { return impl_->config; }
 
 const std::array<double, 3>& Shell::panel_color() const {
   return impl_->config.panel_color;
+}
+
+void Shell::draw_task_icon(cairo_t* cr, const TaskIcon& icon, int x, int y, int size) {
+  if (size <= 0) return;
+  cairo_save(cr);
+  cairo_translate(cr, x, y);
+  cairo_scale(cr, size / 16.0, size / 16.0);
+  impl_->draw_task_icon(cr, icon, 0, 0);
+  cairo_restore(cr);
 }
 
 cairo_surface_t* Shell::themed_icon_surface(const std::string& name) {
