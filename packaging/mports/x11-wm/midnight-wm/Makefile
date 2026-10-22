@@ -35,6 +35,7 @@ USES=		cmake:testing compiler:c++23-lang desktop-file-utils gnome localbase \
 		pkgconfig xorg
 USE_GNOME=	cairo glib20 pango gdkpixbuf gtk30 librsvg2:run
 USE_XORG=	ice sm xcb
+INSTALLS_ICONS=	yes
 
 OPTIONS_DEFINE=	XSCREENSAVER
 OPTIONS_DEFAULT=	XSCREENSAVER
