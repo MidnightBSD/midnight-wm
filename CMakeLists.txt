@@ -43,8 +43,8 @@ target_link_libraries(midnightbsd-settings PRIVATE midnight_core PkgConfig::GTK3
 target_compile_options(midnightbsd-settings PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_definitions(midnightbsd-settings PRIVATE MIDNIGHT_WM_VERSION="${PROJECT_VERSION}")
 
-pkg_check_modules(CHAT REQUIRED IMPORTED_TARGET libsoup-3.0 json-glib-1.0)
-add_library(midnight_chat src/chat_core.cpp src/private_state.cpp)
+pkg_check_modules(CHAT REQUIRED IMPORTED_TARGET libsoup-3.0 json-glib-1.0 sqlite3)
+add_library(midnight_chat src/chat_core.cpp src/chat_tools.cpp src/private_state.cpp)
 target_include_directories(midnight_chat PUBLIC src)
 target_link_libraries(midnight_chat PUBLIC PkgConfig::CHAT)
 target_compile_options(midnight_chat PRIVATE -Wall -Wextra -Wpedantic)
@@ -82,6 +82,7 @@ target_compile_definitions(midnight-wm PRIVATE
 add_executable(midnightbsd-session src/session_main.cpp src/session_manager.cpp)
 find_package(Threads REQUIRED)
 target_link_libraries(midnightbsd-session PRIVATE midnight_xsmp Threads::Threads)
+target_link_libraries(midnight_chat PUBLIC Threads::Threads)
 target_compile_options(midnightbsd-session PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_definitions(midnightbsd-session PRIVATE
   MIDNIGHT_WM_VERSION="${PROJECT_VERSION}"
@@ -306,4 +307,12 @@ if(Python3_Interpreter_FOUND)
   add_test(NAME chat_protocol_test COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/chat_protocol_test.py $<TARGET_FILE:chat_test>)
   set_tests_properties(chat_protocol_test PROPERTIES TIMEOUT 50)
+endif()
+
+add_executable(chat_tools_test tests/chat_tools_test.cpp)
+target_link_libraries(chat_tools_test PRIVATE midnight_chat)
+if(Python3_Interpreter_FOUND)
+  add_test(NAME chat_tools_protocol COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/chat_tools_protocol.py $<TARGET_FILE:chat_tools_test>)
+  set_tests_properties(chat_tools_protocol PROPERTIES TIMEOUT 50)
 endif()

@@ -41,8 +41,9 @@ starting a keyring here may prompt for its password when first used.
 
 Run `midnightbsd-chat` or choose **Midnight Chat** from Programs. This separate
 GTK 3 application provides plain-text chat with local or LAN OpenAI-compatible
-servers; it has no tools, command execution, or agent functionality. Building
-it requires `libsoup-3.0` and `json-glib-1.0` in addition to GTK 3.
+servers. Optional tools provide bounded, read-only information for a chat; there
+is no general-purpose command execution or autonomous agent. Building
+it requires `libsoup-3.0`, `json-glib-1.0`, and SQLite 3 in addition to GTK 3.
 
 In **Settings**, enter a base URL (normally `http://localhost/v1`) and port:
 11434 for Ollama or 8080 for llama.cpp. Port 0 uses the port in the URL or its
@@ -68,6 +69,45 @@ Summaries can lose details; full original transcripts remain visible locally.
 preserving the transcript. Very large individual turns produce an error
 instead of being silently truncated.
 
+The **Tools** tab in Settings enables each tool separately; all are off by
+default. A model with tool-calling support is required when tools are enabled.
+The client executes requests locally and sends the results to the configured
+model server. Tool names, arguments and result previews appear in the saved
+transcript. Tool outputs are treated as data and never executed as instructions.
+
+- **File search** searches the locate database for literal filename matches and
+  returns up to 20 currently readable paths. It does not read file contents;
+  an absent or stale database can affect results.
+- **System information** reports OS, architecture, online CPUs and load, plus
+  native BSD CPU model, physical memory and uptime where available. It excludes
+  hostnames, environment variables, usernames and process listings.
+- **Mport searches** query installed packages or the cached repository index by
+  literal name/description text, using read-only database connections and bound
+  parameters. A dedicated count tool returns exact package totals. Searches
+  report exact totals before their limited previews; `*` is not an all-packages
+  wildcard.
+  No package installation, removal, index refresh or privilege escalation occurs.
+- **Web search** supports Brave Search (requires a Brave API key) and a configured
+  SearXNG JSON search endpoint such as `http://localhost:8080/search`. SearXNG must
+  allow the JSON format. Results contain titles, URLs and snippets; pages are not
+  fetched. Search queries go to the selected provider; the chat-server token is
+  never forwarded to it. Brave keys are sent only to the fixed HTTPS Brave API.
+
+Each reply defaults to 12 tool rounds and 24 calls, executed sequentially.
+**Settings → Tools** allows 1–32 rounds and 1–64 calls per reply. Repeated searches
+with identical JSON argument values reuse the earlier result without executing
+again; the model is prompted to refine its query or use existing evidence.
+Skipped repetitions still count toward the limits. **Settings → Connection**
+sets the request deadline (60–3600 seconds; default 900 seconds / 15 minutes),
+including model exchanges and compaction. Stop remains available throughout.
+At the limit, the model is asked to state its findings and what remains
+unresolved using the collected results with tools disabled. If the model still requests tools, extra calls are
+ignored and collected results remain visible, with a notice if no answer was
+provided. Tools have bounded output and time limits and follow **Stop**.
+Long result previews are explicitly truncated to fit the remaining context;
+compaction includes saved tool results with their conversation turns. Models
+that do not support tools can still be used with all tool switches disabled.
+
 Settings (including any token) are stored in
 `$XDG_CONFIG_HOME/midnightbsd-chat/settings.json`, and transcripts and summaries
 in `$XDG_DATA_HOME/midnightbsd-chat/conversations.json`. Defaults are `~/.config`
@@ -80,8 +120,12 @@ reported file before restarting. History is bounded to 16 MiB and 1000 threads.
 
 `ctest --test-dir build -R chat_protocol_test --output-on-failure` verifies
 local HTTP fixtures, authentication, summaries, storage and error handling.
+`ctest --test-dir build -R chat_tools_protocol --output-on-failure` additionally
+checks tool dispatch, read-only package queries, literal filename searches,
+web response parsing, credential separation and tool-call limits.
 `python3 tests/chat_smoke.py` exercises the GUI in isolated Xvfb/HOME/XDG
-settings. To test an actual backend sequentially, use
+settings; add `--tools` to exercise tool results and the Tools settings tab.
+To test an actual backend sequentially, use
 `python3 tests/chat_smoke.py --live http://HOST:11434/v1 --model mistral:7b`.
 
 ## Window shadows and compositing
