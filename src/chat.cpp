@@ -317,6 +317,7 @@ struct Chat {
   }
   void build() {
     window = gtk_application_window_new(app); gtk_window_set_title(GTK_WINDOW(window), "Midnight Chat");
+    gtk_window_set_icon_name(GTK_WINDOW(window), "midnightbsd-chat");
     gtk_window_set_default_size(GTK_WINDOW(window), 900, 620);
     auto* outer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8); gtk_container_set_border_width(GTK_CONTAINER(outer), 10);
     gtk_container_add(GTK_CONTAINER(window), outer);

@@ -89,6 +89,8 @@ target_compile_definitions(midnightbsd-session PRIVATE
   MIDNIGHT_WM_PROGRAM="${CMAKE_INSTALL_FULL_BINDIR}/midnight-wm")
 install(TARGETS midnight-wm midnightbsd-chat midnightbsd-search midnightbsd-system-monitor midnightbsd-settings midnightbsd-session midnightbsd-open-folder RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES data/midnightbsd-chat.desktop data/midnightbsd-settings.desktop data/midnightbsd-system-monitor.desktop data/org.midnightbsd.Workspace.Files.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+install(FILES data/icons/midnightbsd-chat.svg DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
+install(FILES data/icons/midnightbsd-chat-48.png DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/48x48/apps RENAME midnightbsd-chat.png)
 install(FILES data/midnight-wm.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/xsessions)
 install(FILES data/config.ini data/MidnightBSDLogo.svg data/MidnightBSDLogo22x22.png
         DESTINATION ${CMAKE_INSTALL_DATADIR}/midnight-wm)

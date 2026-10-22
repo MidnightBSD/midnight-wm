@@ -1,5 +1,7 @@
 bin/midnightbsd-chat
 share/applications/midnightbsd-chat.desktop
+share/icons/hicolor/scalable/apps/midnightbsd-chat.svg
+share/icons/hicolor/48x48/apps/midnightbsd-chat.png
 share/man/man1/midnightbsd-chat.1.gz
 bin/midnight-wm
 bin/midnightbsd-open-folder
