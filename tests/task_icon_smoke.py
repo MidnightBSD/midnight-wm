@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Lucas Holt
 # SPDX-License-Identifier: BSD-2-Clause
-"""Check running application taskbar icons in an isolated X11 session."""
+"""Check matching application taskbar and title-bar icons in an isolated X11 session."""
 import argparse
 import contextlib
 import os
+import re
 from pathlib import Path
 import signal
 import subprocess
@@ -26,7 +27,15 @@ def session(args):
         run("import", "-window", "root", str(path))
         return path
     def task_color():
-        return pixel(capture("current"), 225, 17)
+        return pixel(capture("current"), 212, 17)
+    def decoration_matches(expected=None):
+        tree = run("xwininfo", "-id", first, "-tree")
+        frame = re.search(r"Parent window id: (0x[0-9a-fA-F]+)", tree).group(1)
+        path = args.output / "decoration.png"
+        run("import", "-window", frame, str(path))
+        # Center of the shared 16px icon, inside the frame's title bar.
+        color = pixel(path, 16, 16)
+        return color == (expected if expected is not None else task_color())
     def send(command):
         client.stdin.write(command + "\n")
         client.stdin.flush()
@@ -39,32 +48,38 @@ def session(args):
             assert second.returncode != 0, "second WM took over"
             client = subprocess.Popen([str(fixture)], stdin=subprocess.PIPE, text=True)
             first = until(lambda: visible_window("Task icon 1"), "task fixture missing")
+            run("xdotool", "windowactivate", "--sync", first)
             until(lambda: task_color() == (255, 32, 32), "initial application icon missing")
+            until(lambda: decoration_matches((255, 32, 32)), "title-bar icon does not match taskbar")
             capture("task-icons")
             send("green")
             until(lambda: task_color() == (32, 255, 32), "live icon update missing")
+            until(lambda: decoration_matches((32, 255, 32)), "title-bar icon does not match taskbar")
             send("delete")
             until(lambda: task_color() == (32, 64, 255), "desktop entry class fallback missing")
+            until(lambda: decoration_matches((32, 64, 255)), "title-bar icon does not match taskbar")
             capture("class-fallback")
             send("malformed")
             until(lambda: task_color() == (32, 64, 255), "malformed image did not retain fallback")
+            until(lambda: decoration_matches((32, 64, 255)), "title-bar icon does not match taskbar")
             send("class")
             until(lambda: task_color() != (32, 64, 255), "WM_CLASS change did not refresh fallback")
+            until(lambda: decoration_matches(), "title-bar icon does not match taskbar")
             capture("generic-fallback")
             run("xdotool", "mousemove", "240", "16", "click", "1")
             until(lambda: run("xdotool", "getactivewindow").strip() == first, "task activation failed")
             # With the battery hidden there are seven visible 110px tasks at 720p.
-            run("xdotool", "mousemove", "1022", "16", "click", "1")
+            run("xdotool", "mousemove", "1008", "16", "click", "1")
             time.sleep(.3)
             overflow = capture("overflow-icons")
-            histogram = run("convert", str(overflow), "-crop", "1280x500+0+30", "-format", "%c", "histogram:info:-")
+            histogram = run("convert", str(overflow), "-crop", "250x128+998+30", "-format", "%c", "histogram:info:-")
             assert "#FF2020" in histogram.upper(), "overflow menu did not show app icons"
             run("xdotool", "key", "Escape")
             send("quit")
             client.wait(timeout=5)
             until(lambda: visible_window("Task icon 1") is None, "destroyed task was retained")
             assert wm.poll() is None, "WM exited during icon updates"
-            print("Task icons, live changes, class fallback, malformed input, activation, overflow and cleanup passed.")
+            print("Taskbar and title-bar icons, live changes, class fallback, malformed input, activation, overflow and cleanup passed.")
         finally:
             for process in (client, wm):
                 if process and process.poll() is None:

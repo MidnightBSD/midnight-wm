@@ -1454,9 +1454,21 @@ void X11WindowManager::draw_frame(Frame& frame) {
   const bool selected = active_ == frame.client;
   draw_title_bar(cr, border, border, width - 2 * border, title_height - border,
                  theme, selected);
-  cairo_set_source_rgb(cr, 1, 1, 1);
-  label(cr, frame.title + (frame.unresponsive ? " (Not responding)" : ""), border + scaled_pixel(scale, 9), border + scaled_pixel(scale, 4),
-        std::max(1, width - scaled_pixel(scale, 124)), scale, theme, true);
+  const int icon_size = scaled_pixel(scale, 16);
+  const int icon_x = border + scaled_pixel(scale, 5);
+  const int title_x = icon_x + icon_size + scaled_pixel(scale, 6);
+  const int title_right = width - scaled_pixel(scale, 80);
+  cairo_save(cr);
+  cairo_rectangle(cr, border, border, std::max(0, title_right - border), title_height - border);
+  cairo_clip(cr);
+  shell_.draw_task_icon(cr, frame.icon, icon_x,
+                        border + (title_height - border - icon_size) / 2, icon_size);
+  if (title_right > title_x) {
+    cairo_set_source_rgb(cr, 1, 1, 1);
+    label(cr, frame.title + (frame.unresponsive ? " (Not responding)" : ""), title_x,
+          border + scaled_pixel(scale, 4), title_right - title_x, scale, theme, true);
+  }
+  cairo_restore(cr);
   const int button_y = scaled_pixel(scale, 7);
   for (int i = 0; i < 3; ++i) {
     const int x = width - scaled_pixel(scale, 74) + i * scaled_pixel(scale, 23);
@@ -2055,6 +2067,7 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
         update_title(it->second); draw_frame(it->second); update_tasks();
       } else if (e->atom == atom("_NET_WM_ICON") || e->atom == XCB_ATOM_WM_CLASS) {
         update_icon(it->second);
+        draw_frame(it->second);
         update_tasks();
       } else if (e->atom == XCB_ATOM_WM_NORMAL_HINTS || e->atom == XCB_ATOM_WM_HINTS ||
                  e->atom == atom("WM_PROTOCOLS") || e->atom == XCB_ATOM_WM_TRANSIENT_FOR) {
