@@ -91,6 +91,30 @@ struct Graph {
   }
 };
 
+#if defined(__FreeBSD__) || defined(__MidnightBSD__)
+// ki_comm is limited to COMMLEN bytes. Recover a longer executable basename
+// only when it extends that exact prefix, preserving custom process names.
+std::string process_name(const kinfo_proc& process) {
+  std::string name(process.ki_comm, strnlen(process.ki_comm, sizeof(process.ki_comm)));
+  if (name.size() == COMMLEN) {
+    std::array<char, MAXPATHLEN> path{};
+    size_t length = path.size();
+    int mib[]{CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, process.ki_pid};
+    if (sysctl(mib, 4, path.data(), &length, nullptr, 0) == 0 &&
+        length > 0 && length <= path.size() && path[length - 1] == '\0') {
+      const std::string_view full_path(path.data(), strnlen(path.data(), length));
+      const auto slash = full_path.find_last_of('/');
+      const auto basename = full_path.substr(slash == std::string_view::npos ? 0 : slash + 1);
+      if (basename.starts_with(name)) name = basename;
+    }
+  }
+  char* valid = g_utf8_make_valid(name.data(), name.size());
+  name = valid;
+  g_free(valid);
+  return name;
+}
+#endif
+
 enum ProcessColumn { PID, NAME, USER, STATE, CPU, MEMORY, PROCESS_COLUMNS };
 enum MountColumn { DEVICE, MOUNT, TYPE, TOTAL, USED, AVAILABLE, PERCENT, MOUNT_COLUMNS };
 enum DriveColumn { DRIVE_DEVICE, DRIVE_TYPE, DRIVE_MODEL, DRIVE_SIZE, DRIVE_COLUMNS };
@@ -104,6 +128,10 @@ GtkWidget* list_view(GtkListStore* store, const std::initializer_list<std::pair<
     auto* column = gtk_tree_view_column_new_with_attributes(title, renderer, "text", index, nullptr);
     gtk_tree_view_column_set_resizable(column, TRUE);
     gtk_tree_view_column_set_sort_column_id(column, index);
+    if (std::string_view(title) == "Process") {
+      gtk_tree_view_column_set_min_width(column, 260);
+      gtk_tree_view_column_set_expand(column, TRUE);
+    }
     if (std::string_view(title) == "CPU %") {
       gtk_tree_view_column_set_cell_data_func(column, renderer,
           +[](GtkTreeViewColumn*, GtkCellRenderer* cell, GtkTreeModel* model,
@@ -243,6 +271,7 @@ struct Monitor {
         G_TYPE_STRING, G_TYPE_DOUBLE, G_TYPE_STRING);
     auto* process_view = list_view(processes,
         {{"PID", PID}, {"Process", NAME}, {"User", USER}, {"State", STATE}, {"CPU %", CPU}, {"Memory", MEMORY}});
+    gtk_tree_view_set_search_column(GTK_TREE_VIEW(process_view), NAME);
     gtk_tree_sortable_set_sort_column_id(GTK_TREE_SORTABLE(processes), CPU, GTK_SORT_DESCENDING);
     gtk_notebook_append_page(GTK_NOTEBOOK(tabs), scroller(process_view), gtk_label_new("Processes"));
 
@@ -450,9 +479,10 @@ struct Monitor {
       }
       const auto bytes = static_cast<double>(item.ki_rssize) * std::max(page_size, 0L);
       const auto memory_text = size_label(bytes);
+      const auto name = process_name(item);
       GtkTreeIter row;
       gtk_list_store_append(processes, &row);
-      gtk_list_store_set(processes, &row, PID, item.ki_pid, NAME, item.ki_comm,
+      gtk_list_store_set(processes, &row, PID, item.ki_pid, NAME, name.c_str(),
           USER, user_entry->second.c_str(), STATE, state, CPU, 100.0 * item.ki_pctcpu / FSCALE,
           MEMORY, memory_text.c_str(), -1);
     }
