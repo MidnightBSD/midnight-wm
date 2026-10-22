@@ -80,6 +80,20 @@ class Settings {
       g_key_file_set_string(file, "Workspace", "desktop_image_mode", gtk_combo_box_get_active_id(GTK_COMBO_BOX(mode)));
     });
     checkbox(appearance, "_Reduce motion (show menus immediately)", "Workspace", "reduced_motion", false);
+    auto* border_style = gtk_combo_box_text_new();
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(border_style), "classic", "Classic bevel");
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(border_style), "two-color", "Two-color outline");
+    gtk_combo_box_set_active_id(GTK_COMBO_BOX(border_style),
+        string("Workspace", "window_border_style", "classic").c_str());
+    if (gtk_combo_box_get_active(GTK_COMBO_BOX(border_style)) < 0)
+      gtk_combo_box_set_active(GTK_COMBO_BOX(border_style), 0);
+    add(appearance, "Window _border style", border_style);
+    bind(border_style, "changed", [border_style](GKeyFile* file) {
+      g_key_file_set_string(file, "Workspace", "window_border_style",
+          gtk_combo_box_get_active_id(GTK_COMBO_BOX(border_style)));
+    });
+    color(appearance, "_Outer border color", "window_border_outer_color", "#202020");
+    color(appearance, "In_ner border color", "window_border_inner_color", "#ffffff");
     auto* workspace = page(notebook, "Desktop and panel");
     row_ = 0;
     entry(workspace, "_Menu label", "panel_label", "Midnight ▾");

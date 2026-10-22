@@ -1451,6 +1451,7 @@ void X11WindowManager::draw_frame(Frame& frame) {
   themed_box(0, 0, 2, height, theme.highlight_color, .98, .98, .98);
   themed_box(width - 2, 0, 2, height, theme.shadow_color, .25, .27, .29);
   themed_box(0, height - 2, width, 2, theme.shadow_color, .25, .27, .29);
+  draw_window_outline(cr, width, height, scaled_pixel(scale, 1), theme);
   const bool selected = active_ == frame.client;
   draw_title_bar(cr, border, border, width - 2 * border, title_height - border,
                  theme, selected);

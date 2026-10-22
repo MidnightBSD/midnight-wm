@@ -17,6 +17,9 @@ struct ThemeConfig {
   std::string panel_label{"Midnight ▾"};
   std::string clock_format{"%a %H:%M"};
   bool dark_mode{};
+  std::string window_border_style{"classic"};
+  std::array<double, 3> window_border_outer_color{32.0 / 255, 32.0 / 255, 32.0 / 255};
+  std::array<double, 3> window_border_inner_color{1, 1, 1};
   bool reduced_motion{};
   bool show_battery{true};
   bool compositing{true};

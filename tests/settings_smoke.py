@@ -192,6 +192,36 @@ def session(args):
             run("xdotool", "key", "--clearmodifiers", "ctrl+Page_Up", "alt+r", "alt+a")
             until(lambda: "reduced_motion=true" in config.read_text(), "motion preference not saved")
             assert "preserve this comment" in config.read_text(), "motion Apply removed comments"
+            # Select the border style through its mnemonic, then verify live frame pixels.
+            run("xdotool", "key", "--clearmodifiers", "alt+b", "End", "alt+a")
+            until(lambda: "window_border_style=two-color" in config.read_text(), "border style not saved")
+            def border_colors(window, outer, inner):
+                path = output / "border-current.png"
+                run("import", "-window", window, str(path))
+                values = run("convert", str(path), "-format",
+                             "%[pixel:p{0,50}] %[pixel:p{1,50}]", "info:")
+                return outer in values.split()[0] and inner in values.split()[1]
+            tree = run("xwininfo", "-id", settings, "-tree")
+            frame = re.search(r"Parent window id: (0x[0-9a-fA-F]+)", tree).group(1)
+            until(lambda: border_colors(frame, "32,32,32", "255,255,255"), "frame outlines missing")
+            until(lambda: border_colors(folder_window, "32,32,32", "255,255,255"), "folder outlines missing")
+            assert frame_extents(settings) == (5, 5, 28, 5), "border style changed frame geometry"
+            run("import", "-window", "root", str(output / "two-color-borders.png"))
+            # Keyboard traversal scrolls both color controls into view at 720p.
+            run("xdotool", "key", "--clearmodifiers", "Tab", "Tab")
+            run("import", "-window", "root", str(output / "border-color-controls.png"))
+            # Custom colors reload without recreating windows, in dark mode as well.
+            border_snapshot = config.read_text()
+            atomic_write(config, border_snapshot.replace("[Workspace]", "[Workspace]\nwindow_border_outer_color=#ff0000\nwindow_border_inner_color=#00ff00\ndark_mode=true"))
+            until(lambda: border_colors(frame, "255,0,0", "0,255,0"), "custom frame colors did not reload")
+            until(lambda: border_colors(folder_window, "255,0,0", "0,255,0"), "custom folder colors did not reload")
+            run("import", "-window", "root", str(output / "two-color-borders-dark.png"))
+            # Restore the saved snapshot before the next UI Apply.
+            atomic_write(config, border_snapshot)
+            run("xdotool", "key", "--clearmodifiers", "alt+b", "Home", "alt+a")
+            until(lambda: "window_border_style=classic" in config.read_text(), "classic border not restored")
+            until(lambda: border_colors(frame, "250,250,250", "250,250,250"), "classic bevel did not return")
+
             run("xdotool", "key", "--clearmodifiers", "ctrl+Page_Down")
             run("xdotool", "windowactivate", "--sync", settings)
             run("xdotool", "key", "--clearmodifiers", "ctrl+Page_Down")
@@ -280,7 +310,7 @@ def session(args):
             until(lambda: geometry(panel) == (1280, 30), "reload did not recover after malformed config")
             assert wm.poll() is None, "reload restarted or exited the original WM process"
             (output / "windows.txt").write_text(window_tree())
-            print("Settings menu launch, wallpaper chooser bounds, Apply, preservation, live color/scale, "
+            print("Settings menu launch, wallpaper chooser bounds, Apply, preservation, live borders/color/scale, "
                   "and malformed-config recovery passed.")
         finally:
             wm.terminate()
