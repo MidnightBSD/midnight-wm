@@ -124,6 +124,20 @@ Accent color in
 .Li #RRGGBB
 form; default
 .Li #3b205f .
+.It Cm window_border_style
+Window and built-in folder border style:
+.Li classic
+(default bevel) or
+.Li two-color
+(two nested outlines inside the existing border).
+.It Cm window_border_outer_color , window_border_inner_color
+Outer and inner outline colors in
+.Li #RRGGBB
+form; defaults are
+.Li #202020
+and
+.Li #ffffff .
+Used by the two-color style and applied live without changing frame sizes.
 .It Cm ui_scale
 Override automatic UI scaling with a value from 0.75 to 3.0.
 When unset, scaling follows the primary monitor height.

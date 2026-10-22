@@ -27,6 +27,19 @@ int main() {
   const auto defaults = midnight::load_config();
   check(!defaults.dark_mode && defaults.ui_font == "Sans" && defaults.title_font == "Sans Bold",
         "missing config must preserve default fonts and light mode");
+  check(defaults.window_border_style == "classic", "window borders must default to classic");
+  const auto outline = midnight::parse_config("[Workspace]\nwindow_border_style=two-color\n"
+      "window_border_outer_color=#123456\nwindow_border_inner_color=#abcdef\n");
+  check(outline && outline->window_border_style == "two-color" &&
+        std::abs(outline->window_border_outer_color[0] - 18.0 / 255) < .001 &&
+        std::abs(outline->window_border_inner_color[2] - 239.0 / 255) < .001,
+        "two-color borders must parse style and both colors");
+  const auto invalid_border = midnight::parse_config("[Workspace]\nwindow_border_style=invalid\n"
+      "window_border_outer_color=red\nwindow_border_inner_color=#xyzxyz\n");
+  check(invalid_border && invalid_border->window_border_style == "classic" &&
+        invalid_border->window_border_outer_color == defaults.window_border_outer_color &&
+        invalid_border->window_border_inner_color == defaults.window_border_inner_color,
+        "invalid border options must retain defaults");
   check(defaults.compositing, "compositing must default to enabled");
   check(!midnight::parse_config("[Workspace]\ncompositing=false\n")->compositing,
         "compositing can be disabled");

@@ -693,7 +693,13 @@ descriptions, optionally followed by a point size from 6 to 32. Omitting the
 size keeps each UI element's default size. `desktop_color` remains a `#RRGGBB`
 desktop background in either mode; `panel_color` optionally overrides the
 panel color, and `accent_color` sets the accent color. The shared `ui_scale`
-override is also configured here. By default the desktop shows
+override is also configured here. Optional `window_border_style=two-color`
+draws two nested outlines around managed windows and built-in folders.
+`window_border_outer_color` (default `#202020`) and
+`window_border_inner_color` (default `#ffffff`) set their colors.
+The default style is `classic`. These options are available in Settings under
+Appearance, apply live, and preserve frame sizes and resize areas.
+By default the desktop shows
 `mnbsd_bg_purple.png` from the `midnightbsd-backgrounds` package over the
 lavender `desktop_color`; if that image is not installed, only the color is
 shown. Set `desktop_image` to an absolute path,

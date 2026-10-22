@@ -110,6 +110,10 @@ std::optional<ThemeConfig> parse_config(std::string_view contents) {
   if (auto value = parse_color(read("desktop_color"))) config.desktop_color = *value;
   if (auto value = parse_color(read("panel_color"))) config.panel_color = *value;
   if (auto value = parse_color(read("accent_color"))) config.accent_color = *value;
+  if (auto value = read("window_border_style"); value == "classic" || value == "two-color")
+    config.window_border_style = std::move(value);
+  if (auto value = parse_color(read("window_border_outer_color"))) config.window_border_outer_color = *value;
+  if (auto value = parse_color(read("window_border_inner_color"))) config.window_border_inner_color = *value;
   if (auto value = read("ui_scale"); !value.empty()) {
     char* end = nullptr;
     const double scale = g_ascii_strtod(value.c_str(), &end);

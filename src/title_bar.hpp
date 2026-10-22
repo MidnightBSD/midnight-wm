@@ -5,6 +5,26 @@
 
 namespace midnight {
 
+// Draw two nested, pixel-aligned outlines inside the existing frame extents.
+// Callers use device pixels for WM frames and logical pixels for shell windows.
+inline void draw_window_outline(cairo_t* cr, double width, double height,
+                                double line_width, const ThemeConfig& theme) {
+  if (theme.window_border_style != "two-color" || line_width <= 0 ||
+      width < 4 * line_width || height < 4 * line_width) return;
+  cairo_save(cr);
+  cairo_set_fill_rule(cr, CAIRO_FILL_RULE_EVEN_ODD);
+  double inset = 0;
+  for (const auto& color : {theme.window_border_outer_color, theme.window_border_inner_color}) {
+    cairo_set_source_rgb(cr, color[0], color[1], color[2]);
+    cairo_rectangle(cr, inset, inset, width - 2 * inset, height - 2 * inset);
+    cairo_rectangle(cr, inset + line_width, inset + line_width,
+                    width - 2 * (inset + line_width), height - 2 * (inset + line_width));
+    cairo_fill(cr);
+    inset += line_width;
+  }
+  cairo_restore(cr);
+}
+
 // Keep the accent strongest behind the title, fading gently toward the controls.
 inline void draw_title_bar(cairo_t* cr, double x, double y, double width,
                            double height, const ThemeConfig& theme, bool active = true) {

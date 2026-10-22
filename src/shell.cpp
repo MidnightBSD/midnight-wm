@@ -2130,6 +2130,7 @@ struct Shell::Impl {
     paint(folder.window, folder.width, folder.height, [&](cairo_t* cr) {
       themed_fill(cr, config.surface_color, .73, .73, .73, 0, 0, folder.width, folder.height);
       bevel(cr, 0, 0, folder.width, folder.height);
+      draw_window_outline(cr, folder.width, folder.shaded ? 34 : folder.height, 1, config);
       draw_title_bar(cr, 4, 4, folder.width - 8, 26, config);
       text(cr, folder.trash ? "Trash" : basename(folder.path), 12, 7, folder.width - 90, 13, true, true);
       themed_fill(cr, config.surface_color, .73, .73, .73, folder.width - 54, 7, 20, 19);
