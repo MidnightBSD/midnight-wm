@@ -2022,11 +2022,11 @@ struct Shell::Impl {
       const auto launcher = trusted_launcher(items[i]);
       icon(cr, items[i], x + 14, y + 3,
            item_icon_surface(items[i], launcher ? &*launcher : nullptr));
-      // The folder icon is centered at x + 38; use the same center for its label.
+      // The icon is centered at x + 38; use the same center for its label.
       draw_text(cr, launcher ? launcher->name : items[i].object.title,
-                x + (on_desktop ? 2 : 0), y + 50, 76, 10,
+                x, y + 50, 76, 10,
                 selected == static_cast<int>(i) || on_desktop, false, config,
-                on_desktop ? PANGO_ALIGN_LEFT : PANGO_ALIGN_CENTER);
+                PANGO_ALIGN_CENTER);
     }
   }
 
