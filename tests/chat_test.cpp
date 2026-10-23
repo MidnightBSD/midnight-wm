@@ -51,6 +51,49 @@ int main(int argc, char** argv) {
     struct stat st{};
     require(stat((root / "data/threads.json").c_str(), &st) == 0 && (st.st_mode & 0777) == 0600, "History permissions");
     if (argc > 4) { g_object_unref(cancel); return 0; }
+    auto legacy = s; legacy.authenticate = true; legacy.token = "legacy-secret";
+    const auto profile_path = root / "profiles/settings.json";
+    save_settings(profile_path, legacy);
+    const auto legacy_bytes = midnight::read_private_state(profile_path, 16 * 1024 * 1024);
+    auto profiles = load_server_profiles(profile_path);
+    require(profiles.servers.size() == 1 && profiles.selected == profiles.servers[0].id &&
+        profiles.servers[0].settings.token == legacy.token && profiles.servers[0].settings.model == legacy.model,
+        "Legacy server migration lost settings");
+    require(midnight::read_private_state(profile_path, 16 * 1024 * 1024) == legacy_bytes,
+        "Loading legacy settings rewrote the file");
+    auto second = new_server_profile("Second server");
+    require(!second.settings.authenticate && second.settings.token.empty() && !second.settings.system_information,
+        "New server inherited credentials or tool permissions");
+    second.settings.url = "http://localhost/other/v1"; second.settings.port = 8080;
+    second.settings.model = "second-model"; second.settings.authenticate = true; second.settings.token = "second-secret";
+    second.settings.context = 16384; second.settings.system_information = true;
+    profiles.selected = second.id; profiles.servers.push_back(second);
+    save_server_profiles(profile_path, profiles);
+    const auto reloaded_profiles = load_server_profiles(profile_path);
+    require(reloaded_profiles.selected == second.id && reloaded_profiles.servers.size() == 2 &&
+        reloaded_profiles.servers[0].settings.token == "legacy-secret" &&
+        reloaded_profiles.servers[1].settings.token == "second-secret" &&
+        reloaded_profiles.servers[1].settings.port == 8080 && reloaded_profiles.servers[1].settings.model == "second-model" &&
+        reloaded_profiles.servers[1].settings.context == 16384 && reloaded_profiles.servers[1].settings.system_information,
+        "Server profile roundtrip lost or mixed settings");
+    const auto profile_bytes = midnight::read_private_state(profile_path, 16 * 1024 * 1024);
+    auto invalid = profiles; invalid.selected = "missing";
+    rejects([&] { save_server_profiles(profile_path, invalid); });
+    invalid = profiles; invalid.servers[1].id = invalid.servers[0].id;
+    rejects([&] { save_server_profiles(profile_path, invalid); });
+    invalid = profiles; invalid.servers[1].name = invalid.servers[0].name;
+    rejects([&] { save_server_profiles(profile_path, invalid); });
+    invalid = profiles; invalid.servers[1].name = "\n";
+    rejects([&] { save_server_profiles(profile_path, invalid); });
+    invalid = profiles; invalid.servers.clear();
+    rejects([&] { save_server_profiles(profile_path, invalid); });
+    invalid = profiles;
+    while (invalid.servers.size() <= max_servers)
+      invalid.servers.push_back(new_server_profile("Server " + std::to_string(invalid.servers.size())));
+    rejects([&] { save_server_profiles(profile_path, invalid); });
+    require(midnight::read_private_state(profile_path, 16 * 1024 * 1024) == profile_bytes,
+        "Invalid profile save overwrote the previous settings");
+    require(stat(profile_path.c_str(), &st) == 0 && (st.st_mode & 0777) == 0600, "Profile permissions");
     // The final reply at the boundary must remain readable. A further pending
     // turn must be rejected before either storage or generation changes it.
     Thread boundary; boundary.id = t.id;

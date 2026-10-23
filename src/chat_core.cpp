@@ -239,10 +239,8 @@ std::vector<std::string> models(const Settings& s, GCancellable* cancel) {
   result.erase(std::unique(result.begin(), result.end()), result.end());
   return result;
 }
-Settings load_settings(const std::filesystem::path& path) {
-  const auto data = read(path);
-  if (data.empty()) return {};
-  Document doc(data); auto* o = object(doc.root());
+namespace {
+Settings profile_settings(JsonObject* o) {
   Settings s;
   s.url = string(o, "url"); s.model = string(o, "model"); s.token = string(o, "token");
   s.port = number(o, "port", 0, 65535); s.context = number(o, "context", 2048, 131072);
@@ -266,16 +264,90 @@ Settings load_settings(const std::filesystem::path& path) {
   if (json_object_has_member(o, "search_token")) s.search_token = string(o, "search_token");
   validate(s); return s;
 }
-void save_settings(const std::filesystem::path& path, const Settings& s) {
-  validate(s);
-  Builder b; b.begin(); b.text("url", s.url); b.text("model", s.model);
+void profile_settings(Builder& b, const Settings& s) {
+  b.begin(); b.text("url", s.url); b.text("model", s.model);
   b.text("token", s.authenticate ? s.token : ""); b.boolean("authenticate", s.authenticate);
   b.integer("port", s.port); b.integer("context", s.context); b.integer("reply", s.reply);
   b.integer("tool_rounds", s.tool_rounds); b.integer("tool_calls", s.tool_calls); b.integer("request_timeout", s.request_timeout);
   b.boolean("file_search", s.file_search); b.boolean("system_information", s.system_information);
   b.boolean("package_queries", s.package_queries); b.boolean("web_search", s.web_search);
   b.text("search_provider", s.search_provider); b.text("search_url", s.search_url); b.text("search_token", s.search_token); b.end();
+}
+void validate_profiles(const ServerProfiles& profiles) {
+  if (profiles.servers.empty() || profiles.servers.size() > max_servers)
+    fail("Keep between 1 and 32 servers.");
+  bool selected = false;
+  for (std::size_t i = 0; i < profiles.servers.size(); ++i) {
+    const auto& server = profiles.servers[i];
+    if (!g_uuid_string_is_valid(server.id.c_str()) || server.name.empty() || server.name.size() > 128 ||
+        !g_utf8_validate(server.name.c_str(), server.name.size(), nullptr) ||
+        std::all_of(server.name.begin(), server.name.end(), [](unsigned char c) { return g_ascii_isspace(c); }) ||
+        std::any_of(server.name.begin(), server.name.end(), [](unsigned char c) { return c < 32 || c == 127; }))
+      fail("Enter a server name of 1–128 bytes without control characters.");
+    for (std::size_t j = 0; j < i; ++j)
+      if (profiles.servers[j].id == server.id || profiles.servers[j].name == server.name)
+        fail("Server names and IDs must be unique.");
+    selected |= profiles.selected == server.id;
+    validate(server.settings);
+  }
+  if (!selected) fail("The selected server is missing.");
+}
+}
+Settings load_settings(const std::filesystem::path& path) {
+  const auto data = read(path);
+  if (data.empty()) return {};
+  Document doc(data);
+  return profile_settings(object(doc.root()));
+}
+void save_settings(const std::filesystem::path& path, const Settings& s) {
+  validate(s);
+  Builder b; profile_settings(b, s);
   write(path, b.finish());
+}
+ServerProfile new_server_profile(const std::string& name) {
+  auto* id = g_uuid_string_random();
+  ServerProfile server{id, name, {}};
+  g_free(id);
+  return server;
+}
+ServerProfiles load_server_profiles(const std::filesystem::path& path) {
+  const auto data = read(path);
+  ServerProfiles profiles;
+  if (data.empty()) {
+    profiles.servers.push_back(new_server_profile("Local server"));
+    profiles.selected = profiles.servers.front().id;
+    return profiles;
+  }
+  Document doc(data); auto* root = object(doc.root());
+  if (!json_object_has_member(root, "servers")) {
+    // Legacy single-server settings are migrated only on the next explicit save.
+    auto server = new_server_profile("Local server");
+    server.settings = profile_settings(root);
+    profiles.selected = server.id;
+    profiles.servers.push_back(std::move(server));
+  } else {
+    (void)number(root, "version", 1, 1);
+    profiles.selected = string(root, "selected_server");
+    auto* servers = array(member(root, "servers"));
+    if (json_array_get_length(servers) > max_servers) fail("Too many servers (maximum 32).");
+    for (guint i = 0; i < json_array_get_length(servers); ++i) {
+      auto* server = object(json_array_get_element(servers, i));
+      profiles.servers.push_back({string(server, "id"), string(server, "name"),
+          profile_settings(object(member(server, "settings")))});
+    }
+  }
+  validate_profiles(profiles);
+  return profiles;
+}
+void save_server_profiles(const std::filesystem::path& path, const ServerProfiles& profiles) {
+  validate_profiles(profiles);
+  Builder b; b.begin(); b.integer("version", 1); b.text("selected_server", profiles.selected);
+  b.key("servers"); b.begin_array();
+  for (const auto& server : profiles.servers) {
+    b.begin(); b.text("id", server.id); b.text("name", server.name);
+    b.key("settings"); profile_settings(b, server.settings); b.end();
+  }
+  b.end_array(); b.end(); write(path, b.finish());
 }
 std::vector<Thread> load_threads(const std::filesystem::path& path) {
   const auto data = read(path);

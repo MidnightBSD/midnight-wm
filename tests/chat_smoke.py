@@ -40,10 +40,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(payload)
         except (BrokenPipeError, ConnectionResetError):
             pass
+    def audit(self, body=None):
+        if getattr(self.server, 'secondary', False):
+            assert self.headers.get('Authorization') == 'Bearer second-secret'
+            if body:
+                assert body['model'] == 'second-model' and 'tools' not in body
+        else:
+            assert self.headers.get('Authorization') is None
+        server_requests.append((getattr(self.server, 'secondary', False), body))
     def do_GET(self):
+        self.audit()
+        if getattr(self.server, 'secondary', False):
+            self.respond({'data': [{'id': 'second-model'}]})
+            return
         self.respond({'data': [{'id': args.model}, {'id': 'second-model'}]})
     def do_POST(self):
         data = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        self.audit(data)
         if data['messages'][-1]['content'] == 'slow request':
             time.sleep(3)
         if args.tools and data.get('tools') and data['messages'][-1]['role'] == 'user':
@@ -53,10 +66,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.respond({'choices': [{'message': {'content': 'Hello Robin. This is a chat reply.'}}]})
 
 server = None
+second_server = None
+server_requests = []
 if not args.live:
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     args.live = f'http://127.0.0.1:{server.server_port}/v1'
+    second_server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    second_server.secondary = True
+    threading.Thread(target=second_server.serve_forever, daemon=True).start()
 config = root / 'config/midnightbsd-chat'
 config.mkdir(mode=0o700)
 settings = config / 'settings.json'
@@ -111,7 +129,7 @@ try:
     time.sleep(1)
     # Inspect the actual populated dropdown visually in the saved screenshot.
     g = geometry(window)
-    run('xdotool', 'mousemove', str(g['X'] + g['WIDTH'] - 260), str(g['Y'] + 25), 'click', '1')
+    run('xdotool', 'mousemove', str(g['X'] + g['WIDTH'] - 260), str(g['Y'] + 60), 'click', '1')
     run('import', '-window', 'root', str(root / 'models.png'))
     key('Escape')
     focus_input(window)
@@ -133,7 +151,7 @@ try:
     until(lambda: len(threads()[0]['messages']) == 2, 'second conversation reply missing')
     # Switch to the older conversation through the sidebar.
     g = geometry(window)
-    run('xdotool', 'mousemove', str(g['X'] + 90), str(g['Y'] + 145), 'click', '1')
+    run('xdotool', 'mousemove', str(g['X'] + 90), str(g['Y'] + 185), 'click', '1')
     run('import', '-window', window, str(root / 'chat.png'))
     key('alt+e')
     dialog = until(lambda: visible('Chat Settings'), 'settings missing')
@@ -144,12 +162,50 @@ try:
         run('import', '-window', dialog, str(root / 'tools.png'))
     key('alt+s')
     until(lambda: not visible('Chat Settings'), 'settings did not save')
-    saved = json.loads(settings.read_text())
+    saved_profiles = json.loads(settings.read_text())
+    saved = next(item['settings'] for item in saved_profiles['servers'] if item['id'] == saved_profiles['selected_server'])
     assert saved['url'] == args.live
     assert saved['request_timeout'] == 1200
     assert saved['tool_rounds'] == 12 and saved['tool_calls'] == 24
     if args.tools:
-        assert json.loads(settings.read_text())['system_information'] is True
+        assert saved['system_information'] is True
+    if server:
+        # Add a distinct endpoint with its own credentials. Keep the selected
+        # conversation, then return to the original endpoint and model.
+        before = threads()
+        before_counts = {t['id']: len(t['messages']) for t in before}
+        key('alt+a')
+        dialog = until(lambda: visible('Add server'), 'Add server dialog missing', timeout=10)
+        key('alt+n'); key('ctrl+a'); type_text('Second server')
+        key('alt+u'); key('ctrl+a'); type_text('http://127.0.0.1/v1')
+        key('alt+p'); key('ctrl+a'); type_text(str(second_server.server_port))
+        key('alt+b'); key('alt+t'); type_text('second-secret')
+        key('alt+s')
+        until(lambda: not visible('Add server'), 'Adding server failed', timeout=10)
+        saved_profiles = json.loads(settings.read_text())
+        assert len(saved_profiles['servers']) == 2
+        assert threads() == before, 'Adding a server changed conversations'
+        key('alt+m'); key('ctrl+a'); type_text('second-model')
+        key('alt+r'); time.sleep(.5)
+        focus_input(window); type_text('Reply from second server'); key('ctrl+Return')
+        until(lambda: any(len(t['messages']) == before_counts[t['id']] + 2 for t in threads()),
+              'Second server reply missing', timeout=10)
+        assert any(secondary and body for secondary, body in server_requests)
+        key('alt+e')
+        until(lambda: visible('Chat Settings'), 'Server settings did not open', timeout=10)
+        key('alt+n'); key('ctrl+a'); type_text('Second renamed')
+        key('alt+s')
+        until(lambda: not visible('Chat Settings'), 'Renamed server did not save', timeout=10)
+        assert json.loads(settings.read_text())['servers'][1]['name'] == 'Second renamed'
+        key('alt+v'); key('Home'); key('Return')
+        until(lambda: json.loads(settings.read_text())['selected_server'] == saved_profiles['servers'][0]['id'],
+              'Original server was not selected', timeout=10)
+        before_counts = {t['id']: len(t['messages']) for t in threads()}
+        focus_input(window); type_text('Reply from original server'); key('ctrl+Return')
+        until(lambda: any(len(t['messages']) == before_counts[t['id']] + 2 for t in threads()),
+              'Original server model/credentials were not restored', timeout=10)
+        assert server_requests[-1][0] is False
+        run('import', '-window', window, str(root / 'servers.png'))
     if server:
         focus_input(window)
         type_text('slow request')
@@ -171,6 +227,25 @@ try:
     assert history.stat().st_mode & 0o777 == 0o600
     window = visible('Midnight Chat')
     run('xdotool', 'windowactivate', '--sync', window)
+    if server:
+        saved_profiles = json.loads(settings.read_text())
+        assert len(saved_profiles['servers']) == 2
+        requests_before = len(server_requests)
+        key('alt+r')
+        until(lambda: len(server_requests) > requests_before, 'Server selection failed after restart', timeout=10)
+        time.sleep(.5)
+        assert server_requests[-1][0] is False, 'Restart restored the wrong server'
+        key('alt+v'); key('End'); key('Return')
+        before = threads()
+        g = geometry(window)
+        run('xdotool', 'mousemove', str(g['X'] + g['WIDTH'] - 80), str(g['Y'] + 25), 'click', '1')
+        dialog = until(lambda: visible('Remove server'), 'Server removal confirmation missing', timeout=10)
+        run('xdotool', 'windowactivate', '--sync', dialog)
+        g = geometry(dialog)
+        run('xdotool', 'mousemove', str(g['X'] + g['WIDTH'] - 45), str(g['Y'] + g['HEIGHT'] - 22), 'click', '1')
+        until(lambda: len(json.loads(settings.read_text())['servers']) == 1, 'Server removal did not save', timeout=10)
+        assert threads() == before, 'Removing server changed conversations'
+        assert 'second-secret' not in settings.read_text(), 'Removed server credentials remain saved'
     key('alt+x')
     dialog = until(lambda: visible('Confirm conversation change'), 'confirmation missing', timeout=10)
     run('xdotool', 'windowactivate', '--sync', dialog)
@@ -186,7 +261,7 @@ try:
     run('import', '-window', dialog, str(root / 'confirmation.png'))
     run('xdotool', 'mousemove', str(g['X'] + g['WIDTH'] - 45), str(g['Y'] + g['HEIGHT'] - 22), 'click', '1')
     until(lambda: len(threads()) == 1, 'conversation deletion missing', timeout=10)
-    print('PASS: model refresh, chat, context, multiple threads, settings, persistence, reset, deletion, second WM rejection')
+    print('PASS: model refresh, chat, context, multiple threads, settings, server switching, persistence, reset, deletion, second WM rejection')
     print('Artifacts:', root)
 finally:
     for process in reversed(processes):
@@ -199,6 +274,9 @@ finally:
                 process.wait()
     xvfb.terminate()
     xvfb.wait(timeout=10)
+    if second_server:
+        second_server.shutdown()
+        second_server.server_close()
     if server:
         server.shutdown()
         server.server_close()

@@ -11,6 +11,15 @@
 .Sh DESCRIPTION
 .Nm
 provides saved conversations with an OpenAI-compatible chat endpoint.
+Select a saved server using the Server dropdown. Add server creates a named
+profile; Settings edits the selected profile, and Remove server deletes it
+after confirmation. Keep between 1 and 32 profiles. Each profile remembers its
+endpoint, optional bearer token, model, context and reply limits, request
+deadline, and tool settings. New profiles have authentication and tools disabled.
+Existing single-server settings migrate to the first profile on the next save.
+Switching preserves the current conversation and draft; subsequent requests
+send that conversation's context to the selected server. Switching is disabled
+while a request runs. Removing a server does not delete conversations.
 Choose Settings to configure an HTTP or HTTPS base URL, port, optional bearer
 token, and context and reply token limits.
 The default endpoint is http://localhost/v1 on port 11434 (Ollama).

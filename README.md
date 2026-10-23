@@ -45,6 +45,18 @@ servers. Optional tools provide bounded, read-only information for a chat; there
 is no general-purpose command execution or autonomous agent. Building
 it requires `libsoup-3.0`, `json-glib-1.0`, and SQLite 3 in addition to GTK 3.
 
+Use the **Server** selector to switch between saved local or LAN servers.
+**Add server** creates a named profile; **Settings** edits the selected profile,
+and **Remove server** removes it after confirmation. At least one server remains;
+up to 32 profiles are supported. Each profile has its own endpoint, optional
+bearer token, model, context/reply limits, request deadline, and tool settings.
+New profiles start with authentication and tools disabled. Your existing
+single-server settings become the first profile without losing their values.
+Switching keeps the current conversation and draft; subsequent messages and
+conversation context go to the selected server. Switching is disabled while a
+request is running. Each server remembers its model; refresh its model list
+when needed. Removing a server leaves conversations intact.
+
 In **Settings**, enter a base URL (normally `http://localhost/v1`) and port:
 11434 for Ollama or 8080 for llama.cpp. Port 0 uses the port in the URL or its
 scheme default. Authentication is off by default; enable it for an optional
@@ -56,7 +68,7 @@ and [llama.cpp server API](https://github.com/ggml-org/llama.cpp/blob/master/too
 Conversations appear on the left. **Ctrl+Enter** sends; Enter adds a newline.
 **Stop** cancels generation. **Send / Retry** with an empty input retries an
 unanswered message; replacement text edits that pending message. Replies appear
-when generation completes. Requests have a three-minute deadline and run off
+when generation completes. Requests have a configurable deadline and run off
 the UI thread. You can switch conversations while waiting; drafts stay with
 their conversation for the lifetime of the application.
 
@@ -108,7 +120,7 @@ Long result previews are explicitly truncated to fit the remaining context;
 compaction includes saved tool results with their conversation turns. Models
 that do not support tools can still be used with all tool switches disabled.
 
-Settings (including any token) are stored in
+Server profiles and the selected server (including any tokens) are stored in
 `$XDG_CONFIG_HOME/midnightbsd-chat/settings.json`, and transcripts and summaries
 in `$XDG_DATA_HOME/midnightbsd-chat/conversations.json`. Defaults are `~/.config`
 and `~/.local/share`. Directories are private (0700), files are private (0600),
