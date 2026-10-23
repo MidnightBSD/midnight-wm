@@ -47,6 +47,13 @@ Settings load_settings(const std::filesystem::path& path);
 void save_settings(const std::filesystem::path& path, const Settings& settings);
 std::vector<Thread> load_threads(const std::filesystem::path& path);
 void save_threads(const std::filesystem::path& path, const std::vector<Thread>& threads);
+struct ContextInfo {
+  int tokens{};
+  std::string source;
+};
+// Best-effort, bounded discovery. The configured context remains an upper bound.
+ContextInfo context_limit(const Settings& settings, GCancellable* cancel);
+Thread compact(const Settings& settings, Thread thread, GCancellable* cancel, ContextInfo* info = nullptr);
 // Runs off the GTK thread. Updates a copy, committing summaries only on success.
-Thread complete(const Settings& settings, Thread thread, GCancellable* cancel);
+Thread complete(const Settings& settings, Thread thread, GCancellable* cancel, ContextInfo* info = nullptr);
 }

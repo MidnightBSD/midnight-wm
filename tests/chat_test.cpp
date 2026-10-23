@@ -51,6 +51,58 @@ int main(int argc, char** argv) {
     struct stat st{};
     require(stat((root / "data/threads.json").c_str(), &st) == 0 && (st.st_mode & 0777) == 0600, "History permissions");
     if (argc > 4) { g_object_unref(cancel); return 0; }
+    // Discovery is scoped to the selected model and can only lower the cap.
+    auto discovered = s; discovered.context = 16384; discovered.model = "fixture-running";
+    auto limit = context_limit(discovered, cancel);
+    require(limit.tokens == 3072 && limit.source == "Ollama running model", "Runtime allocation not detected");
+    discovered.context = 2048;
+    require(context_limit(discovered, cancel).tokens == 2048, "Discovery raised the configured cap");
+    discovered.context = 16384; discovered.model = "fixture-metadata";
+    require(context_limit(discovered, cancel).tokens == 4096, "Gateway metadata not detected");
+    discovered.model = "fixture-invalid";
+    require(context_limit(discovered, cancel).tokens == 16384, "Malformed metadata accepted");
+    discovered.model = "fixture-unloaded";
+    require(context_limit(discovered, cancel).tokens == 16384, "Unrelated running model affected limit");
+    discovered.model = "fixture-running";
+    discovered.url = std::string(argv[1]);
+    discovered.url.insert(discovered.url.rfind("/v1"), "/proxy");
+    require(context_limit(discovered, cancel).tokens == 3072, "Reverse proxy prefix lost");
+    Thread early; early.id = t.id;
+    for (int i = 0; i < 3; ++i) {
+      early.messages.push_back({"user", std::string(150, 'u')});
+      early.messages.push_back({"assistant", std::string(150, 'a')});
+    }
+    early.messages.push_back({"user", "Continue, Robin"});
+    auto small = s; small.context = 8192; small.model = "fixture-small";
+    ContextInfo info;
+    auto packed = complete(small, early, cancel, &info);
+    require(info.tokens == 2048 && packed.compacted > 0, "Did not compact before the discovered limit");
+    require(packed.compacted <= 4 && packed.messages[4].text == early.messages[4].text,
+        "Compaction failed to preserve newest complete turn");
+    // This input fits the hard budget but exceeds the early trigger.
+    auto configured_small = s; configured_small.context = 2048;
+    require(complete(configured_small, early, cancel).compacted > 0, "Early compaction trigger failed");
+    auto manual = early; manual.messages.pop_back();
+    auto compacted = compact(s, manual, cancel);
+    require(compacted.compacted == 4 && compacted.messages.size() == manual.messages.size() &&
+        compacted.messages.back().text == manual.messages.back().text, "Manual compaction lost latest turn/transcript");
+    // An old turn larger than the entire window must be folded in UTF-8 safe chunks.
+    auto huge = early;
+    huge.messages[0].text.clear();
+    for (int i = 0; i < 1800; ++i) huge.messages[0].text += "海";
+    huge.messages[1].tools.push_back({"old_tool", "system_information", "{}", std::string(3000, 'T')});
+    const auto original = huge.messages[0].text;
+    auto chunked = complete(small, huge, cancel);
+    require(chunked.compacted >= 2 && chunked.messages[0].text == original &&
+        chunked.messages[1].tools[0].result.size() == 3000, "Oversized old turn was lost or not compacted");
+    auto stopping = s; stopping.model = "fixture-cancel";
+    std::thread compact_stopper([&] { std::this_thread::sleep_for(std::chrono::milliseconds(100)); g_cancellable_cancel(cancel); });
+    rejects([&] { compact(stopping, manual, cancel); }); compact_stopper.join();
+    require(manual.compacted == 0 && manual.summary.empty(), "Cancelled compaction changed original history");
+    g_cancellable_reset(cancel);
+    stopping.model = "fixture-fail";
+    rejects([&] { compact(stopping, manual, cancel); });
+    require(manual.compacted == 0 && manual.summary.empty(), "Failed compaction changed original history");
     auto legacy = s; legacy.authenticate = true; legacy.token = "legacy-secret";
     const auto profile_path = root / "profiles/settings.json";
     save_settings(profile_path, legacy);

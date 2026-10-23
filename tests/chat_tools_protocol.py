@@ -20,6 +20,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
     def do_GET(self):
+        if self.path != '/search' and not self.path.startswith('/search?'):
+            self.respond({'data': [], 'models': []})
+            return
         query = urllib.parse.urlparse(self.path)
         seen.append(('search', self.headers.get('Authorization'), self.headers.get('X-Subscription-Token'), urllib.parse.parse_qs(query.query)['q'][0]))
         assert query.path == '/search'
@@ -33,7 +36,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         assert 'model-secret' not in json.dumps(request)
         if messages[0]['content'].startswith('Summarize'):
             assert 'tools' not in request
-            assert 'Tool system_information' in messages[-1]['content']
+            assert 'Conversation fragment:' in messages[-1]['content']
             self.respond({'choices': [{'message': {'content': 'Earlier tools reported desktop system data and example web results.'}}]})
             return
         tools = [m for m in messages if m['role'] == 'tool']
@@ -86,6 +89,8 @@ threading.Thread(target=server.serve_forever, daemon=True).start()
 try:
     with tempfile.TemporaryDirectory(prefix='chat-tools-') as root:
         subprocess.run([sys.argv[1], 'http://127.0.0.1', str(server.server_port), root], check=True, timeout=45)
+    summaries = [row[1] for row in seen if row[0] == 'chat' and row[1]['messages'][0]['content'].startswith('Summarize')]
+    assert summaries and any('Tool system_information' in row['messages'][-1]['content'] for row in summaries)
     repeat_start = next(i for i, row in enumerate(seen) if row[0] == 'chat' and row[1]['model'] == 'fixture-repeat')
     assert sum(row[0] == 'search' for row in seen[repeat_start:]) == 1
     assert all(row[1] is None and row[2] is None for row in seen if row[0] == 'search')
