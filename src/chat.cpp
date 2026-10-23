@@ -100,10 +100,15 @@ struct Chat {
     gtk_widget_show_all(list); rebuilding = false; render();
   }
   void select(const std::string& id) {
-    if (!selected.empty()) drafts[selected] = contents(input);
+    if (current()) {
+      auto text = contents(input);
+      if (text.empty()) drafts.erase(selected);
+      else drafts[selected] = std::move(text);
+    }
     selected = id;
-    const auto& text = drafts[id];
-    gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(input)), text.c_str(), text.size());
+    const auto draft = drafts.find(id);
+    gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(input)),
+        draft == drafts.end() ? "" : draft->second.c_str(), -1);
   }
   void new_thread() {
     if (!history_ok) return;
@@ -121,7 +126,8 @@ struct Chat {
     if (!current() || selected == active || !confirm("Delete this conversation and its saved transcript?")) return;
     const auto old = threads;
     std::erase_if(threads, [&](const auto& t) { return t.id == selected; });
-    if (!persist()) threads = old;
+    if (!persist()) { threads = old; return; }
+    drafts.erase(selected);
     select(threads.empty() ? "" : threads.front().id); rebuild();
   }
   void reset_context() {
@@ -142,6 +148,9 @@ struct Chat {
       const auto text = contents(input);
       const bool pending = t->messages.size() % 2 != 0;
       if (text.empty() && !pending) return;
+      if (!pending && t->messages.size() >= max_thread_messages) {
+        message("Conversation message limit reached. Start a new conversation."); return;
+      }
       if (text.size() > 256 * 1024) { message("Message exceeds 256 KiB. Shorten it before sending."); return; }
       if (settings.model.empty()) { message("Choose a model or refresh the model list first."); return; }
       const auto old = *t;

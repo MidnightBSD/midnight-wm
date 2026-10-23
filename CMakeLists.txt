@@ -305,6 +305,13 @@ add_test(NAME bluetooth_test COMMAND bluetooth_test $<TARGET_FILE:bluetooth_fixt
 
 add_executable(chat_test tests/chat_test.cpp)
 target_link_libraries(chat_test PRIVATE midnight_chat Threads::Threads)
+if(XVFB AND Python3_Interpreter_FOUND AND DBUS_RUN_SESSION)
+  add_executable(chat_lifecycle_test tests/chat_lifecycle_test.cpp)
+  target_link_libraries(chat_lifecycle_test PRIVATE midnight_chat PkgConfig::GTK3)
+  add_test(NAME chat_lifecycle_test COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests/chat_lifecycle_test.py $<TARGET_FILE:chat_lifecycle_test>)
+  set_tests_properties(chat_lifecycle_test PROPERTIES TIMEOUT 60)
+endif()
 if(Python3_Interpreter_FOUND)
   add_test(NAME chat_protocol_test COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/tests/chat_protocol_test.py $<TARGET_FILE:chat_test>)

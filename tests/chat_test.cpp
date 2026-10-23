@@ -51,6 +51,25 @@ int main(int argc, char** argv) {
     struct stat st{};
     require(stat((root / "data/threads.json").c_str(), &st) == 0 && (st.st_mode & 0777) == 0600, "History permissions");
     if (argc > 4) { g_object_unref(cancel); return 0; }
+    // The final reply at the boundary must remain readable. A further pending
+    // turn must be rejected before either storage or generation changes it.
+    Thread boundary; boundary.id = t.id;
+    for (std::size_t i = 0; i < max_thread_messages - 1; ++i)
+      boundary.messages.push_back({i % 2 ? "assistant" : "user", "x"});
+    boundary.compacted = max_thread_messages - 2;
+    boundary.summary = "Earlier conversation.";
+    boundary = complete(s, std::move(boundary), cancel);
+    require(boundary.messages.size() == max_thread_messages, "Final allowed reply was rejected");
+    const auto boundary_path = root / "data/boundary.json";
+    save_threads(boundary_path, {boundary});
+    require(load_threads(boundary_path)[0].messages.size() == max_thread_messages, "Boundary history cannot reload");
+    const auto saved_boundary = midnight::read_private_state(boundary_path, 16 * 1024 * 1024);
+    require(saved_boundary && saved_boundary->has_value(), "Read boundary snapshot");
+    boundary.messages.push_back({"user", "Another turn"});
+    rejects([&] { save_threads(boundary_path, {boundary}); });
+    const auto unchanged = midnight::read_private_state(boundary_path, 16 * 1024 * 1024);
+    require(unchanged && *unchanged == *saved_boundary, "Rejected save overwrote valid history");
+    rejects([&] { complete(s, boundary, cancel); });
     s.authenticate = true; s.token = "fixture-secret";
     require(!models(s, cancel).empty(), "Authenticated discovery");
     t.messages.push_back({"user", "Say hello"}); t = complete(s, t, cancel);
