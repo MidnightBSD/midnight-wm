@@ -88,7 +88,7 @@ class ConfigReload {
     const auto path = std::filesystem::path(g_get_user_config_dir()) / "midnight-wm/config.ini";
     std::ifstream input(path, std::ios::binary);
     if (!input) return std::nullopt;
-    constexpr std::size_t limit = 1024 * 1024;
+    constexpr auto limit = midnight::max_config_size;
     std::string contents(limit + 1, '\0');
     input.read(contents.data(), contents.size());
     const auto length = input.gcount();

@@ -3,11 +3,15 @@
 #include "shortcuts.hpp"
 
 #include <array>
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <optional>
 
 namespace midnight {
+
+// Keep Settings saves within the live configuration reload bound.
+inline constexpr std::size_t max_config_size = 1024 * 1024;
 
 // Wallpaper used when desktop_image is absent, from midnightbsd-backgrounds.
 inline constexpr const char* default_desktop_image = "mnbsd_bg_purple.png";

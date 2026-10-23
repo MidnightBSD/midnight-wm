@@ -274,6 +274,8 @@ class Settings {
       auto* details = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
       auto* name = gtk_label_new(application.name.c_str());
       gtk_label_set_xalign(GTK_LABEL(name), 0);
+      gtk_label_set_ellipsize(GTK_LABEL(name), PANGO_ELLIPSIZE_END);
+      gtk_widget_set_tooltip_text(name, application.name.c_str());
       auto* command = gtk_label_new((application.command + "  ·  " +
           (application.user_entry ? "User" : "System")).c_str());
       gtk_label_set_xalign(GTK_LABEL(command), 0);
@@ -359,19 +361,34 @@ class Settings {
   }
 
   bool read_file(std::string& text, bool& exists, std::string& message) const {
-    gchar* contents = nullptr;
-    gsize size = 0;
+    std::unique_ptr<GFile, decltype(&g_object_unref)> source(
+        g_file_new_for_path(path_.c_str()), g_object_unref);
     GError* error = nullptr;
-    if (!g_file_get_contents(path_.c_str(), &contents, &size, &error)) {
+    std::unique_ptr<GFileInputStream, decltype(&g_object_unref)> input(
+        g_file_read(source.get(), nullptr, &error), g_object_unref);
+    if (!input) {
       exists = false;
-      if (g_error_matches(error, G_FILE_ERROR, G_FILE_ERROR_NOENT)) { g_error_free(error); text.clear(); return true; }
+      if (g_error_matches(error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND)) { g_error_free(error); text.clear(); return true; }
       message = error->message;
       g_error_free(error);
       return false;
     }
     exists = true;
-    text.assign(contents, size);
-    g_free(contents);
+    // Read one byte beyond the limit to detect growth without loading an
+    // arbitrarily large file, including one replaced while Settings is open.
+    std::string contents(midnight::max_config_size + 1, '\0');
+    gsize size = 0;
+    if (!g_input_stream_read_all(G_INPUT_STREAM(input.get()), contents.data(), contents.size(),
+            &size, nullptr, &error)) {
+      message = error->message;
+      g_error_free(error);
+      return false;
+    }
+    if (size > midnight::max_config_size) {
+      message = "The settings file exceeds the 1 MiB limit. Shorten it and reopen Settings.";
+      return false;
+    }
+    text.assign(contents.data(), size);
     return true;
   }
   std::string string(const char* group, const char* key, const char* fallback) const {
@@ -667,6 +684,11 @@ class Settings {
       }
       gsize length = 0;
       auto* data = g_key_file_to_data(updated.get(), &length, nullptr);
+      if (length > midnight::max_config_size) {
+        g_free(data);
+        fail("These changes exceed the 1 MiB settings limit. No changes were saved.");
+        return;
+      }
       if (g_mkdir_with_parents(path_.parent_path().c_str(), 0700) != 0) {
         g_free(data);
         fail("Could not create the settings directory.");

@@ -238,14 +238,23 @@ def session(args):
             time.sleep(0.2)
             run("import", "-window", "root", str(output / "startup-applications.png"))
             run("xdotool", "key", "--clearmodifiers", "alt+n")
-            run("xdotool", "type", "--clearmodifiers", "Smoke startup")
+            startup_name = "Smoke startup " + "A" * (200 - len("Smoke startup "))
+            run("xdotool", "type", "--clearmodifiers", "--delay", "0", startup_name)
             run("xdotool", "key", "--clearmodifiers", "alt+c")
             run("xdotool", "type", "--clearmodifiers", "/usr/bin/true")
             run("xdotool", "key", "--clearmodifiers", "alt+r")
             autostart = Path(os.environ["XDG_CONFIG_HOME"]) / "autostart"
-            until(lambda: any("Name=Smoke startup" in path.read_text()
+            until(lambda: any(f"Name={startup_name}" in path.read_text()
                               for path in autostart.glob("midnight-*.desktop")),
                   "Startup applications page did not create an XDG autostart entry")
+            time.sleep(0.2)
+            x, y = window_position(settings)
+            width, height = geometry(settings)
+            left, right, top, bottom = frame_extents(settings)
+            assert x - left >= 0 and y - top >= 30 and \
+                x + width + right <= 1280 and y + height + bottom <= 720, \
+                "Long startup name pushed Settings controls outside the screen"
+            run("import", "-window", "root", str(output / "startup-long-name.png"))
             run("xdotool", "key", "--clearmodifiers", "ctrl+Page_Down")
             time.sleep(0.2)
             run("import", "-window", "root", str(output / "keyboard-shortcuts.png"))
@@ -309,9 +318,10 @@ def session(args):
             atomic_write(config, changed.replace("ui_scale=1.25", "ui_scale=1.0"))
             until(lambda: geometry(panel) == (1280, 30), "reload did not recover after malformed config")
             assert wm.poll() is None, "reload restarted or exited the original WM process"
+            check_config_size_limits(args, config)
             (output / "windows.txt").write_text(window_tree())
             print("Settings menu launch, wallpaper chooser bounds, Apply, preservation, live borders/color/scale, "
-                  "and malformed-config recovery passed.")
+                  "long startup names, config size limits, and malformed-config recovery passed.")
         finally:
             wm.terminate()
             try:
@@ -325,12 +335,71 @@ def settings_window():
     return visible_window("Midnight Workspace Settings")
 
 
-def apply_ui(window):
+def check_config_size_limits(args, config):
+    limit = 1024 * 1024
+    tail = "[Workspace]\nui_scale=1.0\npanel_label=Midnight\n"
+    def snapshot(size):
+        return "#" + "x" * (size - len(tail) - 2) + "\n" + tail
+
+    def clients():
+        return set(re.findall(r"0x[0-9a-fA-F]+", run("xprop", "-root", "_NET_CLIENT_LIST")))
+
+    # An oversized input must remain untouched, even when Apply is attempted.
+    # At the exact bound, editing is allowed but a larger output must be rejected.
+    # A smaller valid file must still save normally.
+    for name, size in (("oversized", limit + 1), ("save-overflow", limit),
+                       ("near-limit", limit - 512), ("missing", None)):
+        original = snapshot(size) if size is not None else ""
+        if size is None:
+            config.unlink()
+        else:
+            atomic_write(config, original)
+        with (args.output / f"{name}-settings.log").open("w") as log:
+            app = subprocess.Popen([str(args.binary.parent / "midnightbsd-settings")],
+                                   stdout=log, stderr=subprocess.STDOUT)
+            try:
+                window = until(settings_window, f"Settings did not open for {name}")
+                until(lambda: frame_extents(window), "Settings was not managed")
+                before = clients()
+                # With the notebook disabled, Close retains keyboard focus;
+                # avoid a space key activating that button during this attempt.
+                label = "BoundaryTest" if name == "oversized" else "Boundary test "
+                apply_ui(window, label + "B" * 100)
+                if name == "save-overflow":
+                    until(lambda: clients() - before, "Oversized save did not show an error dialog")
+                    assert config.read_text() == original, "Oversized save changed the config"
+                    run("import", "-window", "root", str(args.output / f"{name}.png"))
+                    run("xdotool", "key", "--clearmodifiers", "Escape")
+                    until(lambda: clients() == before, "Size error dialog did not close")
+                elif name == "oversized":
+                    time.sleep(0.2)
+                    assert config.read_text() == original, "Settings overwrote oversized input"
+                    run("import", "-window", "root", str(args.output / f"{name}.png"))
+                else:
+                    until(lambda: config.exists() and "panel_label=Boundary test " in config.read_text(),
+                          "Settings rejected a valid file below the size limit")
+                    assert config.stat().st_size <= limit, "Settings saved beyond the reload bound"
+                run("xdotool", "windowactivate", "--sync", window)
+                run("xdotool", "key", "--clearmodifiers", "alt+F4")
+                app.wait(timeout=5)
+                assert app.returncode == 0, f"Settings crashed during {name}"
+                until(lambda: settings_window() is None, "Settings did not close")
+            finally:
+                if app.poll() is None:
+                    app.terminate()
+                    try:
+                        app.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        app.kill()
+                        app.wait(timeout=5)
+
+
+def apply_ui(window, label="Smoke test"):
     run("xdotool", "windowactivate", "--sync", window)
     run("xdotool", "key", "--clearmodifiers", "ctrl+Page_Down")
     run("xdotool", "key", "--clearmodifiers", "alt+m")
     run("xdotool", "key", "--clearmodifiers", "ctrl+a")
-    run("xdotool", "type", "--clearmodifiers", "Smoke test")
+    run("xdotool", "type", "--clearmodifiers", "--delay", "0", label)
     run("xdotool", "key", "--clearmodifiers", "alt+a")
 
 
