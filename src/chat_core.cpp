@@ -291,9 +291,9 @@ std::vector<Thread> load_threads(const std::filesystem::path& path) {
     t.id = string(o, "id"); t.title = string(o, "title"); t.summary = string(o, "summary");
     if (!g_uuid_string_is_valid(t.id.c_str()) || t.title.size() > 256 || t.summary.size() > 32768 ||
         std::any_of(result.begin(), result.end(), [&](const auto& prev) { return prev.id == t.id; })) fail("Invalid conversation metadata");
-    t.compacted = number(o, "compacted", 0, 100000);
+    t.compacted = number(o, "compacted", 0, max_thread_messages);
     auto* messages = array(member(o, "messages"));
-    if (json_array_get_length(messages) > 100000) fail("Too many messages");
+    if (json_array_get_length(messages) > max_thread_messages) fail("Too many messages");
     for (guint j = 0; j < json_array_get_length(messages); ++j) {
       auto* m = object(json_array_get_element(messages, j));
       Message message{string(m, "role"), string(m, "content")};
@@ -319,6 +319,9 @@ std::vector<Thread> load_threads(const std::filesystem::path& path) {
 }
 void save_threads(const std::filesystem::path& path, const std::vector<Thread>& threads) {
   if (threads.size() > 1000) fail("Conversation limit reached (1000).");
+  if (std::any_of(threads.begin(), threads.end(), [](const auto& t) {
+        return t.messages.size() > max_thread_messages;
+      })) fail("Conversation message limit reached (100000). Start a new conversation.");
   Builder b; b.begin(); b.integer("version", 1); b.key("threads"); b.begin_array();
   for (const auto& t : threads) {
     b.begin(); b.text("id", t.id); b.text("title", t.title); b.text("summary", t.summary); b.integer("compacted", t.compacted);
@@ -343,6 +346,8 @@ Thread complete(const Settings& s, Thread t, GCancellable* cancel) {
   if (s.model.empty()) fail("Set the model name in Settings first.");
   if (t.messages.empty() || t.messages.back().role != "user" || t.compacted > t.messages.size() || t.compacted % 2)
     fail("No pending user message.");
+  if (t.messages.size() >= max_thread_messages)
+    fail("Conversation message limit reached (100000). Start a new conversation.");
   const auto schema_cost = tools_enabled(s) ? tool_definitions(s).size() + 128 : 0;
   if (schema_cost + 512 >= static_cast<std::size_t>(s.context - s.reply)) fail("Context is too small for enabled tools. Increase it or disable some tools.");
   const auto budget = static_cast<std::size_t>(s.context - s.reply) - schema_cost - 256;

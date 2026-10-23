@@ -2,11 +2,14 @@
 // SPDX-License-Identifier: BSD-2-Clause
 #pragma once
 #include <gio/gio.h>
+#include <cstddef>
 #include <filesystem>
 #include <string>
 #include <vector>
 
 namespace midnight::chat {
+inline constexpr std::size_t max_thread_messages = 100000;
+
 struct Settings {
   std::string url{"http://localhost/v1"}, model, token;
   int port{11434}, context{8192}, reply{1024};
