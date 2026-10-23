@@ -30,13 +30,16 @@ struct Chat {
   std::filesystem::path settings_path{std::filesystem::path(g_get_user_config_dir()) / "midnightbsd-chat/settings.json"};
   std::filesystem::path history_path{std::filesystem::path(g_get_user_data_dir()) / "midnightbsd-chat/conversations.json"};
   Settings settings;
+  ServerProfiles profiles;
+  GtkWidget *server{}, *add_server{}, *remove_server{};
+  bool selecting_server{};
   std::vector<Thread> threads;
   std::string selected, active;
   std::unordered_map<std::string, std::string> drafts;
   guint deadline{};
   bool timed_out{};
   GCancellable* cancellable{};
-  bool history_ok{true}, settings_ok{true}, rebuilding{};
+  bool history_ok{true}, settings_ok{true}, rebuilding{}, startup_failed{};
   ~Chat() { if (cancellable) g_object_unref(cancellable); }
   Thread* current() {
     auto it = std::find_if(threads.begin(), threads.end(), [&](const auto& t) { return t.id == selected; });
@@ -52,9 +55,68 @@ struct Chat {
     try { save_threads(history_path, threads); return true; }
     catch (const std::exception& e) { message(std::string("Could not save conversations: ") + e.what()); return false; }
   }
+  static ServerProfile& chosen(ServerProfiles& profiles) {
+    auto it = std::find_if(profiles.servers.begin(), profiles.servers.end(),
+        [&](const auto& item) { return item.id == profiles.selected; });
+    if (it == profiles.servers.end()) throw std::runtime_error("The selected server is missing.");
+    return *it;
+  }
+  ServerProfiles edited_profiles() const {
+    auto next = profiles;
+    chosen(next).settings = settings;
+    chosen(next).settings.model = gtk_entry_get_text(GTK_ENTRY(gtk_bin_get_child(GTK_BIN(model))));
+    return next;
+  }
+  void refresh_servers() {
+    selecting_server = true;
+    gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(server));
+    for (const auto& item : profiles.servers)
+      gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(server), item.id.c_str(), item.name.c_str());
+    gtk_combo_box_set_active_id(GTK_COMBO_BOX(server), profiles.selected.c_str());
+    selecting_server = false;
+  }
+  void commit_profiles(ServerProfiles next) {
+    save_server_profiles(settings_path, next);
+    profiles = std::move(next); settings = chosen(profiles).settings;
+    refresh_servers();
+    gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(model));
+    gtk_entry_set_text(GTK_ENTRY(gtk_bin_get_child(GTK_BIN(model))), settings.model.c_str());
+    sensitivity();
+  }
+  void switch_server(const std::string& id) {
+    if (id == profiles.selected) return;
+    if (cancellable || !settings_ok) {
+      selecting_server = true;
+      gtk_combo_box_set_active_id(GTK_COMBO_BOX(server), profiles.selected.c_str());
+      selecting_server = false; return;
+    }
+    try {
+      auto next = edited_profiles(); next.selected = id;
+      commit_profiles(std::move(next));
+      message("Server selected. Send uses this server for the current conversation; Refresh models lists its models.");
+    } catch (const std::exception& error) {
+      selecting_server = true;
+      gtk_combo_box_set_active_id(GTK_COMBO_BOX(server), profiles.selected.c_str());
+      selecting_server = false; message(error.what());
+    }
+  }
+  void delete_server() {
+    if (cancellable || !settings_ok || profiles.servers.size() <= 1 ||
+        !confirm("Remove this server and its saved credentials? Conversations will remain.", "Remove server")) return;
+    try {
+      auto next = profiles;
+      std::erase_if(next.servers, [&](const auto& item) { return item.id == next.selected; });
+      next.selected = next.servers.front().id;
+      commit_profiles(std::move(next));
+      message("Server removed. The current conversation and draft are unchanged.");
+    } catch (const std::exception& error) { error_dialog(error.what()); }
+  }
   void sensitivity() {
     if (!window) return;
     const bool busy = cancellable != nullptr;
+    gtk_widget_set_sensitive(server, settings_ok && !busy);
+    gtk_widget_set_sensitive(add_server, settings_ok && !busy && profiles.servers.size() < max_servers);
+    gtk_widget_set_sensitive(remove_server, settings_ok && !busy && profiles.servers.size() > 1);
     gtk_widget_set_sensitive(send, history_ok && !busy && current());
     gtk_widget_set_sensitive(stop, busy);
     gtk_widget_set_sensitive(refresh, settings_ok && !busy);
@@ -117,9 +179,9 @@ struct Chat {
     if (!persist()) { threads.erase(threads.begin()); select(previous); }
     rebuild(); gtk_widget_grab_focus(input);
   }
-  bool confirm(const char* text) {
+  bool confirm(const char* text, const char* title = "Confirm conversation change") {
     auto* d = gtk_message_dialog_new(GTK_WINDOW(window), GTK_DIALOG_MODAL, GTK_MESSAGE_QUESTION, GTK_BUTTONS_OK_CANCEL, "%s", text);
-    gtk_window_set_title(GTK_WINDOW(d), "Confirm conversation change");
+    gtk_window_set_title(GTK_WINDOW(d), title);
     const auto result = gtk_dialog_run(GTK_DIALOG(d)); gtk_widget_destroy(d); return result == GTK_RESPONSE_OK;
   }
   void delete_thread() {
@@ -139,8 +201,10 @@ struct Chat {
   }
   void start(bool listing) {
     if (cancellable || !settings_ok || (!listing && !history_ok)) return;
-    settings.model = gtk_entry_get_text(GTK_ENTRY(gtk_bin_get_child(GTK_BIN(model))));
-    try { save_settings(settings_path, settings); }
+    try {
+      auto next = edited_profiles(); save_server_profiles(settings_path, next);
+      profiles = std::move(next); settings = chosen(profiles).settings;
+    }
     catch (const std::exception& e) { message(e.what()); return; }
     auto job = std::make_unique<Job>(); job->settings = settings; job->listing = listing;
     if (!listing) {
@@ -214,8 +278,18 @@ struct Chat {
     });
     g_object_unref(task);
   }
-  void configure() {
-    auto* dialog = gtk_dialog_new_with_buttons("Chat Settings", GTK_WINDOW(window), GTK_DIALOG_MODAL,
+  void configure(bool adding = false) {
+    if (cancellable || !settings_ok || (adding && profiles.servers.size() >= max_servers)) return;
+    auto edited = edited_profiles();
+    const auto initial = adding ? Settings{} : chosen(edited).settings;
+    std::string initial_name;
+    if (adding) {
+      int index = 1;
+      do { initial_name = "Server " + std::to_string(index++); }
+      while (std::any_of(profiles.servers.begin(), profiles.servers.end(),
+          [&](const auto& item) { return item.name == initial_name; }));
+    } else initial_name = chosen(edited).name;
+    auto* dialog = gtk_dialog_new_with_buttons(adding ? "Add server" : "Chat Settings", GTK_WINDOW(window), GTK_DIALOG_MODAL,
         "_Cancel", GTK_RESPONSE_CANCEL, "_Save", GTK_RESPONSE_OK, nullptr);
     auto* notebook = gtk_notebook_new();
     gtk_container_add(GTK_CONTAINER(gtk_dialog_get_content_area(GTK_DIALOG(dialog))), notebook);
@@ -227,19 +301,22 @@ struct Chat {
       auto* l = gtk_label_new_with_mnemonic(label); gtk_label_set_mnemonic_widget(GTK_LABEL(l), w); gtk_widget_set_halign(l, GTK_ALIGN_START);
       gtk_grid_attach(GTK_GRID(grid), l, 0, row, 1, 1); gtk_grid_attach(GTK_GRID(grid), w, 1, row, 1, 1); return w;
     };
-    auto* url = entry("Base _URL", settings.url, 0);
-    auto* port = entry("_Port (0 = URL default)", std::to_string(settings.port), 1);
+    auto* name = entry("Server _name", initial_name, 0);
+    gtk_entry_set_max_length(GTK_ENTRY(name), 64);
+    accessible(name, "Server name");
+    auto* url = entry("Base _URL", initial.url, 1);
+    auto* port = entry("_Port (0 = URL default)", std::to_string(initial.port), 2);
     auto* auth = gtk_check_button_new_with_mnemonic("Use _bearer token authentication");
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(auth), settings.authenticate);
-    gtk_grid_attach(GTK_GRID(grid), auth, 0, 2, 2, 1);
-    auto* token = entry("_Token", settings.token, 3); gtk_entry_set_visibility(GTK_ENTRY(token), FALSE);
-    auto* context = entry("_Context tokens", std::to_string(settings.context), 4);
-    auto* reply = entry("Maximum _reply tokens", std::to_string(settings.reply), 5);
-    auto* timeout = entry("Request _deadline (seconds)", std::to_string(settings.request_timeout), 6);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(auth), initial.authenticate);
+    gtk_grid_attach(GTK_GRID(grid), auth, 0, 3, 2, 1);
+    auto* token = entry("_Token", initial.token, 4); gtk_entry_set_visibility(GTK_ENTRY(token), FALSE);
+    auto* context = entry("_Context tokens", std::to_string(initial.context), 5);
+    auto* reply = entry("Maximum _reply tokens", std::to_string(initial.reply), 6);
+    auto* timeout = entry("Request _deadline (seconds)", std::to_string(initial.request_timeout), 7);
     accessible(timeout, "Request timeout (seconds)");
     auto* note = gtk_label_new("Ollama: http://localhost/v1, port 11434\nllama.cpp: http://localhost/v1, port 8080\nSet context to the server's configured size. Estimates are conservative.\nTokens are saved in a private file; HTTP sends them without encryption.");
     gtk_label_set_line_wrap(GTK_LABEL(note), TRUE); gtk_label_set_max_width_chars(GTK_LABEL(note), 58);
-    gtk_grid_attach(GTK_GRID(grid), note, 0, 7, 2, 1);
+    gtk_grid_attach(GTK_GRID(grid), note, 0, 8, 2, 1);
     auto* tools = gtk_grid_new(); gtk_grid_set_row_spacing(GTK_GRID(tools), 10); gtk_grid_set_column_spacing(GTK_GRID(tools), 12);
     gtk_container_set_border_width(GTK_CONTAINER(tools), 16);
     gtk_notebook_append_page(GTK_NOTEBOOK(notebook), tools, gtk_label_new("Tools"));
@@ -248,24 +325,24 @@ struct Chat {
       gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(w), enabled);
       gtk_grid_attach(GTK_GRID(tools), w, 0, row, 2, 1); return w;
     };
-    auto* files = toggle("_File search (indexed filenames only)", settings.file_search, 0);
-    auto* system = toggle("System _information (OS, CPU, memory, uptime)", settings.system_information, 1);
-    auto* packages = toggle("_Mport package searches (read-only)", settings.package_queries, 2);
-    auto* web = toggle("_Web search", settings.web_search, 3);
+    auto* files = toggle("_File search (indexed filenames only)", initial.file_search, 0);
+    auto* system = toggle("System _information (OS, CPU, memory, uptime)", initial.system_information, 1);
+    auto* packages = toggle("_Mport package searches (read-only)", initial.package_queries, 2);
+    auto* web = toggle("_Web search", initial.web_search, 3);
     auto* provider = gtk_combo_box_text_new();
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(provider), "brave", "Brave Search");
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(provider), "searxng", "SearXNG");
-    gtk_combo_box_set_active_id(GTK_COMBO_BOX(provider), settings.search_provider.c_str());
+    gtk_combo_box_set_active_id(GTK_COMBO_BOX(provider), initial.search_provider.c_str());
     accessible(provider, "Web search provider");
     gtk_grid_attach(GTK_GRID(tools), gtk_label_new("Search provider"), 0, 4, 1, 1);
     gtk_grid_attach(GTK_GRID(tools), provider, 1, 4, 1, 1);
     auto* search_url = gtk_entry_new(); accessible(search_url, "SearXNG search URL");
-    gtk_entry_set_text(GTK_ENTRY(search_url), settings.search_url.c_str());
+    gtk_entry_set_text(GTK_ENTRY(search_url), initial.search_url.c_str());
     gtk_entry_set_placeholder_text(GTK_ENTRY(search_url), "http://localhost:8080/search");
     gtk_grid_attach(GTK_GRID(tools), gtk_label_new("SearXNG search URL"), 0, 5, 1, 1);
     gtk_grid_attach(GTK_GRID(tools), search_url, 1, 5, 1, 1);
     auto* search_token = gtk_entry_new(); accessible(search_token, "Brave API key");
-    gtk_entry_set_text(GTK_ENTRY(search_token), settings.search_token.c_str());
+    gtk_entry_set_text(GTK_ENTRY(search_token), initial.search_token.c_str());
     gtk_entry_set_visibility(GTK_ENTRY(search_token), FALSE);
     gtk_grid_attach(GTK_GRID(tools), gtk_label_new("Brave API key"), 0, 6, 1, 1);
     gtk_grid_attach(GTK_GRID(tools), search_token, 1, 6, 1, 1);
@@ -275,8 +352,8 @@ struct Chat {
       gtk_grid_attach(GTK_GRID(tools), gtk_label_new(label), 0, row, 1, 1);
       gtk_grid_attach(GTK_GRID(tools), spin, 1, row, 1, 1); return spin;
     };
-    auto* rounds = limit("Maximum tool rounds per reply", settings.tool_rounds, 7);
-    auto* calls = limit("Maximum tool calls per reply", settings.tool_calls, 8);
+    auto* rounds = limit("Maximum tool rounds per reply", initial.tool_rounds, 7);
+    auto* calls = limit("Maximum tool calls per reply", initial.tool_calls, 8);
     auto* disclosure = gtk_label_new("Tools are optional and run as your user. Local results are sent to the configured chat server. Web queries go to the selected search provider. API keys are saved in private local settings. Package searches do not install, remove, or update packages. Results and tool calls are saved with the conversation.");
     gtk_label_set_line_wrap(GTK_LABEL(disclosure), TRUE); gtk_label_set_max_width_chars(GTK_LABEL(disclosure), 58);
     gtk_grid_attach(GTK_GRID(tools), disclosure, 0, 9, 2, 1);
@@ -289,7 +366,7 @@ struct Chat {
           if (n != text.size()) throw std::runtime_error("Use whole numbers for port, token limits and timeout.");
           return result;
         };
-        Settings next = settings;
+        Settings next = initial;
         next.url = gtk_entry_get_text(GTK_ENTRY(url)); next.port = integer(port);
         next.token = gtk_entry_get_text(GTK_ENTRY(token)); next.authenticate = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(auth));
         next.context = integer(context); next.reply = integer(reply);
@@ -304,10 +381,17 @@ struct Chat {
         next.search_url = gtk_entry_get_text(GTK_ENTRY(search_url));
         next.search_token = gtk_entry_get_text(GTK_ENTRY(search_token));
         if (!next.authenticate) next.token.clear();
-        save_settings(settings_path, next); settings = std::move(next);
-        gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(model));
-        gtk_entry_set_text(GTK_ENTRY(gtk_bin_get_child(GTK_BIN(model))), settings.model.c_str());
-        message("Settings saved. Refresh models to connect to this endpoint."); break;
+        auto updated = edited;
+        if (adding) {
+          auto item = new_server_profile(gtk_entry_get_text(GTK_ENTRY(name)));
+          item.settings = std::move(next); updated.selected = item.id;
+          updated.servers.push_back(std::move(item));
+        } else {
+          auto& item = chosen(updated);
+          item.name = gtk_entry_get_text(GTK_ENTRY(name)); item.settings = std::move(next);
+        }
+        commit_profiles(std::move(updated));
+        message("Server settings saved. Refresh models to connect to this server."); break;
       } catch (const std::exception& e) { error_dialog(e.what()); }
     }
     gtk_widget_destroy(dialog);
@@ -321,7 +405,10 @@ struct Chat {
     auto* w = gtk_button_new_with_mnemonic(label); gtk_box_pack_start(GTK_BOX(box), w, FALSE, FALSE, 0);
     g_object_set_data(G_OBJECT(w), "action", reinterpret_cast<gpointer>(fn));
     g_signal_connect(w, "clicked", G_CALLBACK(+[](GtkWidget* w, gpointer p) {
-      auto fn = reinterpret_cast<void (*)(Chat&)>(g_object_get_data(G_OBJECT(w), "action")); fn(*static_cast<Chat*>(p));
+      auto& self = *static_cast<Chat*>(p);
+      auto fn = reinterpret_cast<void (*)(Chat&)>(g_object_get_data(G_OBJECT(w), "action"));
+      try { fn(self); }
+      catch (const std::exception& error) { self.error_dialog(error.what()); }
     }), this); return w;
   }
   void build() {
@@ -330,6 +417,24 @@ struct Chat {
     gtk_window_set_default_size(GTK_WINDOW(window), 900, 620);
     auto* outer = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8); gtk_container_set_border_width(GTK_CONTAINER(outer), 10);
     gtk_container_add(GTK_CONTAINER(window), outer);
+    auto* servers = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_box_pack_start(GTK_BOX(outer), servers, FALSE, FALSE, 0);
+    auto* server_label = gtk_label_new_with_mnemonic("Ser_ver:");
+    gtk_box_pack_start(GTK_BOX(servers), server_label, FALSE, FALSE, 0);
+    server = gtk_combo_box_text_new(); accessible(server, "Server");
+    gtk_label_set_mnemonic_widget(GTK_LABEL(server_label), server);
+    auto* cells = gtk_cell_layout_get_cells(GTK_CELL_LAYOUT(server));
+    for (auto* cell = cells; cell; cell = cell->next)
+      g_object_set(cell->data, "ellipsize", PANGO_ELLIPSIZE_END, "max-width-chars", 28, nullptr);
+    g_list_free(cells);
+    gtk_box_pack_start(GTK_BOX(servers), server, TRUE, TRUE, 0);
+    add_server = button(servers, "_Add server…", +[](Chat& s) { s.configure(true); });
+    remove_server = button(servers, "Remove server…", +[](Chat& s) { s.delete_server(); });
+    g_signal_connect(server, "changed", G_CALLBACK(+[](GtkComboBox* combo, gpointer data) {
+      auto& self = *static_cast<Chat*>(data);
+      const char* id = gtk_combo_box_get_active_id(combo);
+      if (!self.selecting_server && id) self.switch_server(id);
+    }), this);
     auto* bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6); gtk_box_pack_start(GTK_BOX(outer), bar, FALSE, FALSE, 0);
     auto* label = gtk_label_new_with_mnemonic("_Model:"); gtk_box_pack_start(GTK_BOX(bar), label, FALSE, FALSE, 0);
     model = gtk_combo_box_text_new_with_entry(); accessible(model, "Model");
@@ -376,7 +481,7 @@ struct Chat {
       auto& s = *static_cast<Chat*>(p); s.window = nullptr;
       if (s.cancellable) g_cancellable_cancel(s.cancellable);
     }), this);
-    try { settings = load_settings(settings_path); }
+    try { profiles = load_server_profiles(settings_path); settings = chosen(profiles).settings; refresh_servers(); }
     catch (const std::exception& e) { settings_ok = false; message(std::string("Settings were not loaded or overwritten: ") + e.what()); }
     gtk_entry_set_text(GTK_ENTRY(gtk_bin_get_child(GTK_BIN(model))), settings.model.c_str());
     try { threads = load_threads(history_path); }
@@ -392,8 +497,13 @@ int main(int argc, char** argv) {
   chat.app = gtk_application_new("org.midnightbsd.Chat", G_APPLICATION_DEFAULT_FLAGS);
   g_signal_connect(chat.app, "activate", G_CALLBACK(+[](GtkApplication*, gpointer p) {
     auto& s = *static_cast<Chat*>(p);
-    if (s.window) gtk_window_present(GTK_WINDOW(s.window)); else s.build();
+    try {
+      if (s.window) gtk_window_present(GTK_WINDOW(s.window)); else s.build();
+    } catch (const std::exception& error) {
+      g_printerr("Could not open Midnight Chat: %s\n", error.what());
+      s.startup_failed = true; g_application_quit(G_APPLICATION(s.app));
+    }
   }), &chat);
   const int result = g_application_run(G_APPLICATION(chat.app), argc, argv);
-  g_object_unref(chat.app); return result;
+  g_object_unref(chat.app); return chat.startup_failed ? 1 : result;
 }

@@ -18,6 +18,18 @@ struct Settings {
   bool file_search{}, system_information{}, package_queries{}, web_search{};
   std::string search_provider{"brave"}, search_url, search_token;
 };
+inline constexpr std::size_t max_servers = 32;
+struct ServerProfile {
+  std::string id, name;
+  Settings settings;
+};
+struct ServerProfiles {
+  std::string selected;
+  std::vector<ServerProfile> servers;
+};
+ServerProfile new_server_profile(const std::string& name);
+ServerProfiles load_server_profiles(const std::filesystem::path& path);
+void save_server_profiles(const std::filesystem::path& path, const ServerProfiles& profiles);
 struct ToolUse { std::string id, name, arguments, result; };
 struct Message {
   std::string role, text;
