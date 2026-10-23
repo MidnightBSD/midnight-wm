@@ -1,5 +1,5 @@
 PORTNAME=	midnight-wm
-PORTVERSION=	0.1.5
+PORTVERSION=	0.1.6
 CATEGORIES=	x11-wm
 MASTER_SITES=	https://github.com/MidnightBSD/midnight-wm/releases/download/v${PORTVERSION}/
 
