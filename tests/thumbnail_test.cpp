@@ -5,6 +5,7 @@
 
 #include <filesystem>
 #include <fcntl.h>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <sys/stat.h>
@@ -54,6 +55,54 @@ int main() {
     std::string(refreshed_mtime) == std::to_string(details.st_mtime + 2);
   if (preview) g_object_unref(preview);
   if (!fresh_metadata) { std::cerr << "stale thumbnail metadata\n"; return 1; }
+
+  // Browsing non-image files must not grow the in-memory cache forever,
+  // including paths whose files have already disappeared.
+  const auto text = root / "non-image.txt";
+  { std::ofstream output(text); output << "Not an image\n"; }
+  fs::path last_file;
+  for (std::size_t i = 0; i < 3 * midnight::ThumbnailCache::max_entries; ++i) {
+    last_file = root / ("file-" + std::to_string(i) + ".txt");
+    fs::create_hard_link(text, last_file);
+    if (thumbnails.thumbnail_for(last_file) ||
+        thumbnails.size() > midnight::ThumbnailCache::max_entries) {
+      std::cerr << "negative thumbnail lookups exceeded cache limit\n";
+      return 1;
+    }
+    fs::remove(last_file);
+  }
+  const auto filled_size = thumbnails.size();
+  if (!filled_size || thumbnails.thumbnail_for(last_file) ||
+      thumbnails.size() != filled_size - 1) {
+    std::cerr << "deleted file remained cached\n";
+    return 1;
+  }
+
+  // Evicting metadata leaves the shared preview on disk. After another
+  // consumer removes it, looking up the old source must regenerate it.
+  if (!fs::is_regular_file(*first)) {
+    std::cerr << "metadata eviction removed the shared thumbnail\n";
+    return 1;
+  }
+  fs::remove(*first);
+  if (thumbnails.thumbnail_for(source) != first || !fs::is_regular_file(*first)) {
+    std::cerr << "evicted thumbnail was not regenerated\n";
+    return 1;
+  }
+  const auto before_removal = thumbnails.size();
+  fs::remove(source);
+  if (thumbnails.thumbnail_for(source) || thumbnails.size() != before_removal - 1) {
+    std::cerr << "deleted image remained cached\n";
+    return 1;
+  }
+  if (thumbnails.thumbnail_for(text)) return 1;
+  const auto before_directory = thumbnails.size();
+  fs::remove(text);
+  fs::create_directory(text);
+  if (thumbnails.thumbnail_for(text) || thumbnails.size() != before_directory - 1) {
+    std::cerr << "non-regular source remained cached\n";
+    return 1;
+  }
   std::error_code ignored;
   fs::remove_all(root, ignored);
   return 0;
