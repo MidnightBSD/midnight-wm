@@ -20,13 +20,14 @@ void accessible(GtkWidget* w, const char* name) { atk_object_set_name(gtk_widget
 struct Job {
   Settings settings;
   Thread thread;
-  bool listing{};
+  bool listing{}, compacting{};
+  ContextInfo context;
   std::vector<std::string> models;
   std::string error;
 };
 struct Chat {
   GtkApplication* app{};
-  GtkWidget *window{}, *list{}, *transcript{}, *input{}, *status{}, *send{}, *stop{}, *model{}, *refresh{}, *settings_button{}, *remove{}, *reset{};
+  GtkWidget *window{}, *list{}, *transcript{}, *input{}, *status{}, *send{}, *stop{}, *model{}, *refresh{}, *settings_button{}, *remove{}, *reset{}, *compact_button{};
   std::filesystem::path settings_path{std::filesystem::path(g_get_user_config_dir()) / "midnightbsd-chat/settings.json"};
   std::filesystem::path history_path{std::filesystem::path(g_get_user_data_dir()) / "midnightbsd-chat/conversations.json"};
   Settings settings;
@@ -124,6 +125,8 @@ struct Chat {
     gtk_widget_set_sensitive(model, settings_ok && !busy);
     gtk_widget_set_sensitive(remove, history_ok && current() && selected != active);
     gtk_widget_set_sensitive(reset, history_ok && current() && selected != active);
+    gtk_widget_set_sensitive(compact_button, history_ok && !busy && current() &&
+        current()->messages.size() >= current()->compacted + 4);
   }
   void render() {
     auto* t = current(); std::string text;
@@ -199,15 +202,18 @@ struct Chat {
     if (!persist()) *t = old;
     render();
   }
-  void start(bool listing) {
+  void start(bool listing, bool compacting = false) {
     if (cancellable || !settings_ok || (!listing && !history_ok)) return;
     try {
       auto next = edited_profiles(); save_server_profiles(settings_path, next);
       profiles = std::move(next); settings = chosen(profiles).settings;
     }
     catch (const std::exception& e) { message(e.what()); return; }
-    auto job = std::make_unique<Job>(); job->settings = settings; job->listing = listing;
-    if (!listing) {
+    auto job = std::make_unique<Job>(); job->settings = settings; job->listing = listing; job->compacting = compacting;
+    if (compacting) {
+      auto* t = current(); if (!t || t->messages.size() < t->compacted + 4) return;
+      job->thread = *t; active = t->id;
+    } else if (!listing) {
       auto* t = current(); if (!t) return;
       const auto text = contents(input);
       const bool pending = t->messages.size() % 2 != 0;
@@ -238,7 +244,7 @@ struct Chat {
       auto& s = *static_cast<Chat*>(p); s.deadline = 0; s.timed_out = true;
       g_cancellable_cancel(s.cancellable); return G_SOURCE_REMOVE;
     }, this);
-    message(listing ? "Loading models…" : (tools_enabled(settings) ? "Waiting for the model… Enabled tools may run; results will appear in the transcript." : "Waiting for the model… Older context will be summarized if needed."));
+    message(compacting ? "Compacting older context… The full transcript will be retained." : listing ? "Loading models…" : (tools_enabled(settings) ? "Waiting for the model… Enabled tools may run; results will appear in the transcript." : "Waiting for the model… Older context will be summarized if needed."));
     // Hold the application until completion, even if its last window closes.
     g_application_hold(G_APPLICATION(app));
     auto* task = g_task_new(nullptr, cancellable, +[](GObject*, GAsyncResult* result, gpointer data) {
@@ -248,7 +254,7 @@ struct Chat {
       if (self.deadline) { g_source_remove(self.deadline); self.deadline = 0; }
       g_clear_object(&self.cancellable); self.active.clear();
       if (self.window) {
-        if (cancelled) self.message(self.timed_out ? "Request timed out after " + std::to_string(job->settings.request_timeout) + " seconds. Increase the request timeout in Settings or retry." : "Stopped. The unanswered message is saved; Send / Retry tries again.");
+        if (cancelled) self.message(self.timed_out ? "Request timed out after " + std::to_string(job->settings.request_timeout) + " seconds. Increase the request timeout in Settings or retry." : job->compacting ? "Compaction stopped. Earlier context and the transcript are preserved." : "Stopped. The unanswered message is saved; Send / Retry tries again.");
         else if (!job->error.empty()) self.message(job->error + " The conversation has been preserved.");
         else if (job->listing) {
           gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(self.model));
@@ -257,8 +263,10 @@ struct Chat {
           self.message(job->models.empty() ? "No models reported. You can type a model name." : "Models loaded. Choose a model from the dropdown.");
         } else {
           auto it = std::find_if(self.threads.begin(), self.threads.end(), [&](const auto& t) { return t.id == job->thread.id; });
+          const bool summarized = it != self.threads.end() && job->thread.compacted > it->compacted;
           if (it != self.threads.end()) *it = std::move(job->thread);
-          if (self.persist()) self.message("Reply received.");
+          if (self.persist()) self.message(std::string(job->compacting ? "Context compacted. " : summarized ? "Reply received; older context compacted. " : "Reply received. ") +
+              "Context: " + std::to_string(job->context.tokens) + " tokens, " + job->context.source + ".");
           self.render();
         }
         self.sensitivity();
@@ -272,7 +280,8 @@ struct Chat {
       auto& job = *static_cast<Job*>(data);
       try {
         if (job.listing) job.models = models(job.settings, cancel);
-        else job.thread = complete(job.settings, std::move(job.thread), cancel);
+        else if (job.compacting) job.thread = compact(job.settings, std::move(job.thread), cancel, &job.context);
+        else job.thread = complete(job.settings, std::move(job.thread), cancel, &job.context);
       } catch (const std::exception& e) { job.error = e.what(); }
       g_task_return_boolean(task, TRUE);
     });
@@ -314,7 +323,7 @@ struct Chat {
     auto* reply = entry("Maximum _reply tokens", std::to_string(initial.reply), 6);
     auto* timeout = entry("Request _deadline (seconds)", std::to_string(initial.request_timeout), 7);
     accessible(timeout, "Request timeout (seconds)");
-    auto* note = gtk_label_new("Ollama: http://localhost/v1, port 11434\nllama.cpp: http://localhost/v1, port 8080\nSet context to the server's configured size. Estimates are conservative.\nTokens are saved in a private file; HTTP sends them without encryption.");
+    auto* note = gtk_label_new("Ollama: http://localhost/v1, port 11434\nllama.cpp: http://localhost/v1, port 8080\nContext is a fallback and cap; reported smaller limits apply automatically.\nOlder turns compact before the budget is full. Estimates are conservative.\nTokens are saved in a private file; HTTP sends them without encryption.");
     gtk_label_set_line_wrap(GTK_LABEL(note), TRUE); gtk_label_set_max_width_chars(GTK_LABEL(note), 58);
     gtk_grid_attach(GTK_GRID(grid), note, 0, 8, 2, 1);
     auto* tools = gtk_grid_new(); gtk_grid_set_row_spacing(GTK_GRID(tools), 10); gtk_grid_set_column_spacing(GTK_GRID(tools), 12);
@@ -450,6 +459,7 @@ struct Chat {
     list = gtk_list_box_new(); accessible(list, "Conversations");
     gtk_box_pack_start(GTK_BOX(side), scroll(list), TRUE, TRUE, 0);
     remove = button(side, "_Delete conversation", +[](Chat& s) { s.delete_thread(); });
+    compact_button = button(side, "_Compact now", +[](Chat& s) { s.start(false, true); });
     reset = button(side, "Reset conte_xt", +[](Chat& s) { s.reset_context(); });
     auto* right = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6); gtk_widget_set_margin_start(right, 8);
     gtk_paned_pack2(GTK_PANED(pane), right, TRUE, FALSE);

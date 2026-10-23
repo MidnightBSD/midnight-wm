@@ -35,11 +35,21 @@ entering replacement text edits that pending message.
 Only one request runs at a time; conversations can be viewed while waiting.
 .Pp
 Older complete turns are summarized automatically through the same endpoint
-when the conservative byte-based token estimate exceeds the context budget.
+when the conservative byte-based token estimate reaches 80% of the input budget.
+Compaction targets 60% and keeps the newest complete turn when it fits.
+Large older turns are summarized in bounded fragments.
+Compact now summarizes older turns on demand, preserving the newest turn.
 Reply space and template overhead are reserved. The complete transcript is
 retained locally. Summaries can lose details. Reset context excludes earlier
 turns from future requests without deleting them from the transcript.
-Set the context size to the server's actual configured capacity.
+The configured context size is a fallback and an upper bound. Before each reply
+or compaction, the app checks model metadata and, for conventional /v1 endpoints,
+Ollama's /api/ps context_length for the selected loaded model. Smaller reported
+limits apply automatically; reply space is reduced if necessary.
+Unsupported or unavailable discovery uses the configured size. The status line
+reports the limit and its source. Model architecture maxima are not used as
+runtime allocations. OpenClaw agent targets may not report a backend limit;
+configure the usable capacity after accounting for gateway prompts and tools.
 This setting does not reconfigure the server.
 .Pp
 Responses are displayed as plain text after generation completes.

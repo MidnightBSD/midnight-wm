@@ -144,6 +144,9 @@ try:
     key('ctrl+Return')
     until(lambda: len(threads()[0]['messages']) == 4, 'context reply missing')
     assert 'Robin' in threads()[0]['messages'][-1]['content']
+    key('alt+c')
+    until(lambda: threads()[0]['compacted'] == 2, 'manual compaction missing')
+    assert len(threads()[0]['messages']) == 4 and threads()[0]['summary']
     key('alt+n')
     until(lambda: len(threads()) == 2, 'new conversation missing')
     type_text('Hello. Reply in one sentence.')

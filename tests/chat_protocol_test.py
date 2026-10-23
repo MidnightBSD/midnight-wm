@@ -28,7 +28,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header('Location', '/leaked')
             self.end_headers()
             return
-        data = json.dumps({'data': [{'id': 'fixture'}, {'id': 'second'}]}).encode()
+        if self.path.endswith('/api/ps'):
+            self.respond(json.dumps({'models': [
+                {'name': 'fixture-running:latest', 'context_length': 3072},
+                {'model': 'unrelated', 'context_length': 512},
+                {'name': 'fixture-invalid', 'context_length': '2048'}]}).encode())
+            return
+        data = json.dumps({'data': [{'id': 'fixture'}, {'id': 'second'},
+            {'id': 'fixture-running', 'context_length': 32768},
+            {'id': 'fixture-metadata', 'contextWindow': 4096},
+            {'id': 'fixture-invalid', 'context_length': -2},
+            {'id': 'fixture-small', 'context_window': 2048}]}).encode()
         if '/malformed/' in self.path:
             data = b'{bad'
         if '/wrong-shape/' in self.path:
@@ -50,9 +60,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         requests.append((self.path, self.headers.get('Authorization'), body))
-        assert self.path == '/v1/chat/completions'
-        assert body['model'] == 'fixture' and body['stream'] is False
+        assert self.path.endswith('/v1/chat/completions')
+        assert body['model'].startswith('fixture') and body['stream'] is False
+        if body['model'] == 'fixture-small':
+            assert 256 + sum(len(m['content'].encode()) + 32 for m in body['messages']) + body['max_tokens'] <= 2048
         assert 'tools' not in body
+        if body['model'] == 'fixture-fail' and body['messages'][0]['content'].startswith('Summarize'):
+            self.send_response(500)
+            self.end_headers()
+            return
+        if body['model'] == 'fixture-cancel' and body['messages'][0]['content'].startswith('Summarize'):
+            time.sleep(1)
         answer = 'Robin enjoys walking by the sea.' if 'Summarize' in body['messages'][0]['content'] else 'Hello Robin.'
         self.respond(json.dumps({'choices': [{'message': {'role': 'assistant', 'content': answer}}]}).encode())
 
