@@ -1000,6 +1000,7 @@ struct Shell::Impl {
             if (GARCON_IS_MENU_ITEM(element)) {
               auto* file = garcon_menu_item_get_file(GARCON_MENU_ITEM(element));
               char* path = file ? g_file_get_path(file) : nullptr;
+              if (file) g_object_unref(file);
               auto* app = path ? g_desktop_app_info_new_from_filename(path) : nullptr;
               g_free(path);
               if (app && g_app_info_should_show(G_APP_INFO(app))) {

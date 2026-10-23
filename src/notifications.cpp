@@ -174,10 +174,12 @@ struct Notifications::Impl {
       if (popup.pixmap) xcb_free_pixmap(connection, popup.pixmap);
     }
     if (registration) g_dbus_connection_unregister_object(bus, registration);
-    if (owns_name && bus)
-      g_dbus_connection_call_sync(bus, "org.freedesktop.DBus", "/org/freedesktop/DBus",
+    if (owns_name && bus) {
+      auto* reply = g_dbus_connection_call_sync(bus, "org.freedesktop.DBus", "/org/freedesktop/DBus",
                                   "org.freedesktop.DBus", "ReleaseName", g_variant_new("(s)", service),
                                   G_VARIANT_TYPE("(u)"), G_DBUS_CALL_FLAGS_NONE, 1000, nullptr, nullptr);
+      if (reply) g_variant_unref(reply);
+    }
     if (introspection) g_dbus_node_info_unref(introspection);
     if (bus) g_object_unref(bus);
     xcb_flush(connection);

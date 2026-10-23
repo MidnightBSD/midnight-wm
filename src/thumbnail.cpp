@@ -5,6 +5,7 @@
 #include <glib.h>
 #include <glib/gstdio.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdlib>
@@ -13,6 +14,7 @@
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 
 namespace midnight {
@@ -71,20 +73,37 @@ bool save_thumbnail(GdkPixbuf* image, const std::filesystem::path& destination,
 }
 } // namespace
 
+void ThumbnailCache::remember(const std::string& key, Entry entry) {
+  // Bound positive and negative lookups together. Evict only metadata; the
+  // shared on-disk thumbnail cache and shell-owned image surfaces stay valid.
+  if (entries_.size() >= max_entries && !entries_.contains(key)) {
+    const auto oldest = std::ranges::min_element(entries_, {},
+        [](const auto& item) { return item.second.last_used; });
+    entries_.erase(oldest);
+  }
+  entry.last_used = std::chrono::steady_clock::now();
+  entries_.insert_or_assign(key, std::move(entry));
+}
+
 std::optional<std::filesystem::path> ThumbnailCache::thumbnail_for(
     const std::filesystem::path& source) {
+  const auto key = source.string();
   struct stat details{};
-  if (stat(source.c_str(), &details) != 0 || !S_ISREG(details.st_mode)) return std::nullopt;
+  if (stat(source.c_str(), &details) != 0 || !S_ISREG(details.st_mode)) {
+    entries_.erase(key);
+    return std::nullopt;
+  }
   const auto mtime = static_cast<std::int64_t>(details.st_mtime);
   const auto size = static_cast<std::uintmax_t>(details.st_size);
-  const auto key = source.string();
   if (auto previous = entries_.find(key); previous != entries_.end() &&
-      previous->second.mtime == mtime && previous->second.size == size)
+      previous->second.mtime == mtime && previous->second.size == size) {
+    previous->second.last_used = std::chrono::steady_clock::now();
     return previous->second.thumbnail;
+  }
 
   Entry entry{mtime, size, std::nullopt};
   const auto uri = canonical_uri(source);
-  if (uri.empty()) { entries_[key] = entry; return std::nullopt; }
+  if (uri.empty()) { remember(key, std::move(entry)); return std::nullopt; }
   char* digest = g_compute_checksum_for_string(G_CHECKSUM_MD5, uri.c_str(), -1);
   const auto thumbnail = std::filesystem::path(g_get_user_cache_dir()) / "thumbnails" /
                          "normal" / (std::string(digest) + ".png");
@@ -99,7 +118,7 @@ std::optional<std::filesystem::path> ThumbnailCache::thumbnail_for(
     if (image && save_thumbnail(image.get(), thumbnail, uri, mtime, size))
       entry.thumbnail = thumbnail;
   }
-  entries_[key] = entry;
+  remember(key, entry);
   return entry.thumbnail;
 }
 
