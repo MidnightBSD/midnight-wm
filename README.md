@@ -672,6 +672,9 @@ Its four tabs list processes; graph CPU, memory, and network activity; show
 mounted file systems with capacity and available space; and summarize the CPU,
 physical memory, swap allocation, OS release, and physical drives. Process and
 resource data refresh every two seconds; mounts refresh every ten seconds.
+Select a process and choose **End Process** (SIGTERM) or **Force Quit**
+(SIGKILL) from the buttons or the right-click menu; each asks for confirmation
+and verifies the PID still names the selected process before signalling it.
 The Hardware tab has a Refresh button for changes to swap or attached drives.
 
 To edit preferences by hand, copy `share/midnight-wm/config.ini` to

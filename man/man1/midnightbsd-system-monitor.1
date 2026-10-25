@@ -1,6 +1,6 @@
 ." Copyright (c) 2026 Lucas Holt
 ." SPDX-License-Identifier: BSD-2-Clause
-.Dd October 19, 2026
+.Dd October 25, 2026
 .Dt MIDNIGHTBSD-SYSTEM-MONITOR 1
 .Os
 .Sh NAME
@@ -12,6 +12,14 @@
 .Nm
 opens a GTK 3 window with four tabs.
 Processes lists process IDs, owners, states, CPU use, and resident memory.
+Selecting a process enables End Process, which sends
+.Dv SIGTERM ,
+and Force Quit, which sends
+.Dv SIGKILL ;
+both are also available from the row's context menu and ask for
+confirmation first.
+Process names, mount points, and device strings are shown with control and
+bidirectional formatting characters replaced so a row cannot disguise itself.
 Resources graphs total CPU use, physical memory use, and aggregate network
 receive and transmit rates.
 File Systems lists mounted file systems with capacity, used space, and
