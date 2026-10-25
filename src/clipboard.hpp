@@ -61,6 +61,7 @@ private:
   bool cut_{};
   xcb_window_t snapshot_owner_{};
   Fetch fetch_{Fetch::none};
+  std::chrono::steady_clock::time_point fetch_deadline_{};
   std::string received_;
   std::string text_;
   std::vector<std::filesystem::path> files_;

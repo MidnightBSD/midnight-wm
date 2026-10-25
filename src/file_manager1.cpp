@@ -18,6 +18,8 @@ constexpr auto interface_xml = R"xml(
     <arg name="StartupId" type="s" direction="in"/></method>
 </interface></node>)xml";
 
+constexpr guint max_uris = 16;
+
 std::optional<std::filesystem::path> local_path(const char* uri) {
   if (!uri || !*uri || !g_str_has_prefix(uri, "file://")) return std::nullopt;
   auto* file = g_file_new_for_uri(uri);
@@ -67,6 +69,13 @@ struct FileManager1::Impl {
     (void)startup_id; // The shell opens its own windows; startup tracking is handled separately.
 
     std::vector<std::filesystem::path> paths;
+    // Each folder opens a window and lists a directory on the shell thread.
+    if (g_strv_length(uris) > max_uris) {
+      g_strfreev(uris);
+      g_dbus_method_invocation_return_error_literal(invocation, G_DBUS_ERROR,
+          G_DBUS_ERROR_INVALID_ARGS, "Too many URIs in one request");
+      return;
+    }
     for (gchar** uri = uris; uri && *uri; ++uri) {
       auto path = local_path(*uri);
       if (!path) {

@@ -340,6 +340,29 @@ void X11Dnd::finish_target(xcb_window_t target, std::uint64_t generation, bool s
   state.received.clear();
 }
 
+bool X11Dnd::genuine_drag(xcb_window_t target, Target& state) {
+  auto* owner = xcb_get_selection_owner_reply(connection_,
+      xcb_get_selection_owner(connection_, atoms_.selection), nullptr);
+  const bool owns = owner && owner->owner == state.source && state.source != XCB_WINDOW_NONE;
+  std::free(owner);
+  if (!owns) return false;
+  auto* pointer = xcb_query_pointer_reply(connection_, xcb_query_pointer(connection_, root_), nullptr);
+  if (!pointer) return false;
+  const int root_x = pointer->root_x, root_y = pointer->root_y;
+  std::free(pointer);
+  auto* local = xcb_translate_coordinates_reply(connection_,
+      xcb_translate_coordinates(connection_, root_, target, root_x, root_y), nullptr);
+  auto* geometry = xcb_get_geometry_reply(connection_, xcb_get_geometry(connection_, target), nullptr);
+  const bool inside = local && geometry && local->dst_x >= 0 && local->dst_y >= 0 &&
+      local->dst_x < geometry->width && local->dst_y < geometry->height;
+  std::free(local);
+  std::free(geometry);
+  if (!inside) return false;
+  state.root_x = root_x;
+  state.root_y = root_y;
+  return true;
+}
+
 void X11Dnd::handle_client(const xcb_client_message_event_t& event) {
   if (event.format != 32) return;
   if (event.type == atoms_.status && source_ && event.window == source_) {
@@ -394,7 +417,9 @@ void X11Dnd::handle_client(const xcb_client_message_event_t& event) {
     state.root_x = static_cast<int16_t>(event.data.data32[2] >> 16);
     state.root_y = static_cast<int16_t>(event.data.data32[2] & 0xFFFF);
     state.move = event.data.data32[4] == atoms_.move;
-    state.accepted = state.offered == atoms_.uri && static_cast<bool>(state.callback);
+    state.positioned = true;
+    state.accepted = state.offered == atoms_.uri && static_cast<bool>(state.callback) &&
+                     genuine_drag(event.window, state);
     send_target_status(event.window, state);
   } else if (event.type == atoms_.leave && state.source == event.data.data32[0]) {
     if (state.pending_finish) send_target_finished(event.window, state, false);
@@ -402,7 +427,16 @@ void X11Dnd::handle_client(const xcb_client_message_event_t& event) {
     state.accepted = state.receiving_incr = state.pending_finish = false;
     state.received.clear();
   } else if (event.type == atoms_.drop && state.source == event.data.data32[0]) {
-    if (!state.accepted) { send_target_finished(event.window, state, false); state.source = 0; return; }
+    // ClientMessages are unauthenticated. Before fetching and acting on the
+    // file list, require the protocol state a real drag produces: a prior
+    // XdndPosition, the named source still owning XdndSelection, and the
+    // pointer actually over this target. Use the pointer's position rather
+    // than the message's so a forged drop cannot aim at the Trash icon.
+    if (!state.accepted || !state.positioned || !genuine_drag(event.window, state)) {
+      send_target_finished(event.window, state, false);
+      state.source = 0;
+      return;
+    }
     state.received.clear();
     state.receiving_incr = false;
     xcb_delete_property(connection_, event.window, atoms_.property);

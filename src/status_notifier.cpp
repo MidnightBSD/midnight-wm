@@ -27,6 +27,11 @@ constexpr auto properties_iface = "org.freedesktop.DBus.Properties";
 constexpr auto dbus_iface = "org.freedesktop.DBus";
 constexpr auto dbus_path = "/org/freedesktop/DBus";
 constexpr std::size_t max_pixmap_bytes = 256 * 256 * 4;
+// One peer may register many distinct object paths; bound items per owner and
+// overall so a hostile peer cannot swallow the panel or multiply GetAll calls.
+constexpr std::size_t max_items = 64;
+constexpr std::size_t max_items_per_owner = 8;
+constexpr std::size_t max_hosts = 16;
 
 constexpr auto watcher_xml = R"xml(<node>
  <interface name="org.kde.StatusNotifierWatcher">
@@ -130,6 +135,11 @@ struct StatusNotifier::Impl : std::enable_shared_from_this<Impl> {
     if (!g_dbus_is_name(service.c_str()) || !g_variant_is_object_path(path.c_str())) return;
     std::string key = service + path;
     if (metadata.contains(key)) return;
+    if (entries.size() >= max_items) return;
+    const auto owned = std::ranges::count_if(metadata, [&](const auto& entry) {
+      return entry.second.owner == owner;
+    });
+    if (static_cast<std::size_t>(owned) >= max_items_per_owner) return;
     StatusNotifierItem item;
     item.key = key;
     item.service = std::move(service);
@@ -293,7 +303,8 @@ void method_call(GDBusConnection* bus, const gchar* sender, const gchar*,
   if (g_strcmp0(method, "RegisterStatusNotifierItem") == 0) {
     self->add_registration(value, sender, index);
   } else if (g_strcmp0(method, "RegisterStatusNotifierHost") == 0) {
-    if (value && g_dbus_is_name(value)) {
+    if (value && g_dbus_is_name(value) &&
+        (self->hosts.contains(value) || self->hosts.size() < max_hosts)) {
       const bool first = self->hosts.empty();
       self->hosts[value] = sender;
       if (first)

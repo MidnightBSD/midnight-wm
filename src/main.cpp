@@ -222,6 +222,7 @@ int main(int argc, char** argv) {
 
       if (!wm.initialize() || !shell.initialize()) result = 1;
       else {
+        tray.set_window_filter([&wm](xcb_window_t window) { return !wm.manages(window); });
         if (!tray.initialize()) std::cerr << "X11 system tray unavailable\n";
         if (!status_panel.initialize()) std::cerr << "Status notifier panel unavailable\n";
         if (!notifier.initialize()) std::cerr << "Status notifier D-Bus unavailable\n";
