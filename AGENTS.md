@@ -115,6 +115,12 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   refresh shell controls, frame geometry, wallpaper, and desktop shortcuts.
   Test with isolated HOME/XDG directories; never alter the real user config
   during automated checks.
+- `src/search.cpp` is the GTK 3 `midnightbsd-search` companion. It runs
+  `/usr/bin/locate` without a shell, escapes glob metacharacters, bounds output
+  with `-l 20` and a 15 second kill, and passes every shown path through
+  `src/display_text.hpp` so controls and bidi formatting in another user's file
+  names cannot disguise what a click opens. `display_text_test` covers the
+  sanitizer at compile time; run `python3 tests/search_smoke.py` after changes.
 - `src/clipboard.*` implements the X11 `CLIPBOARD` selection and persistence.
   Call clipboard.tick() from the main loop to reclaim stalled outgoing INCR
   transfers; preserve the aggregate memory and pending-transfer limits.
