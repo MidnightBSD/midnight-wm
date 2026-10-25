@@ -15,6 +15,7 @@ struct TaskIcon {
   std::string wm_class;
   std::string instance;
   std::string theme_name;
+  bool operator==(const TaskIcon&) const = default;
 };
 
 // Bounded _NET_WM_ICON decoding; retain at most a 64x64 premultiplied image.

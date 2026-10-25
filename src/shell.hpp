@@ -26,6 +26,7 @@ struct Task {
   bool active{};
   bool attention{};
   TaskIcon icon{};
+  bool operator==(const Task&) const = default;
 };
 
 class Shell {
