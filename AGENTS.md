@@ -121,6 +121,15 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   `src/display_text.hpp` so controls and bidi formatting in another user's file
   names cannot disguise what a click opens. `display_text_test` covers the
   sanitizer at compile time; run `python3 tests/search_smoke.py` after changes.
+- `src/system_monitor.cpp` is the GTK 3 `midnightbsd-system-monitor`
+  companion. It only reads kernel state through sysctl, libutil, libgeom, and
+  getmntinfo. Every externally sourced string (process names, passwd names,
+  mount names, GEOM descriptions) passes through `src/display_text.hpp`.
+  Process rows update in place so selection survives refreshes. End Process
+  and Force Quit reject non-positive PIDs, confirm with the user, and recheck
+  the PID's start time and owner with kinfo_getproc before kill(2). Keep the
+  drive list tall enough for at least five drives. Run
+  `python3 tests/system_monitor_smoke.py` after changes.
 - `src/clipboard.*` implements the X11 `CLIPBOARD` selection and persistence.
   Call clipboard.tick() from the main loop to reclaim stalled outgoing INCR
   transfers; preserve the aggregate memory and pending-transfer limits.

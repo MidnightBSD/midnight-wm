@@ -18,6 +18,9 @@
 #include <string_view>
 #include <unordered_map>
 
+#include <csignal>
+#include <sys/types.h>
+
 #if defined(__FreeBSD__) || defined(__MidnightBSD__)
 #include <sys/param.h>
 #include <sys/mount.h>
@@ -35,7 +38,15 @@
 #include <vm/vm_param.h>
 #endif
 
+#include "display_text.hpp"
+
 namespace {
+// Every string shown in the monitor originates outside this process: other
+// users' executable names, mount points, passwd entries, and device identity
+// strings. Strip controls and bidi formatting so a row cannot read as a
+// different process or device than the one it describes.
+std::string shown(std::string_view text) { return midnight::sanitize_display_text(text); }
+
 std::string size_label(double bytes) {
   constexpr std::array units{"B", "KiB", "MiB", "GiB", "TiB", "PiB"};
   std::size_t unit = 0;
@@ -108,14 +119,17 @@ std::string process_name(const kinfo_proc& process) {
       if (basename.starts_with(name)) name = basename;
     }
   }
-  char* valid = g_utf8_make_valid(name.data(), name.size());
-  name = valid;
-  g_free(valid);
-  return name;
+  return shown(name);
+}
+
+// Identity recorded per row so a kill request can confirm that the PID still
+// names the process the user selected rather than a reused PID.
+int64_t process_start(const kinfo_proc& process) {
+  return static_cast<int64_t>(process.ki_start.tv_sec) * 1000000 + process.ki_start.tv_usec;
 }
 #endif
 
-enum ProcessColumn { PID, NAME, USER, STATE, CPU, MEMORY, PROCESS_COLUMNS };
+enum ProcessColumn { PID, NAME, USER, STATE, CPU, MEMORY, START, OWNER, PROCESS_COLUMNS };
 enum MountColumn { DEVICE, MOUNT, TYPE, TOTAL, USED, AVAILABLE, PERCENT, MOUNT_COLUMNS };
 enum DriveColumn { DRIVE_DEVICE, DRIVE_TYPE, DRIVE_MODEL, DRIVE_SIZE, DRIVE_COLUMNS };
 
@@ -153,9 +167,16 @@ struct Monitor {
   GtkListStore* mounts{};
   GtkListStore* drives{};
   GtkWidget *hardware_cpu{}, *hardware_ram{}, *hardware_swap{}, *hardware_os{}, *hardware_status{};
+  GtkWidget* process_view{};
+  GtkWidget* process_menu{};
+  GtkWidget *end_button{}, *force_button{};
   Graph cpu, memory, network;
   guint timer{};
   unsigned tick_count{};
+  // Rows are updated in place so sorting and the user's selection survive
+  // each refresh. GtkListStore iterators stay valid until their row is removed.
+  std::unordered_map<pid_t, GtkTreeIter> process_rows;
+  std::unordered_map<uid_t, std::string> users;
 #if defined(__FreeBSD__) || defined(__MidnightBSD__)
   std::array<long, CPUSTATES> previous_cpu{};
   bool have_cpu{};
@@ -168,6 +189,19 @@ struct Monitor {
     if (processes) g_object_unref(processes);
     if (mounts) g_object_unref(mounts);
     if (drives) g_object_unref(drives);
+  }
+
+  // The list stores outlive the window so a closed-and-reactivated monitor
+  // reuses them instead of leaking the previous set.
+  void ensure_stores() {
+    if (!processes)
+      processes = gtk_list_store_new(PROCESS_COLUMNS, G_TYPE_INT, G_TYPE_STRING, G_TYPE_STRING,
+          G_TYPE_STRING, G_TYPE_DOUBLE, G_TYPE_STRING, G_TYPE_INT64, G_TYPE_UINT);
+    if (!mounts)
+      mounts = gtk_list_store_new(MOUNT_COLUMNS, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING,
+          G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_INT);
+    if (!drives)
+      drives = gtk_list_store_new(DRIVE_COLUMNS, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING);
   }
 
   static GtkWidget* scroller(GtkWidget* child) {
@@ -230,12 +264,18 @@ struct Monitor {
     auto* drive_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
     gtk_container_set_border_width(GTK_CONTAINER(drive_box), 8);
     gtk_container_add(GTK_CONTAINER(frame), drive_box);
-    gtk_box_pack_start(GTK_BOX(page), frame, FALSE, FALSE, 0);
-    drives = gtk_list_store_new(DRIVE_COLUMNS, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING);
+    gtk_box_pack_start(GTK_BOX(page), frame, TRUE, TRUE, 0);
     auto* drive_view = list_view(drives, {{"Device", DRIVE_DEVICE}, {"Type", DRIVE_TYPE},
         {"Model", DRIVE_MODEL}, {"Capacity", DRIVE_SIZE}});
-    gtk_widget_set_size_request(drive_view, -1, 190);
-    gtk_box_pack_start(GTK_BOX(drive_box), scroller(drive_view), TRUE, TRUE, 0);
+    // A size request on the tree view does not pass through its scrolled
+    // window, which otherwise shrinks to a few pixels and hides every row
+    // past the first. Reserve room for the header and at least five drives,
+    // and let the list grow to its natural height when more are present.
+    auto* drive_scroll = scroller(drive_view);
+    gtk_scrolled_window_set_min_content_height(GTK_SCROLLED_WINDOW(drive_scroll), 200);
+    gtk_scrolled_window_set_max_content_height(GTK_SCROLLED_WINDOW(drive_scroll), 480);
+    gtk_scrolled_window_set_propagate_natural_height(GTK_SCROLLED_WINDOW(drive_scroll), TRUE);
+    gtk_box_pack_start(GTK_BOX(drive_box), drive_scroll, TRUE, TRUE, 0);
     hardware_status = gtk_label_new("");
     gtk_label_set_xalign(GTK_LABEL(hardware_status), 0);
     gtk_box_pack_start(GTK_BOX(drive_box), hardware_status, FALSE, FALSE, 0);
@@ -249,31 +289,155 @@ struct Monitor {
     gtk_notebook_append_page(GTK_NOTEBOOK(tabs), scroll, gtk_label_new("Hardware"));
   }
 
+  void add_process_tab(GtkWidget* tabs) {
+    auto* page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    process_view = list_view(processes,
+        {{"PID", PID}, {"Process", NAME}, {"User", USER}, {"State", STATE}, {"CPU %", CPU}, {"Memory", MEMORY}});
+    gtk_tree_view_set_search_column(GTK_TREE_VIEW(process_view), NAME);
+    gtk_tree_sortable_set_sort_column_id(GTK_TREE_SORTABLE(processes), CPU, GTK_SORT_DESCENDING);
+    gtk_box_pack_start(GTK_BOX(page), scroller(process_view), TRUE, TRUE, 0);
+
+    auto* buttons = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    end_button = gtk_button_new_with_mnemonic("_End Process");
+    gtk_widget_set_tooltip_text(end_button, "Ask the selected process to exit (SIGTERM)");
+    force_button = gtk_button_new_with_mnemonic("_Force Quit");
+    gtk_widget_set_tooltip_text(force_button, "Terminate the selected process immediately (SIGKILL)");
+    gtk_box_pack_end(GTK_BOX(buttons), force_button, FALSE, FALSE, 0);
+    gtk_box_pack_end(GTK_BOX(buttons), end_button, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(page), buttons, FALSE, FALSE, 0);
+    g_signal_connect(end_button, "clicked", G_CALLBACK(+[](GtkButton*, gpointer data) {
+      static_cast<Monitor*>(data)->end_selected_process(SIGTERM);
+    }), this);
+    g_signal_connect(force_button, "clicked", G_CALLBACK(+[](GtkButton*, gpointer data) {
+      static_cast<Monitor*>(data)->end_selected_process(SIGKILL);
+    }), this);
+
+    process_menu = gtk_menu_new();
+    auto* end_item = gtk_menu_item_new_with_mnemonic("_End Process");
+    auto* force_item = gtk_menu_item_new_with_mnemonic("_Force Quit");
+    gtk_menu_shell_append(GTK_MENU_SHELL(process_menu), end_item);
+    gtk_menu_shell_append(GTK_MENU_SHELL(process_menu), force_item);
+    gtk_widget_show_all(process_menu);
+    gtk_menu_attach_to_widget(GTK_MENU(process_menu), process_view, nullptr);
+    g_signal_connect(end_item, "activate", G_CALLBACK(+[](GtkMenuItem*, gpointer data) {
+      static_cast<Monitor*>(data)->end_selected_process(SIGTERM);
+    }), this);
+    g_signal_connect(force_item, "activate", G_CALLBACK(+[](GtkMenuItem*, gpointer data) {
+      static_cast<Monitor*>(data)->end_selected_process(SIGKILL);
+    }), this);
+    g_signal_connect(process_view, "button-press-event", G_CALLBACK(+[](GtkWidget* view, GdkEventButton* event,
+        gpointer data) -> gboolean {
+      if (event->type != GDK_BUTTON_PRESS || event->button != GDK_BUTTON_SECONDARY) return FALSE;
+      auto& self = *static_cast<Monitor*>(data);
+      GtkTreePath* path = nullptr;
+      if (!gtk_tree_view_get_path_at_pos(GTK_TREE_VIEW(view), static_cast<int>(event->x),
+              static_cast<int>(event->y), &path, nullptr, nullptr, nullptr)) return FALSE;
+      gtk_tree_selection_select_path(gtk_tree_view_get_selection(GTK_TREE_VIEW(view)), path);
+      gtk_tree_path_free(path);
+      if (self.process_menu) gtk_menu_popup_at_pointer(GTK_MENU(self.process_menu), reinterpret_cast<GdkEvent*>(event));
+      return TRUE;
+    }), this);
+    g_signal_connect(gtk_tree_view_get_selection(GTK_TREE_VIEW(process_view)), "changed",
+        G_CALLBACK(+[](GtkTreeSelection*, gpointer data) { static_cast<Monitor*>(data)->update_process_buttons(); }),
+        this);
+    update_process_buttons();
+    gtk_notebook_append_page(GTK_NOTEBOOK(tabs), page, gtk_label_new("Processes"));
+  }
+
+  void update_process_buttons() {
+    if (!process_view || !end_button) return;
+    const bool selected = gtk_tree_selection_get_selected(
+        gtk_tree_view_get_selection(GTK_TREE_VIEW(process_view)), nullptr, nullptr);
+    gtk_widget_set_sensitive(end_button, selected);
+    gtk_widget_set_sensitive(force_button, selected);
+  }
+
+  void message(GtkMessageType type, const std::string& primary, const std::string& secondary) {
+    auto* dialog = gtk_message_dialog_new(GTK_WINDOW(window), static_cast<GtkDialogFlags>(GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT),
+        type, GTK_BUTTONS_CLOSE, "%s", primary.c_str());
+    if (!secondary.empty())
+      gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(dialog), "%s", secondary.c_str());
+    gtk_dialog_run(GTK_DIALOG(dialog));
+    gtk_widget_destroy(dialog);
+  }
+
+  void end_selected_process(int signal_number) {
+    if (!process_view) return;
+    GtkTreeIter row;
+    if (!gtk_tree_selection_get_selected(gtk_tree_view_get_selection(GTK_TREE_VIEW(process_view)), nullptr, &row))
+      return;
+    int pid = 0;
+    gchar* raw_name = nullptr;
+    gint64 start = 0;
+    guint owner = 0;
+    gtk_tree_model_get(GTK_TREE_MODEL(processes), &row, PID, &pid, NAME, &raw_name, START, &start, OWNER, &owner, -1);
+    const std::string name = raw_name ? raw_name : "";
+    g_free(raw_name);
+    // kill(2) treats 0 and negative PIDs as process groups or every process;
+    // a row can never legitimately request that.
+    if (pid <= 0) return;
+
+    const bool force = signal_number == SIGKILL;
+    auto* dialog = gtk_message_dialog_new(GTK_WINDOW(window), static_cast<GtkDialogFlags>(GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT),
+        GTK_MESSAGE_QUESTION, GTK_BUTTONS_NONE, "%s",
+        std::format("{} “{}” (PID {})?", force ? "Force quit" : "End process", name, pid).c_str());
+    gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(dialog), "%s", force ?
+        "The process is terminated immediately and cannot save its work." :
+        "The process is asked to exit and may save its work first. Use Force Quit if it does not respond.");
+    gtk_dialog_add_button(GTK_DIALOG(dialog), "_Cancel", GTK_RESPONSE_CANCEL);
+    auto* confirm = gtk_dialog_add_button(GTK_DIALOG(dialog), force ? "_Force Quit" : "_End Process",
+        GTK_RESPONSE_ACCEPT);
+    gtk_style_context_add_class(gtk_widget_get_style_context(confirm), "destructive-action");
+    gtk_dialog_set_default_response(GTK_DIALOG(dialog), GTK_RESPONSE_CANCEL);
+    const int response = gtk_dialog_run(GTK_DIALOG(dialog));
+    gtk_widget_destroy(dialog);
+    if (response != GTK_RESPONSE_ACCEPT) return;
+
+#if defined(__FreeBSD__) || defined(__MidnightBSD__)
+    // The dialog may have been open for a while; make sure the PID still
+    // belongs to the process the row described before signalling it.
+    std::unique_ptr<kinfo_proc, decltype(&std::free)> current(kinfo_getproc(pid), std::free);
+    if (!current || process_start(*current) != start || current->ki_uid != owner) {
+      message(GTK_MESSAGE_INFO, std::format("“{}” has already exited.", name),
+          "The process list has been refreshed.");
+      refresh();
+      return;
+    }
+#endif
+    if (kill(pid, signal_number) != 0) {
+      const int error = errno;
+      message(GTK_MESSAGE_ERROR, std::format("Cannot end “{}” (PID {}).", name, pid), error == EPERM ?
+          "You do not have permission to end this process. It belongs to another user or the system." :
+          std::strerror(error));
+    }
+    refresh();
+  }
+
   void activate(GtkApplication* application) {
     if (window) { gtk_window_present(GTK_WINDOW(window)); return; }
     window = gtk_application_window_new(application);
     gtk_window_set_title(GTK_WINDOW(window), "System Monitor");
     gtk_window_set_icon_name(GTK_WINDOW(window), "utilities-system-monitor");
-    gtk_window_set_default_size(GTK_WINDOW(window), 850, 630);
+    gtk_window_set_default_size(GTK_WINDOW(window), 850, 640);
     gtk_container_set_border_width(GTK_CONTAINER(window), 10);
     g_signal_connect(window, "destroy", G_CALLBACK(+[](GtkWidget*, gpointer data) {
       auto& self = *static_cast<Monitor*>(data);
       self.window = nullptr;
+      self.process_view = nullptr;
+      self.process_menu = nullptr;  // attached to the view, destroyed with it
+      self.end_button = self.force_button = nullptr;
+      self.hardware_cpu = self.hardware_ram = self.hardware_swap = self.hardware_os = self.hardware_status = nullptr;
+      self.status = nullptr;
       if (self.timer) { g_source_remove(self.timer); self.timer = 0; }
     }), this);
+    ensure_stores();
 
     auto* box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
     gtk_container_add(GTK_CONTAINER(window), box);
     auto* tabs = gtk_notebook_new();
     gtk_box_pack_start(GTK_BOX(box), tabs, TRUE, TRUE, 0);
 
-    processes = gtk_list_store_new(PROCESS_COLUMNS, G_TYPE_INT, G_TYPE_STRING, G_TYPE_STRING,
-        G_TYPE_STRING, G_TYPE_DOUBLE, G_TYPE_STRING);
-    auto* process_view = list_view(processes,
-        {{"PID", PID}, {"Process", NAME}, {"User", USER}, {"State", STATE}, {"CPU %", CPU}, {"Memory", MEMORY}});
-    gtk_tree_view_set_search_column(GTK_TREE_VIEW(process_view), NAME);
-    gtk_tree_sortable_set_sort_column_id(GTK_TREE_SORTABLE(processes), CPU, GTK_SORT_DESCENDING);
-    gtk_notebook_append_page(GTK_NOTEBOOK(tabs), scroller(process_view), gtk_label_new("Processes"));
+    add_process_tab(tabs);
 
     auto* resource_scroll = gtk_scrolled_window_new(nullptr, nullptr);
     auto* resources = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
@@ -284,8 +448,6 @@ struct Monitor {
     add_graph(resources, network, "Network traffic", true);
     gtk_notebook_append_page(GTK_NOTEBOOK(tabs), resource_scroll, gtk_label_new("Resources"));
 
-    mounts = gtk_list_store_new(MOUNT_COLUMNS, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING,
-        G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_INT);
     auto* mount_view = list_view(mounts, {{"Device", DEVICE}, {"Mount point", MOUNT},
         {"Type", TYPE}, {"Capacity", TOTAL}, {"Used", USED}, {"Available", AVAILABLE}});
     auto* progress = gtk_cell_renderer_progress_new();
@@ -308,6 +470,9 @@ struct Monitor {
 
   void refresh() {
 #if defined(__FreeBSD__) || defined(__MidnightBSD__)
+    // Name lookups can reach NIS or LDAP, so cache them across refreshes and
+    // only drop the cache every five minutes to pick up renamed accounts.
+    if (tick_count % 150 == 0) users.clear();
     sample_processes();
     sample_resources();
     if (tick_count++ % 5 == 0) sample_mounts();
@@ -349,9 +514,7 @@ struct Monitor {
   }
 
   static void set_hardware_label(GtkWidget* label, const std::string& value) {
-    auto* safe = g_utf8_make_valid(value.c_str(), -1);
-    gtk_label_set_text(GTK_LABEL(label), safe);
-    g_free(safe);
+    if (label) gtk_label_set_text(GTK_LABEL(label), shown(value).c_str());
   }
 
 #if defined(__FreeBSD__) || defined(__MidnightBSD__)
@@ -434,16 +597,14 @@ struct Monitor {
         if (!provider) continue;
         const auto type = drive_type(name, drive_config(*provider, "rotationrate"));
         const auto description = drive_config(*provider, "descr");
-        const std::string model = description.empty() ? "Unknown model" : std::string(description);
+        const std::string model = description.empty() ? "Unknown model" : shown(description);
         const std::string capacity = provider->lg_mediasize > 0 ?
             size_label(static_cast<double>(provider->lg_mediasize)) : "No media";
-        const std::string device = std::format("/dev/{}", name);
-        auto* safe_model = g_utf8_make_valid(model.c_str(), -1);
+        const std::string device = shown(std::format("/dev/{}", name));
         GtkTreeIter row;
         gtk_list_store_append(drives, &row);
         gtk_list_store_set(drives, &row, DRIVE_DEVICE, device.c_str(), DRIVE_TYPE, type.data(),
-            DRIVE_MODEL, safe_model, DRIVE_SIZE, capacity.c_str(), -1);
-        g_free(safe_model);
+            DRIVE_MODEL, model.c_str(), DRIVE_SIZE, capacity.c_str(), -1);
         ++count;
       }
     }
@@ -460,15 +621,16 @@ struct Monitor {
           std::format("Cannot read processes: {}", std::strerror(errno)).c_str());
       return;
     }
-    gtk_list_store_clear(processes);
     const long page_size = sysconf(_SC_PAGESIZE);
-    std::unordered_map<uid_t, std::string> users;
+    std::unordered_map<pid_t, GtkTreeIter> seen;
+    seen.reserve(static_cast<std::size_t>(count));
     for (int i = 0; i < count; ++i) {
       const auto& item = items.get()[i];
+      if (item.ki_pid <= 0) continue;
       auto [user_entry, inserted] = users.try_emplace(item.ki_uid);
       if (inserted) {
         const auto* passwd = getpwuid(item.ki_uid);
-        user_entry->second = passwd ? passwd->pw_name : std::to_string(item.ki_uid);
+        user_entry->second = passwd ? shown(passwd->pw_name) : std::to_string(item.ki_uid);
       }
       const char* state = "Other";
       switch (item.ki_stat) {
@@ -481,12 +643,18 @@ struct Monitor {
       const auto memory_text = size_label(bytes);
       const auto name = process_name(item);
       GtkTreeIter row;
-      gtk_list_store_append(processes, &row);
+      if (const auto existing = process_rows.find(item.ki_pid); existing != process_rows.end()) row = existing->second;
+      else gtk_list_store_append(processes, &row);
       gtk_list_store_set(processes, &row, PID, item.ki_pid, NAME, name.c_str(),
           USER, user_entry->second.c_str(), STATE, state, CPU, 100.0 * item.ki_pctcpu / FSCALE,
-          MEMORY, memory_text.c_str(), -1);
+          MEMORY, memory_text.c_str(), START, process_start(item), OWNER, static_cast<guint>(item.ki_uid), -1);
+      seen.insert_or_assign(item.ki_pid, row);
     }
-    gtk_label_set_text(GTK_LABEL(status), std::format("{} processes · refresh every 2 seconds", count).c_str());
+    for (auto& [pid, row] : process_rows)
+      if (!seen.contains(pid)) gtk_list_store_remove(processes, &row);
+    process_rows = std::move(seen);
+    gtk_label_set_text(GTK_LABEL(status),
+        std::format("{} processes · refresh every 2 seconds", process_rows.size()).c_str());
   }
 
   void sample_resources() {
@@ -562,10 +730,15 @@ struct Monitor {
       const double available = static_cast<double>(std::max<int64_t>(0, entry.f_bavail)) * entry.f_bsize;
       const int percent = static_cast<int>(std::clamp(100.0 * used / total, 0.0, 100.0));
       const auto total_text = size_label(total), used_text = size_label(used), available_text = size_label(available);
+      // Mount names come from whoever mounted the file system, which includes
+      // unprivileged users when vfs.usermount is enabled.
+      const auto device = shown(std::string_view(entry.f_mntfromname, strnlen(entry.f_mntfromname, MNAMELEN)));
+      const auto mount_point = shown(std::string_view(entry.f_mntonname, strnlen(entry.f_mntonname, MNAMELEN)));
+      const auto fs_type = shown(std::string_view(entry.f_fstypename, strnlen(entry.f_fstypename, MFSNAMELEN)));
       GtkTreeIter row;
       gtk_list_store_append(mounts, &row);
-      gtk_list_store_set(mounts, &row, DEVICE, entry.f_mntfromname, MOUNT, entry.f_mntonname,
-          TYPE, entry.f_fstypename, TOTAL, total_text.c_str(), USED, used_text.c_str(),
+      gtk_list_store_set(mounts, &row, DEVICE, device.c_str(), MOUNT, mount_point.c_str(),
+          TYPE, fs_type.c_str(), TOTAL, total_text.c_str(), USED, used_text.c_str(),
           AVAILABLE, available_text.c_str(), PERCENT, percent, -1);
     }
   }
