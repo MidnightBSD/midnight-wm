@@ -711,6 +711,9 @@ struct Shell::Impl {
   std::vector<DisplayMonitor> display_monitors;
   DisplayMonitor primary_monitor{};
   int panel_width{};
+  // Complete offscreen panel image installed as the window background.
+  xcb_pixmap_t panel_pixmap{};
+  bool panel_dirty{};
   int desktop_width{}, desktop_height{};
   std::unordered_map<xcb_window_t, Folder> folders;
   std::unordered_set<std::string> hidden_shortcuts;
@@ -881,6 +884,7 @@ struct Shell::Impl {
     for (auto& [window, folder] : folders) xcb_destroy_window(connection, window);
     for (const auto& [window, cache] : menu_surfaces)
       if (cache.pixmap) xcb_free_pixmap(connection, cache.pixmap);
+    if (panel_pixmap) xcb_free_pixmap(connection, panel_pixmap);
     if (menu) xcb_destroy_window(connection, menu);
     if (submenu) xcb_destroy_window(connection, submenu);
     if (app_menu) xcb_destroy_window(connection, app_menu);
@@ -926,6 +930,46 @@ struct Shell::Impl {
     cairo_destroy(cr);
     cairo_surface_flush(surface);
     cairo_surface_destroy(surface);
+    xcb_flush(connection);
+  }
+
+  // Render a window into a complete pixmap and install it as the background so
+  // the server replaces every pixel at once. Painting directly onto the window
+  // shows the bare fill between clearing and drawing, which flickers when busy
+  // clients retitle themselves many times per second. The pixmap covers the
+  // exact physical window size so the background never tiles.
+  void paint_buffered(xcb_window_t window, std::uint32_t physical_width,
+                      std::uint32_t physical_height, xcb_pixmap_t& cache,
+                      const std::array<double, 3>& base, auto&& draw) {
+    if (!visual || !window || !physical_width || !physical_height) return;
+    const auto pixmap = xcb_generate_id(connection);
+    auto* error = xcb_request_check(connection, xcb_create_pixmap_checked(
+        connection, screen->root_depth, pixmap, window, physical_width, physical_height));
+    if (error) {
+      std::free(error);
+      if (!cache) paint(window, static_cast<int>(physical_width / scale),
+                        static_cast<int>(physical_height / scale), draw);
+      return; // Keep the previous complete image if allocation fails.
+    }
+    auto* surface = cairo_xcb_surface_create(connection, pixmap, visual,
+                                             static_cast<int>(physical_width),
+                                             static_cast<int>(physical_height));
+    auto* cr = cairo_create(surface);
+    cairo_set_source_rgb(cr, base[0], base[1], base[2]);
+    cairo_paint(cr);
+    cairo_scale(cr, scale, scale);
+    draw(cr);
+    const auto status = cairo_status(cr);
+    cairo_destroy(cr);
+    cairo_surface_flush(surface);
+    const bool complete = status == CAIRO_STATUS_SUCCESS &&
+                          cairo_surface_status(surface) == CAIRO_STATUS_SUCCESS;
+    cairo_surface_destroy(surface);
+    if (!complete) { xcb_free_pixmap(connection, pixmap); return; }
+    xcb_change_window_attributes(connection, window, XCB_CW_BACK_PIXMAP, &pixmap);
+    xcb_clear_area(connection, false, window, 0, 0, 0, 0);
+    if (cache) xcb_free_pixmap(connection, cache);
+    cache = pixmap;
     xcb_flush(connection);
   }
 
@@ -1727,10 +1771,11 @@ struct Shell::Impl {
   }
 
   void draw_panel() {
+    panel_dirty = false;
     const auto all_tasks = panel_tasks();
     const auto layout = task_layout(all_tasks.size());
-    paint(panel, panel_width, panel_height, [&](cairo_t* cr) {
-      fill(cr, config.panel_color[0], config.panel_color[1], config.panel_color[2], 0, 0, panel_width, panel_height);
+    paint_buffered(panel, primary_monitor.width, scaled_pixel(scale, panel_height), panel_pixmap,
+                   config.panel_color, [&](cairo_t* cr) {
       fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2], 0, 0, panel_width, 3);
       themed_fill(cr, config.button_color, .85, .85, .85, panel_edge, 5, midnight_button_width, 24);
       bevel(cr, panel_edge, 5, midnight_button_width, 24);
@@ -4422,7 +4467,10 @@ bool Shell::handle(xcb_generic_event_t* event) {
     p.draw_panel();
   } else if (type == XCB_EXPOSE) {
     if (window == p.drag_preview) p.draw_drag_preview();
-    else if (window == p.panel) p.draw_panel();
+    else if (window == p.panel) {
+      // Xorg restores the installed background pixmap; repaint only without one.
+      if (!p.panel_pixmap) p.draw_panel();
+    }
     else if (window == p.audio_popup || window == p.network_popup || window == p.bluetooth_popup) {}
     else if (window == p.desktop) {
       if (!p.desktop_pixmap) p.draw_desktop();
@@ -4541,7 +4589,7 @@ void Shell::tick() {
     }
   }
   if (p.bluetooth.tick(p.bluetooth_popup != 0)) { p.draw_bluetooth_popup(); redraw = true; }
-  if (redraw) p.draw_panel();
+  if (redraw || p.panel_dirty) p.draw_panel();
 }
 
 void Shell::open_launcher() {
@@ -4609,10 +4657,13 @@ void Shell::restore_session(const SessionSnapshot& snapshot) {
 }
 
 void Shell::set_tasks(std::vector<Task> tasks) {
-  impl_->tasks = std::move(tasks);
-  // The WM owns layer order; repainting tasks must not raise the panel above
-  // a focused fullscreen window.
-  if (impl_->panel) impl_->draw_panel();
+  auto& p = *impl_;
+  if (tasks == p.tasks) return;
+  p.tasks = std::move(tasks);
+  // Busy clients retitle many times per main-loop pass; paint once from
+  // tick(). The WM owns layer order; repainting tasks must not raise the panel
+  // above a focused fullscreen window.
+  if (p.panel) p.panel_dirty = true;
 }
 
 xcb_window_t Shell::panel_window() const { return impl_->panel; }
@@ -4698,7 +4749,7 @@ void Shell::apply_config(ThemeConfig config) {
 void Shell::set_startup_notification(StartupNotification* startup) {
   impl_->startup = startup;
   if (startup) startup->set_change_handler([this](std::size_t) {
-    if (impl_->panel) impl_->draw_panel();
+    if (impl_->panel) impl_->panel_dirty = true;
   });
 }
 
