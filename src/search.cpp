@@ -3,6 +3,7 @@
 #include <gtk/gtk.h>
 #include <cstring>
 #include <string>
+#include "display_text.hpp"
 
 namespace {
 struct Search {
@@ -65,9 +66,12 @@ struct Search {
           std::string path(bytes + pos, end);
           pos += path.size() + 1;
           auto* row = gtk_list_box_row_new();
+          // Strip controls and bidi formatting so another user's file name cannot
+          // disguise which file a click opens.
           auto* display = g_filename_display_name(path.c_str());
-          auto* label = gtk_label_new(display);
+          const std::string shown = midnight::sanitize_display_text(display);
           g_free(display);
+          auto* label = gtk_label_new(shown.c_str());
           gtk_label_set_xalign(GTK_LABEL(label), 0);
           gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_MIDDLE);
           gtk_widget_set_tooltip_text(row, gtk_label_get_text(GTK_LABEL(label)));

@@ -29,10 +29,14 @@ with temporary_context as temporary:
         path.write_text("Search test\n")
     literal = root / "files/literal[?]*.txt"
     literal.write_text("Literal pattern test\n")
+    # A right-to-left override would display this name as "disguise.txt"; the app
+    # must still open the real path while showing a replacement character.
+    disguised = root / "files/disguise.\u202etxt"
+    disguised.write_text("Bidi override test\n")
     database = root / "locate.database"
     with database.open("wb") as output:
         subprocess.run(["/usr/libexec/locate.mklocatedb"],
-                       input="".join(f"{p}\n" for p in [*paths, literal]).encode(), stdout=output, check=True)
+                       input="".join(f"{p}\n" for p in [*paths, literal, disguised]).encode(), stdout=output, check=True)
     handler = root / "open-file"
     handler.write_text(f'#!/bin/sh\nprintf "%s\\n" "$1" >> "{root / "opened"}"\n')
     handler.chmod(0o700)
@@ -88,9 +92,16 @@ with temporary_context as temporary:
             run("xdotool", "mousemove", str(x + 110), str(y + 105), "click", "1")
             until(lambda: len(opened.read_text().splitlines()) >= 3, "Find/literal search failed")
             assert opened.read_text().splitlines()[-1] == str(literal), opened.read_text()
+            run("xdotool", "mousemove", str(x + 110), str(y + 25), "click", "1", "key", "ctrl+a")
+            run("xdotool", "type", "disguise.")
+            run("xdotool", "key", "alt+f")
+            time.sleep(1)
+            run("xdotool", "mousemove", str(x + 110), str(y + 105), "click", "1")
+            until(lambda: len(opened.read_text().splitlines()) >= 4, "bidi-override file name search failed")
+            assert opened.read_text().splitlines()[-1] == str(disguised), opened.read_text()
             run("xdotool", "key", "alt+c")
             until(lambda: not visible_window("Search Files"), "Close did not dismiss search")
-            print("PASS: panel, Enter search, case folding, 20-result limit, click/default app, keyboard activation, Find, literal glob characters, Close, second-WM rejection")
+            print("PASS: panel, Enter search, case folding, 20-result limit, click/default app, keyboard activation, Find, literal glob characters, bidi-override names, Close, second-WM rejection")
         finally:
             wm.terminate()
             wm.wait(timeout=10)
