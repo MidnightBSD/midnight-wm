@@ -2,12 +2,10 @@
 // SPDX-License-Identifier: BSD-2-Clause
 #pragma once
 #include <gio/gio.h>
-#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace midnight::chat {
@@ -45,9 +43,6 @@ struct Message {
 struct Thread {
   std::string id, title{"New conversation"}, summary;
   std::size_t compacted{};
-  std::string summary_model;
-  int summary_context{};
-  std::size_t last_context_cost{};
   std::vector<Message> messages;
 };
 // Throw std::runtime_error on invalid input, storage, protocol or transport errors.
@@ -64,33 +59,8 @@ struct ContextInfo {
   int tokens{};
   std::string source;
 };
-
-// Compaction progress callback: reports how many messages have been compacted
-using CompactionProgress = std::function<void(std::size_t compacted, std::size_t total)>;
-
-// Cached context limit information for performance
-struct CachedContextInfo {
-  std::string model;
-  std::string url;
-  int port{};
-  ContextInfo info;
-  std::chrono::system_clock::time_point timestamp;
-};
-
 // Best-effort, bounded discovery. The configured context remains an upper bound.
 ContextInfo context_limit(const Settings& settings, GCancellable* cancel);
-
-// Token estimation helper - better than 1 byte = 1 token
-std::size_t estimate_tokens(const Settings& s, const std::string& text);
-
-// Context budget calculation with tool awareness
-std::size_t context_budget(const Settings& s, const Thread& t = {});
-
-// Improved summarization with adaptive chunking and progress
-void summarize(const Settings& s, Thread& t, std::size_t target, GCancellable* cancel, bool force,
-    const CompactionProgress& progress = {});
-
-// Thread compaction with metadata tracking
 Thread compact(const Settings& settings, Thread thread, GCancellable* cancel, ContextInfo* info = nullptr);
 // Runs off the GTK thread. Updates a copy, committing summaries only on success.
 // Asked from the worker thread before web_search runs after a local tool in the
@@ -99,8 +69,4 @@ Thread compact(const Settings& settings, Thread thread, GCancellable* cancel, Co
 using WebSearchConfirm = std::function<bool(const std::string& query)>;
 Thread complete(const Settings& settings, Thread thread, GCancellable* cancel, ContextInfo* info = nullptr,
     const WebSearchConfirm& confirm = {});
-
-// Global context cache for performance optimization
-extern std::unordered_map<std::string, CachedContextInfo> context_cache;
-
 }
