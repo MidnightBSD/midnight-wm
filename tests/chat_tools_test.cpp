@@ -146,6 +146,19 @@ int main(int argc, char** argv) {
     s.web_search = true; s.context = 4096; s.model = "fixture-large";
     auto limited = complete(s, pending, cancel);
     require(limited.messages.back().tools[0].result.find("truncated to fit context") != std::string::npos, "Large tool output not bounded to context");
+    // A retained latest turn that nearly fills the budget is summarized to make
+    // room for the reply's tool results instead of failing or gutting them.
+    Thread crowded; crowded.id = t.id;
+    crowded.messages.push_back({"user", "Earlier question"});
+    crowded.messages.push_back({"assistant", "Earlier answer"});
+    crowded.messages.push_back({"user", "Long question"});
+    crowded.messages.push_back({"assistant", std::string(19800, 'a')});
+    crowded.messages.push_back({"user", "Use tools"});
+    s.context = 8192;
+    auto room = complete(s, crowded, cancel);
+    require(room.compacted == 4 && room.messages.size() == 6 && room.messages.back().text == "Verified tools" &&
+        room.messages.back().tools[0].result.find("truncated") == std::string::npos, "Crowded context did not make room for tool results");
+    s.context = 4096;
     s.web_search = false; s.context = 32768;
     s.system_information = true;
     for (const auto* model : {"fixture-loop", "fixture-batch", "fixture-stubborn", "fixture-stubborn-text"}) {

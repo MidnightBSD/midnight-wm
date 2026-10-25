@@ -509,14 +509,17 @@ void fold(const Runtime& r, Thread& t, const std::string& text, GCancellable* ca
     if (g_cancellable_is_cancelled(cancel)) fail("Request cancelled.");
   } while (offset < text.size());
 }
-void summarize(const Runtime& r, Thread& t, std::size_t target, GCancellable* cancel, bool force, const Progress& progress) {
+// reserve is the cost of the reply under construction (its tool calls and
+// results), which must fit beside the retained turns.
+void summarize(const Runtime& r, Thread& t, std::size_t target, GCancellable* cancel, bool force, const Progress& progress,
+    std::size_t reserve = 0) {
   const auto complete_end = t.messages.size() - t.messages.size() % 2;
   // Keep the latest complete turn when possible; never summarize a pending user
   // message. Commit a position only after every fragment of its pair succeeds.
   while (t.compacted + 2 <= complete_end &&
-         (cost(r, build_context(r, t)) > target || force)) {
+         (cost(r, build_context(r, t)) + reserve > target || force)) {
     if (t.compacted + 2 >= complete_end &&
-        (force || cost(r, build_context(r, t)) <= context_budget(r))) break;
+        (force || cost(r, build_context(r, t)) + reserve <= context_budget(r))) break;
     const auto end = t.compacted + 2;
     fold(r, t, "User: " + message_text(t.messages[t.compacted]) +
         "\nAssistant: " + message_text(t.messages[t.compacted + 1]) + "\n", cancel);
@@ -781,6 +784,13 @@ Thread complete(const Settings& configured, Thread t, GCancellable* cancel, Cont
     }
     messages = build_context(r, t);
     messages.push_back(final);
+    // Make room for this reply's tool calls by summarizing retained turns, the
+    // latest included once it no longer fits, before cutting fresh results.
+    if (cost(r, messages) > budget) {
+      summarize(r, t, budget * 3 / 5, cancel, false, progress, cost(r, {final}) - 256);
+      messages = build_context(r, t);
+      messages.push_back(final);
+    }
     // Keep previews within the remaining context instead of allowing a large
     // tool response to exhaust the model window. Truncation stays visible.
     while (cost(r, messages) > budget) {

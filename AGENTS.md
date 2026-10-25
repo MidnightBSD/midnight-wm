@@ -166,7 +166,9 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   estimates conservative and keep `tests/chat_protocol_test.py` in step with
   the estimator. `compaction_target` holds the 80%/60% and 95%/40% policy.
   Summaries fold in UTF-8 safe fragments, condense an oversized summary before
-  failing, and record `summary_model`/`summary_context`. Discovery results are
+  failing, and record `summary_model`/`summary_context`. When a reply's tool
+  calls do not fit, summarize retained turns (reserve = the reply's cost)
+  before truncating results; never drop the system prompt or tool pairs. Discovery results are
   cached per server and model for five minutes behind a mutex; call
   `forget_context_limits()` after settings change. Progress callbacks run on
   the worker thread; marshal UI updates with g_main_context_invoke. Linux

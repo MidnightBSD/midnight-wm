@@ -44,6 +44,9 @@ request and the estimate is scaled to match. Large older turns are summarized
 in bounded fragments. A summary written for a larger context window is
 condensed before further turns merge into it. The status line shows progress
 while turns are summarized, and the summary records the model that wrote it.
+When a reply's tool calls no longer fit beside the retained turns, older
+turns are summarized first, the newest included when necessary, before tool
+results are truncated.
 Compact now summarizes older turns on demand, preserving the newest turn.
 Reply space and template overhead are reserved. The complete transcript is
 retained locally. Summaries can lose details. Reset context excludes earlier
