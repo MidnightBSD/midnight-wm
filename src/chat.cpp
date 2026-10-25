@@ -390,6 +390,9 @@ struct Chat {
         next.search_url = gtk_entry_get_text(GTK_ENTRY(search_url));
         next.search_token = gtk_entry_get_text(GTK_ENTRY(search_token));
         if (!next.authenticate) next.token.clear();
+        if (cleartext_credentials(next) &&
+            !confirm("This server uses http:// to a remote host, so the bearer token will be sent unencrypted on every request. Use an https:// base URL for remote servers.\n\nSave anyway?", "Unencrypted credentials"))
+          continue;
         auto updated = edited;
         if (adding) {
           auto item = new_server_profile(gtk_entry_get_text(GTK_ENTRY(name)));

@@ -76,6 +76,14 @@ struct Builder {
     return result;
   }
 };
+// Truncate on a UTF-8 boundary so the saved field stays within its load limit.
+std::string bounded(std::string text, std::size_t limit, const char* marker = "…") {
+  if (text.size() <= limit) return text;
+  const std::size_t suffix = std::strlen(marker);
+  std::size_t end = limit > suffix ? limit - suffix : 0;
+  while (end && (static_cast<unsigned char>(text[end]) & 0xc0) == 0x80) --end;
+  text.resize(end); return text + marker;
+}
 std::string read(const std::filesystem::path& path) {
   auto result = read_private_state(path, state_limit);
   if (!result) fail(result.error());
@@ -180,7 +188,7 @@ Message request(const Settings& s, const std::vector<Message>& messages, int tok
   if (finish_tools) {
     // Some local models ignore tool_choice. Never execute their extra calls or
     // lose the successful results already collected for this reply.
-    if (answer.text.size() > 256 * 1024) fail("Server returned oversized chat text.");
+    if (answer.text.size() > max_message_bytes) fail("Server returned oversized chat text.");
     if (answer.text.empty()) answer.text = "The model did not provide a final answer after reaching the tool limit. The collected tool results are shown above; no additional tools were run.";
     return answer;
   }
@@ -193,14 +201,14 @@ Message request(const Settings& s, const std::vector<Message>& messages, int tok
       if (string(call, "type") != "function") fail("Unsupported tool call type.");
       auto* function = object(member(call, "function"));
       ToolUse tool{string(call, "id"), string(function, "name"), string(function, "arguments"), ""};
-      if (tool.id.empty() || tool.id.size() > 128 || tool.name.empty() || tool.name.size() > 64 || tool.arguments.size() > 4096)
+      if (tool.id.empty() || tool.id.size() > 128 || tool.name.empty() || tool.name.size() > 64 || tool.arguments.size() > max_tool_arguments_bytes)
         fail("Invalid tool call metadata.");
       for (unsigned char c : tool.id) if (!g_ascii_isalnum(c) && c != '_' && c != '-') fail("Invalid tool call ID.");
       if (std::any_of(answer.tools.begin(), answer.tools.end(), [&](const auto& prev) { return prev.id == tool.id; })) fail("Duplicate tool call ID.");
       answer.tools.push_back(std::move(tool));
     }
   }
-  if ((answer.text.empty() && answer.tools.empty()) || answer.text.size() > 256 * 1024) fail("Server returned empty or oversized chat text.");
+  if ((answer.text.empty() && answer.tools.empty()) || answer.text.size() > max_message_bytes) fail("Server returned empty or oversized chat text.");
   return answer;
 }
 }
@@ -221,6 +229,20 @@ std::string endpoint(const Settings& s) {
   auto* url = g_uri_join(G_URI_FLAGS_NONE, scheme, nullptr, g_uri_get_host(uri),
       s.port ? s.port : g_uri_get_port(uri), path.c_str(), nullptr, nullptr);
   std::string result(url); g_free(url); return result;
+}
+bool cleartext_credentials(const Settings& s) {
+  if (!s.authenticate || s.token.empty()) return false;
+  GUri* uri = g_uri_parse(s.url.c_str(), G_URI_FLAGS_NONE, nullptr);
+  if (!uri) return false;
+  std::unique_ptr<GUri, decltype(&g_uri_unref)> owner(uri, g_uri_unref);
+  const char* scheme = g_uri_get_scheme(uri);
+  const char* host = g_uri_get_host(uri);
+  if (!scheme || !host || std::strcmp(scheme, "http") != 0) return false;
+  const std::string name = host;
+  if (g_ascii_strcasecmp(name.c_str(), "localhost") == 0 ||
+      (name.size() > 10 && g_ascii_strcasecmp(name.c_str() + name.size() - 10, ".localhost") == 0)) return false;
+  Object<GInetAddress> address{g_inet_address_new_from_string(host)};
+  return !address || !g_inet_address_get_is_loopback(address.get());
 }
 std::vector<std::string> models(const Settings& s, GCancellable* cancel) {
   validate(s);
@@ -475,7 +497,7 @@ std::vector<Thread> load_threads(const std::filesystem::path& path) {
     auto* o = object(json_array_get_element(rows, i));
     Thread t;
     t.id = string(o, "id"); t.title = string(o, "title"); t.summary = string(o, "summary");
-    if (!g_uuid_string_is_valid(t.id.c_str()) || t.title.size() > 256 || t.summary.size() > 32768 ||
+    if (!g_uuid_string_is_valid(t.id.c_str()) || t.title.size() > max_title_bytes || t.summary.size() > max_summary_bytes ||
         std::any_of(result.begin(), result.end(), [&](const auto& prev) { return prev.id == t.id; })) fail("Invalid conversation metadata");
     t.compacted = number(o, "compacted", 0, max_thread_messages);
     auto* messages = array(member(o, "messages"));
@@ -483,7 +505,7 @@ std::vector<Thread> load_threads(const std::filesystem::path& path) {
     for (guint j = 0; j < json_array_get_length(messages); ++j) {
       auto* m = object(json_array_get_element(messages, j));
       Message message{string(m, "role"), string(m, "content")};
-      if (message.role != (j % 2 ? "assistant" : "user") || message.text.size() > 256 * 1024)
+      if (message.role != (j % 2 ? "assistant" : "user") || message.text.size() > max_message_bytes)
         fail("Invalid conversation message");
       if (json_object_has_member(m, "tools")) {
         auto* calls = array(member(m, "tools"));
@@ -491,7 +513,7 @@ std::vector<Thread> load_threads(const std::filesystem::path& path) {
         for (guint k = 0; k < json_array_get_length(calls); ++k) {
           auto* call = object(json_array_get_element(calls, k));
           ToolUse tool{string(call, "id"), string(call, "name"), string(call, "arguments"), string(call, "result")};
-          if (tool.id.empty() || tool.id.size() > 128 || tool.name.size() > 64 || tool.arguments.size() > 4096 || tool.result.size() > 8192)
+          if (tool.id.empty() || tool.id.size() > 128 || tool.name.size() > 64 || tool.arguments.size() > max_tool_arguments_bytes || tool.result.size() > max_tool_result_bytes)
             fail("Invalid saved tool metadata.");
           message.tools.push_back(std::move(tool));
         }
@@ -509,15 +531,20 @@ void save_threads(const std::filesystem::path& path, const std::vector<Thread>& 
         return t.messages.size() > max_thread_messages;
       })) fail("Conversation message limit reached (100000). Start a new conversation.");
   Builder b; b.begin(); b.integer("version", 1); b.key("threads"); b.begin_array();
+  // Clamp every bounded field so the file always satisfies load_threads; a
+  // producer exceeding its limit must never lock the user out of history.
   for (const auto& t : threads) {
-    b.begin(); b.text("id", t.id); b.text("title", t.title); b.text("summary", t.summary); b.integer("compacted", t.compacted);
+    b.begin(); b.text("id", t.id); b.text("title", bounded(t.title, max_title_bytes));
+    b.text("summary", bounded(t.summary, max_summary_bytes)); b.integer("compacted", t.compacted);
     b.key("messages"); b.begin_array();
     for (const auto& m : t.messages) {
-      b.begin(); b.text("role", m.role); b.text("content", m.text);
+      b.begin(); b.text("role", m.role); b.text("content", bounded(m.text, max_message_bytes));
       if (!m.tools.empty()) {
         b.key("tools"); b.begin_array();
         for (const auto& tool : m.tools) {
-          b.begin(); b.text("id", tool.id); b.text("name", tool.name); b.text("arguments", tool.arguments); b.text("result", tool.result); b.end();
+          b.begin(); b.text("id", tool.id); b.text("name", tool.name);
+          b.text("arguments", bounded(tool.arguments, max_tool_arguments_bytes));
+          b.text("result", bounded(tool.result, max_tool_result_bytes, "\n[Tool output truncated for storage.]")); b.end();
         }
         b.end_array();
       }

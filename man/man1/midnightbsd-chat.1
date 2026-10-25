@@ -80,6 +80,8 @@ install or remove packages.
 TLS certificates are verified, redirects are rejected, and environment proxies
 are not used. Authentication is omitted unless explicitly enabled.
 Tokens are stored in a private file, not encrypted; use HTTPS when appropriate.
+Saving a profile that sends a bearer token over http:// to a host other than
+loopback asks for confirmation first.
 .Sh FILES
 .Bl -tag -width Ds
 .It Pa $XDG_CONFIG_HOME/midnightbsd-chat/settings.json
@@ -90,6 +92,8 @@ Conversation transcripts and summaries (mode 0600).
 .Pp
 XDG defaults are ~/.config and ~/.local/share.
 Invalid or insecure files are reported and preserved, not overwritten.
+Saved titles, summaries, messages and tool results are clamped to the same
+field limits that loading enforces, so history written by this program reloads.
 History is limited to 16 MiB and 1000 conversations; delete older conversations
 when the limit is reached. Responses are limited to 1 MiB.
 .Sh SEE ALSO
