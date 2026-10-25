@@ -43,6 +43,9 @@ struct Message {
 struct Thread {
   std::string id, title{"New conversation"}, summary;
   std::size_t compacted{};
+  // Model and effective context size that wrote the current summary.
+  std::string summary_model;
+  int summary_context{};
   std::vector<Message> messages;
 };
 // Throw std::runtime_error on invalid input, storage, protocol or transport errors.
@@ -58,15 +61,32 @@ void save_threads(const std::filesystem::path& path, const std::vector<Thread>& 
 struct ContextInfo {
   int tokens{};
   std::string source;
+  // Estimated tokens the context occupies after the operation, and how they
+  // were counted: the local estimate or the server's tokenizer.
+  int used{};
+  std::string tokenizer{"local estimate"};
 };
 // Best-effort, bounded discovery. The configured context remains an upper bound.
+// Answers from a reachable server are cached per server and model for five
+// minutes; forget_context_limits() drops the cache after settings change.
 ContextInfo context_limit(const Settings& settings, GCancellable* cancel);
-Thread compact(const Settings& settings, Thread thread, GCancellable* cancel, ContextInfo* info = nullptr);
+void forget_context_limits();
+// Local token estimate without a server: one token per three ASCII letters or
+// digits and one per other byte. Deliberately conservative for non-Latin text.
+std::size_t estimate_tokens(const std::string& text);
+// Compaction policy. Returns the size to summarize down to, or zero while the
+// used context stays below the trigger. Exposed for tests.
+std::size_t compaction_target(std::size_t used, std::size_t budget);
+// Reports (messages summarized so far, messages eligible) from the worker
+// thread after each summarized turn.
+using Progress = std::function<void(std::size_t compacted, std::size_t total)>;
+Thread compact(const Settings& settings, Thread thread, GCancellable* cancel, ContextInfo* info = nullptr,
+    const Progress& progress = {});
 // Runs off the GTK thread. Updates a copy, committing summaries only on success.
 // Asked from the worker thread before web_search runs after a local tool in the
 // same reply, because the query may carry local results to the search provider.
 // Return false to decline that search. Without a callback, searches proceed.
 using WebSearchConfirm = std::function<bool(const std::string& query)>;
 Thread complete(const Settings& settings, Thread thread, GCancellable* cancel, ContextInfo* info = nullptr,
-    const WebSearchConfirm& confirm = {});
+    const WebSearchConfirm& confirm = {}, const Progress& progress = {});
 }

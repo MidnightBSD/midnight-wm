@@ -5,6 +5,7 @@
 #include <libsoup/soup.h>
 #include <sqlite3.h>
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
@@ -152,6 +153,17 @@ std::string system_information() {
   struct timeval boot{}; length = sizeof(boot);
   if (sysctlbyname("kern.boottime", &boot, &length, nullptr, 0) == 0 && length == sizeof(boot))
     result += "Uptime seconds: " + std::to_string(std::max<time_t>(0, time(nullptr) - boot.tv_sec)) + "\n";
+#elif defined(__linux__)
+  const auto proc = [](const char* path) {
+    gchar* contents{}; gsize length{}; std::string data;
+    if (g_file_get_contents(path, &contents, &length, nullptr)) {
+      data.assign(contents, std::min<gsize>(length, 64 * 1024)); g_free(contents);
+    }
+    return data;
+  };
+  if (const auto model = proc_cpu_model(proc("/proc/cpuinfo")); !model.empty()) result += "CPU: " + model + "\n";
+  if (const auto memory = proc_memory_bytes(proc("/proc/meminfo"))) result += "Physical memory bytes: " + std::to_string(*memory) + "\n";
+  if (const auto uptime = proc_uptime_seconds(proc("/proc/uptime"))) result += "Uptime seconds: " + std::to_string(*uptime) + "\n";
 #endif
   double loads[3];
   if (getloadavg(loads, 3) == 3) result += "Load averages (1/5/15 min): " + std::to_string(loads[0]) + ", " + std::to_string(loads[1]) + ", " + std::to_string(loads[2]) + "\n";
@@ -238,6 +250,56 @@ std::string web(const Settings& settings, const std::string& query, GCancellable
 }
 }
 bool tools_enabled(const Settings& s) { return s.file_search || s.system_information || s.package_queries || s.web_search; }
+namespace {
+std::optional<unsigned long long> leading_number(std::string_view text) {
+  while (!text.empty() && (text.front() == ' ' || text.front() == '\t')) text.remove_prefix(1);
+  unsigned long long value{};
+  const auto* begin = text.data();
+  const auto [ptr, ec] = std::from_chars(begin, begin + text.size(), value);
+  if (ec != std::errc{} || ptr == begin) return std::nullopt;
+  return value;
+}
+template<class F> void each_line(const std::string& text, F&& visit) {
+  std::size_t pos = 0;
+  while (pos < text.size()) {
+    auto end = text.find('\n', pos);
+    if (end == std::string::npos) end = text.size();
+    if (visit(std::string_view(text.data() + pos, end - pos))) return;
+    pos = end + 1;
+  }
+}
+}
+std::string proc_cpu_model(const std::string& cpuinfo) {
+  std::string model;
+  each_line(cpuinfo, [&](std::string_view line) {
+    const auto colon = line.find(':');
+    if (colon == std::string_view::npos) return false;
+    auto key = line.substr(0, colon);
+    while (!key.empty() && (key.back() == ' ' || key.back() == '\t')) key.remove_suffix(1);
+    if (key != "model name" && key != "Model" && key != "cpu model") return false;
+    auto value = line.substr(colon + 1);
+    while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) value.remove_prefix(1);
+    while (!value.empty() && (value.back() == ' ' || value.back() == '\t' || value.back() == '\r')) value.remove_suffix(1);
+    if (value.empty()) return false;
+    model = safe_text(std::string(value).c_str(), 255);
+    return true;
+  });
+  return model;
+}
+std::optional<unsigned long long> proc_memory_bytes(const std::string& meminfo) {
+  std::optional<unsigned long long> bytes;
+  each_line(meminfo, [&](std::string_view line) {
+    constexpr std::string_view key = "MemTotal:";
+    if (!line.starts_with(key)) return false;
+    // /proc/meminfo reports kibibytes. Reject values that cannot be real memory.
+    if (const auto value = leading_number(line.substr(key.size())); value && *value <= (1ull << 44)) bytes = *value * 1024;
+    return true;
+  });
+  return bytes;
+}
+std::optional<unsigned long long> proc_uptime_seconds(const std::string& uptime) {
+  return leading_number(uptime);
+}
 void validate_tool_settings(const Settings& s) {
   if (s.search_provider != "brave" && s.search_provider != "searxng") fail("Unknown search provider.");
   if (s.search_token.size() > 4096 || s.search_url.size() > 2048) fail("Search settings are too long.");

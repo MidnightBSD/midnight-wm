@@ -51,6 +51,18 @@ struct Chat {
     return it == threads.end() ? nullptr : &*it;
   }
   void message(const std::string& text) { if (window) gtk_label_set_text(GTK_LABEL(status), text.c_str()); }
+  // Called on the worker thread after each summarized turn; the label updates
+  // on the GTK thread while the job is still running.
+  void report_progress(std::size_t done, std::size_t total) {
+    struct Update { Chat* self; std::size_t done, total; };
+    g_main_context_invoke_full(nullptr, G_PRIORITY_DEFAULT, +[](gpointer p) -> gboolean {
+      auto& u = *static_cast<Update*>(p);
+      if (u.self->window && u.self->cancellable)
+        u.self->message("Summarizing older context… " + std::to_string(u.done) + " of " + std::to_string(u.total) +
+            " earlier messages folded into the summary. The full transcript is retained.");
+      return G_SOURCE_REMOVE;
+    }, new Update{this, done, total}, +[](gpointer p) { delete static_cast<Update*>(p); });
+  }
   void error_dialog(const std::string& text) {
     auto* d = gtk_message_dialog_new(GTK_WINDOW(window), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR, GTK_BUTTONS_CLOSE, "%s", text.c_str());
     gtk_dialog_run(GTK_DIALOG(d)); gtk_widget_destroy(d);
@@ -81,6 +93,7 @@ struct Chat {
     selecting_server = false;
   }
   void commit_profiles(ServerProfiles next) {
+    forget_context_limits();
     save_server_profiles(settings_path, next);
     profiles = std::move(next); settings = chosen(profiles).settings;
     refresh_servers();
@@ -135,7 +148,8 @@ struct Chat {
   void render() {
     auto* t = current(); std::string text;
     if (t) {
-      if (t->compacted) text = "[Earlier context summarized or reset; full transcript retained below.]\n\n";
+      if (t->compacted) text = t->summary_model.empty() ? "[Earlier context summarized or reset; full transcript retained below.]\n\n"
+          : "[Earlier context summarized by " + t->summary_model + "; full transcript retained below.]\n\n";
       for (const auto& m : t->messages) {
         for (const auto& tool : m.tools)
           text += "Tool: " + tool.name + "\nArguments: " + tool.arguments + "\n" + tool.result + "\n\n";
@@ -237,7 +251,8 @@ struct Chat {
   void reset_context() {
     auto* t = current();
     if (!t || selected == active || !confirm("Start fresh context in this conversation? Earlier messages remain visible but will no longer be sent to the model.")) return;
-    const auto old = *t; t->summary.clear(); t->compacted = t->messages.size() - t->messages.size() % 2;
+    const auto old = *t; t->summary.clear(); t->summary_model.clear(); t->summary_context = 0;
+    t->compacted = t->messages.size() - t->messages.size() % 2;
     if (!persist()) *t = old;
     render();
   }
@@ -248,6 +263,7 @@ struct Chat {
       profiles = std::move(next); settings = chosen(profiles).settings;
     }
     catch (const std::exception& e) { message(e.what()); return; }
+    if (listing) forget_context_limits();
     auto job = std::make_unique<Job>(); job->owner = this; job->settings = settings; job->listing = listing; job->compacting = compacting;
     if (compacting) {
       auto* t = current(); if (!t || t->messages.size() < t->compacted + 4) return;
@@ -305,7 +321,8 @@ struct Chat {
           const bool summarized = it != self.threads.end() && job->thread.compacted > it->compacted;
           if (it != self.threads.end()) *it = std::move(job->thread);
           if (self.persist()) self.message(std::string(job->compacting ? "Context compacted. " : summarized ? "Reply received; older context compacted. " : "Reply received. ") +
-              "Context: " + std::to_string(job->context.tokens) + " tokens, " + job->context.source + ".");
+              "Context: " + std::to_string(job->context.used) + " of " + std::to_string(job->context.tokens) + " tokens used, " +
+              job->context.source + "; " + job->context.tokenizer + ".");
           self.render();
         }
         self.sensitivity();
@@ -318,10 +335,11 @@ struct Chat {
     g_task_run_in_thread(task, +[](GTask* task, gpointer, gpointer data, GCancellable* cancel) {
       auto& job = *static_cast<Job*>(data);
       try {
+        const Progress progress = [&job](std::size_t done, std::size_t total) { job.owner->report_progress(done, total); };
         if (job.listing) job.models = models(job.settings, cancel);
-        else if (job.compacting) job.thread = compact(job.settings, std::move(job.thread), cancel, &job.context);
+        else if (job.compacting) job.thread = compact(job.settings, std::move(job.thread), cancel, &job.context, progress);
         else job.thread = complete(job.settings, std::move(job.thread), cancel, &job.context,
-            [&job, cancel](const std::string& query) { return job.owner->confirm_web_search(job, cancel, query); });
+            [&job, cancel](const std::string& query) { return job.owner->confirm_web_search(job, cancel, query); }, progress);
       } catch (const std::exception& e) { job.error = e.what(); }
       g_task_return_boolean(task, TRUE);
     });

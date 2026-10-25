@@ -35,9 +35,15 @@ entering replacement text edits that pending message.
 Only one request runs at a time; conversations can be viewed while waiting.
 .Pp
 Older complete turns are summarized automatically through the same endpoint
-when the conservative byte-based token estimate reaches 80% of the input budget.
-Compaction targets 60% and keeps the newest complete turn when it fits.
-Large older turns are summarized in bounded fragments.
+when the estimated context reaches 80% of the input budget.
+Compaction targets 60%, or 40% past 95%, and keeps the newest complete turn
+when it fits. Tokens are estimated locally and conservatively: one per three
+ASCII letters or digits and one per other byte. When a llama.cpp server offers
+/tokenize beside /v1, a sample of the context is counted there before each
+request and the estimate is scaled to match. Large older turns are summarized
+in bounded fragments. A summary written for a larger context window is
+condensed before further turns merge into it. The status line shows progress
+while turns are summarized, and the summary records the model that wrote it.
 Compact now summarizes older turns on demand, preserving the newest turn.
 Reply space and template overhead are reserved. The complete transcript is
 retained locally. Summaries can lose details. Reset context excludes earlier
@@ -46,8 +52,10 @@ The configured context size is a fallback and an upper bound. Before each reply
 or compaction, the app checks model metadata and, for conventional /v1 endpoints,
 Ollama's /api/ps context_length for the selected loaded model. Smaller reported
 limits apply automatically; reply space is reduced if necessary.
-Unsupported or unavailable discovery uses the configured size. The status line
-reports the limit and its source. Model architecture maxima are not used as
+Unsupported or unavailable discovery uses the configured size. Answers from a
+reachable server are cached for five minutes per server and model; saving
+settings or refreshing models probes again. The status line reports the
+estimated tokens used, the limit, its source, and how tokens were counted. Model architecture maxima are not used as
 runtime allocations. OpenClaw agent targets may not report a backend limit;
 configure the usable capacity after accounting for gateway prompts and tools.
 This setting does not reconfigure the server.

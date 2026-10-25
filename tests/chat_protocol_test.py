@@ -11,6 +11,16 @@ import threading
 import time
 
 requests = []
+def estimate(text):
+    """Mirror of the client's local estimate: three ASCII letters or digits per token, one per other byte."""
+    tokens = run = 0
+    for byte in text.encode():
+        if byte < 128 and chr(byte).isalnum():
+            run += 1
+            continue
+        tokens += (run + 2) // 3 + 1
+        run = 0
+    return tokens + (run + 2) // 3
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -60,10 +70,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         requests.append((self.path, self.headers.get('Authorization'), body))
+        if self.path.endswith('/tokenize'):
+            # Only the /tokenizer prefix emulates llama.cpp: four bytes per token.
+            if not self.path.endswith('/tokenizer/tokenize'):
+                self.send_response(404)
+                self.end_headers()
+                return
+            assert isinstance(body['content'], str) and len(body['content'].encode()) <= 16384
+            self.respond(json.dumps({'tokens': [1] * ((len(body['content'].encode()) + 3) // 4)}).encode())
+            return
         assert self.path.endswith('/v1/chat/completions')
         assert body['model'].startswith('fixture') and body['stream'] is False
         if body['model'] == 'fixture-small':
-            assert 256 + sum(len(m['content'].encode()) + 32 for m in body['messages']) + body['max_tokens'] <= 2048
+            assert 256 + sum(estimate(m['content']) + 32 for m in body['messages']) + body['max_tokens'] <= 2048
         assert 'tools' not in body
         if body['model'] == 'fixture-fail' and body['messages'][0]['content'].startswith('Summarize'):
             self.send_response(500)
@@ -83,7 +102,9 @@ try:
     assert any(auth is None and body for _, auth, body in requests)
     assert any(auth == 'Bearer fixture-secret' and body for _, auth, body in requests)
     assert not any(path == '/leaked' for path, _, _ in requests)
-    assert any(body and 'Summarize' in body['messages'][0]['content'] for _, _, body in requests)
+    assert any(body and 'messages' in body and 'Summarize' in body['messages'][0]['content'] for _, _, body in requests)
+    assert sum(path == '/proxy/api/ps' for path, _, _ in requests) == 2, 'discovery cache'
+    assert any(path == '/tokenizer/tokenize' for path, _, _ in requests), 'tokenizer calibration'
     print('PASS: HTTP requests verified, no auth header in no-auth mode, bearer token in auth mode')
 finally:
     server.shutdown()

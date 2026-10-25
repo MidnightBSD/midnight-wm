@@ -17,6 +17,10 @@ template<class F> void rejects(F f) {
 int main(int argc, char** argv) {
   try {
     require(argc >= 4, "usage: chat_test base-url port temporary-directory [live-model]");
+    require(estimate_tokens("") == 0 && estimate_tokens("Hello") == 2 && estimate_tokens("Hello world.") == 6 &&
+        estimate_tokens("海") == 3 && estimate_tokens(std::string(100, ' ')) == 100, "Token estimate");
+    require(compaction_target(800, 1000) == 0 && compaction_target(801, 1000) == 600 && compaction_target(951, 1000) == 400,
+        "Compaction policy");
     Settings s; s.url = argv[1]; s.port = std::stoi(argv[2]); s.model = argc > 4 ? argv[4] : "fixture";
     const std::filesystem::path root(argv[3]);
     auto* cancel = g_cancellable_new();
@@ -48,6 +52,8 @@ int main(int argc, char** argv) {
     save_threads(root / "data/threads.json", {t});
     const auto restored = load_threads(root / "data/threads.json");
     require(restored.size() == 1 && restored[0].summary == t.summary && restored[0].messages.size() == 16, "History roundtrip");
+    require(t.summary_model == s.model && t.summary_context == 2048 && restored[0].summary_model == s.model &&
+        restored[0].summary_context == 2048, "Summary metadata roundtrip");
     struct stat st{};
     require(stat((root / "data/threads.json").c_str(), &st) == 0 && (st.st_mode & 0777) == 0600, "History permissions");
     if (argc > 4) { g_object_unref(cancel); return 0; }
@@ -67,10 +73,30 @@ int main(int argc, char** argv) {
     discovered.url = std::string(argv[1]);
     discovered.url.insert(discovered.url.rfind("/v1"), "/proxy");
     require(context_limit(discovered, cancel).tokens == 3072, "Reverse proxy prefix lost");
+    // Repeated discovery for one server and model is answered from the cache;
+    // the fixture counts the /proxy/api/ps requests. Forgetting probes again.
+    require(context_limit(discovered, cancel).tokens == 3072 && context_limit(discovered, cancel).tokens == 3072, "Cached discovery");
+    forget_context_limits();
+    require(context_limit(discovered, cancel).tokens == 3072, "Discovery after cache reset");
+    // A llama.cpp /tokenize route calibrates the estimate: prose padded with
+    // whitespace that compacts under the local estimate fits once measured.
+    Thread padded; padded.id = t.id;
+    for (int i = 0; i < 6; ++i) {
+      padded.messages.push_back({"user", "My name is Robin. I enjoy walking by the sea. " + std::string(100, ' ')});
+      padded.messages.push_back({"assistant", "Hello Robin. Walking by the sea sounds relaxing. " + std::string(100, ' ')});
+    }
+    padded.messages.push_back({"user", "What is my name? Answer briefly."});
+    ContextInfo local_info;
+    require(complete(s, padded, cancel, &local_info).compacted > 0 && local_info.tokenizer == "local estimate" && local_info.used > 0,
+        "Local estimate did not compact padded prose");
+    auto calibrated = s; calibrated.url.insert(calibrated.url.rfind("/v1"), "/tokenizer");
+    ContextInfo measured_info;
+    require(complete(calibrated, padded, cancel, &measured_info).compacted == 0 && measured_info.tokenizer == "server tokenizer",
+        "Server tokenizer did not calibrate the estimate");
     Thread early; early.id = t.id;
     for (int i = 0; i < 3; ++i) {
-      early.messages.push_back({"user", std::string(150, 'u')});
-      early.messages.push_back({"assistant", std::string(150, 'a')});
+      early.messages.push_back({"user", std::string(480, 'u')});
+      early.messages.push_back({"assistant", std::string(480, 'a')});
     }
     early.messages.push_back({"user", "Continue, Robin"});
     auto small = s; small.context = 8192; small.model = "fixture-small";
@@ -83,9 +109,16 @@ int main(int argc, char** argv) {
     auto configured_small = s; configured_small.context = 2048;
     require(complete(configured_small, early, cancel).compacted > 0, "Early compaction trigger failed");
     auto manual = early; manual.messages.pop_back();
-    auto compacted = compact(s, manual, cancel);
+    std::vector<std::pair<std::size_t, std::size_t>> progress;
+    auto compacted = compact(s, manual, cancel, nullptr, [&](std::size_t done, std::size_t total) { progress.emplace_back(done, total); });
     require(compacted.compacted == 4 && compacted.messages.size() == manual.messages.size() &&
         compacted.messages.back().text == manual.messages.back().text, "Manual compaction lost latest turn/transcript");
+    require(progress.size() == 2 && progress.back() == std::pair<std::size_t, std::size_t>(4, 6), "Compaction progress not reported");
+    require(compacted.summary_model == s.model && compacted.summary_context == 2048, "Summary metadata missing");
+    // A summary written for a larger window is condensed instead of failing.
+    auto oversized = manual; oversized.summary = std::string(6000, 'S'); oversized.compacted = 2;
+    const auto condensed = compact(s, oversized, cancel);
+    require(condensed.compacted == 4 && condensed.summary.size() < 100, "Oversized summary was not condensed");
     // An old turn larger than the entire window must be folded in UTF-8 safe chunks.
     auto huge = early;
     huge.messages[0].text.clear();
