@@ -8,9 +8,11 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <sys/utsname.h>
 #include <unistd.h>
@@ -143,6 +145,7 @@ std::string system_information() {
   std::string result = std::string("Operating system: ") + name.sysname + " " + name.release + "\nArchitecture: " + name.machine + "\n";
   const auto cpus = sysconf(_SC_NPROCESSORS_ONLN);
   if (cpus > 0) result += "Online CPUs: " + std::to_string(cpus) + "\n";
+
 #if defined(__MidnightBSD__) || defined(__FreeBSD__)
   char model[256]{}; size_t length = sizeof(model) - 1;
   if (sysctlbyname("hw.model", model, &length, nullptr, 0) == 0) result += "CPU: " + safe_text(model, 255) + "\n";
@@ -152,7 +155,52 @@ std::string system_information() {
   struct timeval boot{}; length = sizeof(boot);
   if (sysctlbyname("kern.boottime", &boot, &length, nullptr, 0) == 0 && length == sizeof(boot))
     result += "Uptime seconds: " + std::to_string(std::max<time_t>(0, time(nullptr) - boot.tv_sec)) + "\n";
+
+#elif defined(__linux__)
+  // Linux-specific system information
+  // Read CPU model from /proc/cpuinfo
+  std::ifstream cpuinfo("/proc/cpuinfo");
+  std::string line;
+  bool found_cpu = false;
+  while (std::getline(cpuinfo, line)) {
+    if (line.find("model name") != std::string::npos) {
+      result += "CPU: " + line.substr(line.find(':')) + "\n";
+      found_cpu = true;
+      break;
+    }
+  }
+  if (!found_cpu) {
+    // Try processor line as fallback
+    std::ifstream cpuinfo2("/proc/cpuinfo");
+    while (std::getline(cpuinfo2, line)) {
+      if (line.find("processor") != std::string::npos) {
+        result += "Processor: " + line.substr(line.find(':')) + "\n";
+        break;
+      }
+    }
+  }
+  
+  // Read memory from /proc/meminfo
+  std::ifstream meminfo("/proc/meminfo");
+  while (std::getline(meminfo, line)) {
+    if (line.find("MemTotal:") != std::string::npos) {
+      result += "Memory: " + line + "\n";
+      break;
+    }
+  }
+  
+  // Read uptime from /proc/uptime
+  std::ifstream uptime("/proc/uptime");
+  if (uptime) {
+    double uptime_seconds;
+    uptime >> uptime_seconds;
+    result += "Uptime seconds: " + std::to_string(static_cast<int>(uptime_seconds)) + "\n";
+  }
+  
+#else
+  result += "Platform: " + std::string(name.sysname) + "\n";
 #endif
+
   double loads[3];
   if (getloadavg(loads, 3) == 3) result += "Load averages (1/5/15 min): " + std::to_string(loads[0]) + ", " + std::to_string(loads[1]) + ", " + std::to_string(loads[2]) + "\n";
   return result;
