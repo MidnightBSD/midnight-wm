@@ -9,6 +9,10 @@
 
 namespace midnight::chat {
 inline constexpr std::size_t max_thread_messages = 100000;
+// Saved-history field limits. load_threads rejects larger fields and
+// save_threads clamps to them, so a file this program writes always reloads.
+inline constexpr std::size_t max_title_bytes = 256, max_summary_bytes = 32768,
+    max_message_bytes = 256 * 1024, max_tool_arguments_bytes = 4096, max_tool_result_bytes = 8192;
 
 struct Settings {
   std::string url{"http://localhost/v1"}, model, token;
@@ -42,6 +46,9 @@ struct Thread {
 };
 // Throw std::runtime_error on invalid input, storage, protocol or transport errors.
 std::string endpoint(const Settings& settings);
+// True when an enabled bearer token would travel over plain HTTP to a host
+// other than loopback. False for invalid URLs; validate() reports those.
+bool cleartext_credentials(const Settings& settings);
 std::vector<std::string> models(const Settings& settings, GCancellable* cancel);
 Settings load_settings(const std::filesystem::path& path);
 void save_settings(const std::filesystem::path& path, const Settings& settings);

@@ -182,6 +182,27 @@ int main(int argc, char** argv) {
     s.url = std::string(argv[1]) + "/slow";
     std::thread stopper([&] { std::this_thread::sleep_for(std::chrono::milliseconds(100)); g_cancellable_cancel(cancel); });
     rejects([&] { models(s, cancel); }); stopper.join();
+    // Oversized fields are clamped on save so the history always reloads.
+    Thread clamped; clamped.id = t.id; clamped.title = std::string(300, 't'); clamped.summary = std::string(max_summary_bytes + 1, 's');
+    clamped.messages.push_back({"user", "run a tool"});
+    Message reply{"assistant", std::string(max_message_bytes + 10, 'a')};
+    reply.tools.push_back({"call_1", "file_search", R"({"query":"x"})", std::string(20000, 'r') + "é"});
+    clamped.messages.push_back(std::move(reply));
+    save_threads(root / "data/clamped.json", {clamped});
+    const auto reloaded = load_threads(root / "data/clamped.json");
+    require(reloaded.size() == 1 && reloaded[0].title.size() <= max_title_bytes && reloaded[0].summary.size() <= max_summary_bytes &&
+        reloaded[0].messages[1].text.size() <= max_message_bytes, "Clamped fields did not reload");
+    const auto& saved_result = reloaded[0].messages[1].tools[0].result;
+    require(saved_result.size() <= max_tool_result_bytes && saved_result.ends_with("[Tool output truncated for storage.]") &&
+        g_utf8_validate(saved_result.c_str(), -1, nullptr), "Tool result clamp");
+    Settings plain; plain.authenticate = true; plain.token = "secret";
+    for (const auto* url : {"http://localhost/v1", "http://LOCALHOST:11434/v1", "http://127.0.0.1/v1", "http://[::1]/v1", "http://app.localhost/v1", "https://example.com/v1"}) {
+      plain.url = url; require(!cleartext_credentials(plain), "Loopback or TLS endpoint flagged as cleartext");
+    }
+    for (const auto* url : {"http://example.com/v1", "http://192.168.1.5:8080/v1", "http://[fd00::1]/v1"}) {
+      plain.url = url; require(cleartext_credentials(plain), "Remote HTTP endpoint with token not flagged");
+    }
+    plain.authenticate = false; require(!cleartext_credentials(plain), "Token off still flagged");
     require(midnight::write_private_state(root / "data/bad.json", "{broken").has_value(), "Write malformed fixture");
     rejects([&] { load_threads(root / "data/bad.json"); });
     chmod((root / "config/settings.json").c_str(), 0644);
