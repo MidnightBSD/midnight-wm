@@ -168,6 +168,23 @@ int main(int argc, char** argv) {
     s.web_search = true; s.model = "fixture-repeat";
     auto repeated = complete(s, pending, cancel);
     require(repeated.messages.back().tools.size() == 3 && repeated.messages.back().text == "Used existing search results", "Repeated search did not recover");
+    // A web search after a local tool asks first; the search runs only when allowed.
+    s.model = "fixture-confirm";
+    std::vector<std::string> asked;
+    const auto allow = [&](const std::string& query) { asked.push_back(query); return true; };
+    const auto deny = [&](const std::string& query) { asked.push_back(query); return false; };
+    auto allowed = complete(s, pending, cancel, nullptr, allow);
+    require(asked == std::vector<std::string>{"fixture query"} && allowed.messages.back().tools.size() == 2 &&
+        allowed.messages.back().tools[1].result.find("https://example.org/") != std::string::npos &&
+        allowed.messages.back().text == "Confirmed flow", "Allowed search did not run");
+    auto denied = complete(s, pending, cancel, nullptr, deny);
+    require(asked.size() == 2 && denied.messages.back().tools.size() == 2 &&
+        denied.messages.back().tools[1].result.find("declined by the user") != std::string::npos &&
+        denied.messages.back().text == "Confirmed flow", "Declined search was not recorded");
+    // Without preceding local results, no confirmation is requested.
+    s.model = "fixture-repeat";
+    asked.clear(); complete(s, pending, cancel, nullptr, deny);
+    require(asked.empty(), "Confirmation asked without local tool results");
     g_cancellable_cancel(cancel); rejects([&] { execute_tool(s, "system_information", "{}", cancel); });
     g_object_unref(cancel);
     std::cout << "PASS: tool schemas, argument validation, native system data, read-only package queries, literal filename search, search HTTP, tool loop/history, disabled/unknown tools and limits\n";

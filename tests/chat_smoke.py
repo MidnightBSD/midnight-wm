@@ -49,6 +49,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             assert self.headers.get('Authorization') is None
         server_requests.append((getattr(self.server, 'secondary', False), body))
     def do_GET(self):
+        if self.path.startswith('/search'):
+            search_requests.append(self.path)
+            self.respond({'results': []})
+            return
         self.audit()
         if getattr(self.server, 'secondary', False):
             self.respond({'data': [{'id': 'second-model'}]})
@@ -62,12 +66,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if args.tools and data.get('tools') and data['messages'][-1]['role'] == 'user':
             self.respond({'choices': [{'message': {'content': None, 'tool_calls': [
                 {'id': 'system_test', 'type': 'function', 'function': {'name': 'system_information', 'arguments': '{}'}}]}}]})
+        elif args.tools and data.get('tools') and data['messages'][-1]['tool_call_id'] == 'system_test' and \
+                'name' in next(m['content'] for m in reversed(data['messages']) if m['role'] == 'user').lower():
+            # A web search after local results must ask the user before running.
+            self.respond({'choices': [{'message': {'content': None, 'tool_calls': [
+                {'id': 'web_test', 'type': 'function', 'function': {'name': 'web_search', 'arguments': '{"query":"Robin desktop"}'}}]}}]})
         else:
             self.respond({'choices': [{'message': {'content': 'Hello Robin. This is a chat reply.'}}]})
 
 server = None
 second_server = None
 server_requests = []
+search_requests = []
 if not args.live:
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -78,7 +88,9 @@ if not args.live:
 config = root / 'config/midnightbsd-chat'
 config.mkdir(mode=0o700)
 settings = config / 'settings.json'
-settings.write_text(json.dumps(dict(url=args.live, port=0, model=args.model, token='', authenticate=False, context=8192, reply=128, system_information=args.tools)))
+settings.write_text(json.dumps(dict(url=args.live, port=0, model=args.model, token='', authenticate=False, context=8192, reply=128,
+                                    system_information=args.tools, web_search=args.tools, search_provider='searxng',
+                                    search_url=args.live.rsplit('/', 1)[0] + '/search')))
 settings.chmod(0o600)
 history = root / 'data/midnightbsd-chat/conversations.json'
 
@@ -135,15 +147,31 @@ try:
     focus_input(window)
     type_text('My name is Robin. Greet me briefly.')
     key('ctrl+Return')
+    if args.tools:
+        dialog = until(lambda: visible('Allow web search\\?'), 'web search confirmation missing', timeout=30)
+        run('xdotool', 'windowactivate', '--sync', dialog)
+        run('import', '-window', dialog, str(root / 'web-search-confirmation.png'))
+        key('Return')  # Decline is the default response.
     until(lambda: threads() and len(threads()[0]['messages']) == 2, 'first response missing')
     first_id = threads()[0]['id']
     if args.tools:
-        assert threads()[0]['messages'][1]['tools'][0]['name'] == 'system_information'
+        tools_used = threads()[0]['messages'][1]['tools']
+        assert tools_used[0]['name'] == 'system_information'
+        assert tools_used[1]['name'] == 'web_search' and 'declined by the user' in tools_used[1]['result']
+        assert not search_requests, 'declined web search reached the provider'
     focus_input(window)
     type_text('What is my name? Answer briefly.')
     key('ctrl+Return')
+    if args.tools:
+        dialog = until(lambda: visible('Allow web search\\?'), 'second web search confirmation missing', timeout=30)
+        run('xdotool', 'windowactivate', '--sync', dialog)
+        key('alt+l')  # Allow all searches for this reply.
     until(lambda: len(threads()[0]['messages']) == 4, 'context reply missing')
     assert 'Robin' in threads()[0]['messages'][-1]['content']
+    if args.tools:
+        allowed = threads()[0]['messages'][3]['tools'][1]
+        assert allowed['name'] == 'web_search' and 'declined' not in allowed['result']
+        assert len(search_requests) == 1 and 'q=Robin%20desktop' in search_requests[0], search_requests
     key('alt+c')
     until(lambda: threads()[0]['compacted'] == 2, 'manual compaction missing')
     assert len(threads()[0]['messages']) == 4 and threads()[0]['summary']

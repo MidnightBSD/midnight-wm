@@ -554,7 +554,7 @@ void save_threads(const std::filesystem::path& path, const std::vector<Thread>& 
   }
   b.end_array(); b.end(); write(path, b.finish());
 }
-Thread complete(const Settings& configured, Thread t, GCancellable* cancel, ContextInfo* info) {
+Thread complete(const Settings& configured, Thread t, GCancellable* cancel, ContextInfo* info, const WebSearchConfirm& confirm) {
   validate(configured);
   if (configured.model.empty()) fail("Set the model name in Settings first.");
   if (t.messages.empty() || t.messages.back().role != "user" || t.compacted > t.messages.size() || t.compacted % 2)
@@ -570,6 +570,7 @@ Thread complete(const Settings& configured, Thread t, GCancellable* cancel, Cont
     summarize(s, t, budget * 3 / 5, cancel, false);
   auto messages = build_context(s, t);
   Message final{"assistant", ""};
+  bool local_ran = false;
   for (unsigned round = 0; ; ++round) {
     if (cost(messages) > budget) fail("Tool results exceed the context budget. Increase context size or narrow the question.");
     const bool exhausted = round >= static_cast<unsigned>(s.tool_rounds) || final.tools.size() >= static_cast<std::size_t>(s.tool_calls);
@@ -597,7 +598,14 @@ Thread complete(const Settings& configured, Thread t, GCancellable* cancel, Cont
         }
         if (previous != final.tools.end())
           tool.result = "Repeated search skipped. Use the existing result from tool call " + previous->id + " above. Refine the query only if needed, or answer from the available evidence and explain what remains unresolved.";
-        else tool.result = execute_tool(s, tool.name, tool.arguments, cancel);
+        else if (tool.name == "web_search" && local_ran && confirm && s.web_search &&
+            !confirm(string(object(Document(tool.arguments).root()), "query")))
+          tool.result = "Web search declined by the user because it followed local tool results in this reply. Answer from the available evidence and explain what remains unresolved.";
+        else {
+          tool.result = execute_tool(s, tool.name, tool.arguments, cancel);
+          // Local results are now in the model's context; later web queries may carry them.
+          if (tool.name != "web_search") local_ran = true;
+        }
       }
       catch (const std::exception& error) { tool.result = std::string("Tool error: ") + error.what(); }
       if (g_cancellable_is_cancelled(cancel)) fail("Request cancelled.");

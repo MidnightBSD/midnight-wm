@@ -4,7 +4,9 @@
 #include "chat_tools.hpp"
 #include <gtk/gtk.h>
 #include <algorithm>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -17,10 +19,12 @@ std::string contents(GtkWidget* view) {
   std::string result(text); g_free(text); return result;
 }
 void accessible(GtkWidget* w, const char* name) { atk_object_set_name(gtk_widget_get_accessible(w), name); }
+struct Chat;
 struct Job {
+  Chat* owner{};
   Settings settings;
   Thread thread;
-  bool listing{}, compacting{};
+  bool listing{}, compacting{}, allow_all_searches{};
   ContextInfo context;
   std::vector<std::string> models;
   std::string error;
@@ -182,6 +186,41 @@ struct Chat {
     if (!persist()) { threads.erase(threads.begin()); select(previous); }
     rebuild(); gtk_widget_grab_focus(input);
   }
+  // Runs on the worker thread: ask on the main thread whether a web search that
+  // follows local tool results may proceed, and wait for the answer. Stop, the
+  // request deadline and closing the window all decline.
+  bool confirm_web_search(Job& job, GCancellable* cancel, const std::string& query) {
+    if (job.allow_all_searches) return true;
+    struct Ask {
+      Chat* self; Job* job; GCancellable* cancel; std::string query;
+      std::mutex mutex; std::condition_variable wake; bool done{}, allowed{};
+    } ask{this, &job, cancel, query, {}, {}, false, false};
+    g_main_context_invoke(nullptr, +[](gpointer p) -> gboolean {
+      auto& a = *static_cast<Ask*>(p);
+      int response = GTK_RESPONSE_CANCEL;
+      if (a.self->window && !g_cancellable_is_cancelled(a.cancel)) {
+        const std::string provider = a.job->settings.search_provider == "brave" ? "Brave Search" : "the configured SearXNG server";
+        const auto text = "The model wants to search the web after reading local tool results in this reply. The query may include file names or system details and will be sent to " + provider + ".\n\nQuery:\n" + a.query;
+        auto* d = gtk_message_dialog_new(GTK_WINDOW(a.self->window), GTK_DIALOG_MODAL, GTK_MESSAGE_QUESTION, GTK_BUTTONS_NONE, "%s", text.c_str());
+        gtk_window_set_title(GTK_WINDOW(d), "Allow web search?");
+        gtk_dialog_add_buttons(GTK_DIALOG(d), "_Decline", GTK_RESPONSE_CANCEL, "Allow a_ll this reply", GTK_RESPONSE_ACCEPT, "_Allow", GTK_RESPONSE_OK, nullptr);
+        gtk_dialog_set_default_response(GTK_DIALOG(d), GTK_RESPONSE_CANCEL);
+        const gulong handler = g_cancellable_connect(a.cancel, G_CALLBACK(+[](GCancellable*, gpointer dialog) {
+          gtk_dialog_response(GTK_DIALOG(dialog), GTK_RESPONSE_CANCEL);
+        }), d, nullptr);
+        response = gtk_dialog_run(GTK_DIALOG(d));
+        g_cancellable_disconnect(a.cancel, handler);
+        gtk_widget_destroy(d);
+      }
+      if (response == GTK_RESPONSE_ACCEPT) a.job->allow_all_searches = true;
+      { std::lock_guard lock(a.mutex); a.allowed = response == GTK_RESPONSE_OK || response == GTK_RESPONSE_ACCEPT; a.done = true; }
+      a.wake.notify_all();
+      return G_SOURCE_REMOVE;
+    }, &ask);
+    std::unique_lock lock(ask.mutex);
+    ask.wake.wait(lock, [&] { return ask.done; });
+    return ask.allowed;
+  }
   bool confirm(const char* text, const char* title = "Confirm conversation change") {
     auto* d = gtk_message_dialog_new(GTK_WINDOW(window), GTK_DIALOG_MODAL, GTK_MESSAGE_QUESTION, GTK_BUTTONS_OK_CANCEL, "%s", text);
     gtk_window_set_title(GTK_WINDOW(d), title);
@@ -209,7 +248,7 @@ struct Chat {
       profiles = std::move(next); settings = chosen(profiles).settings;
     }
     catch (const std::exception& e) { message(e.what()); return; }
-    auto job = std::make_unique<Job>(); job->settings = settings; job->listing = listing; job->compacting = compacting;
+    auto job = std::make_unique<Job>(); job->owner = this; job->settings = settings; job->listing = listing; job->compacting = compacting;
     if (compacting) {
       auto* t = current(); if (!t || t->messages.size() < t->compacted + 4) return;
       job->thread = *t; active = t->id;
@@ -281,7 +320,8 @@ struct Chat {
       try {
         if (job.listing) job.models = models(job.settings, cancel);
         else if (job.compacting) job.thread = compact(job.settings, std::move(job.thread), cancel, &job.context);
-        else job.thread = complete(job.settings, std::move(job.thread), cancel, &job.context);
+        else job.thread = complete(job.settings, std::move(job.thread), cancel, &job.context,
+            [&job, cancel](const std::string& query) { return job.owner->confirm_web_search(job, cancel, query); });
       } catch (const std::exception& e) { job.error = e.what(); }
       g_task_return_boolean(task, TRUE);
     });
@@ -363,7 +403,7 @@ struct Chat {
     };
     auto* rounds = limit("Maximum tool rounds per reply", initial.tool_rounds, 7);
     auto* calls = limit("Maximum tool calls per reply", initial.tool_calls, 8);
-    auto* disclosure = gtk_label_new("Tools are optional and run as your user. Local results are sent to the configured chat server. Web queries go to the selected search provider. API keys are saved in private local settings. Package searches do not install, remove, or update packages. Results and tool calls are saved with the conversation.");
+    auto* disclosure = gtk_label_new("Tools are optional and run as your user. Local results are sent to the configured chat server. Web queries go to the selected search provider; a web search that follows local tool results in the same reply asks for your confirmation first. API keys are saved in private local settings. Package searches do not install, remove, or update packages. Results and tool calls are saved with the conversation.");
     gtk_label_set_line_wrap(GTK_LABEL(disclosure), TRUE); gtk_label_set_max_width_chars(GTK_LABEL(disclosure), 58);
     gtk_grid_attach(GTK_GRID(tools), disclosure, 0, 9, 2, 1);
     gtk_widget_show_all(dialog);
