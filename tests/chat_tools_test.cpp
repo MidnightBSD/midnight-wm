@@ -39,6 +39,14 @@ int main(int argc, char** argv) {
       g_object_unref(cancel); return 0;
     }
     const std::filesystem::path root(argv[3]);
+    require(proc_cpu_model("processor\t: 0\nvendor_id\t: Fixture\nmodel name\t: Fixture CPU @ 2.00GHz  \n") == "Fixture CPU @ 2.00GHz", "cpuinfo model");
+    require(proc_cpu_model("Model\t\t: Raspberry Pi 4 Model B\r\n") == "Raspberry Pi 4 Model B", "cpuinfo arm model");
+    require(proc_cpu_model("processor: 0\nflags: fpu\nmodel name\nmodel name:\n").empty(), "cpuinfo without model");
+    require(proc_cpu_model("model name: " + std::string(400, 'c') + "\n").size() <= 258, "cpuinfo bound");
+    require(proc_memory_bytes("MemTotal:       16303052 kB\nMemFree:  1 kB\n") == 16303052ull * 1024, "meminfo");
+    require(!proc_memory_bytes("MemFree: 1 kB\n") && !proc_memory_bytes("MemTotal: lots kB\n") &&
+        !proc_memory_bytes("MemTotal: 99999999999999999 kB\n"), "meminfo rejects");
+    require(proc_uptime_seconds("12345.67 54321.00\n") == 12345ull && !proc_uptime_seconds("soon\n") && !proc_uptime_seconds(""), "uptime");
     ToolPaths paths;
     paths.installed = paths.available = (root / "packages.db").string();
     sqlite3* db{}; require(sqlite3_open(paths.installed.c_str(), &db) == SQLITE_OK, "fixture database");

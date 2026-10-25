@@ -60,6 +60,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.respond({'data': [{'id': args.model}, {'id': 'second-model'}]})
     def do_POST(self):
         data = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        if self.path.endswith('/tokenize'):
+            self.audit()
+            self.send_response(404)
+            self.end_headers()
+            return
         self.audit(data)
         if data['messages'][-1]['content'] == 'slow request':
             time.sleep(3)

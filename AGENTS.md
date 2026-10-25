@@ -159,6 +159,18 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
 - One GLib main-context iteration dispatches every ready source, so the main
   loop cannot cap D-Bus work per pass. Keep D-Bus handlers to bookkeeping and
   defer X requests and drawing to the owning tick(), which runs once per pass.
+- `src/chat_core.*` and `src/chat.cpp` implement the `midnightbsd-chat` GTK 3
+  companion; `src/chat_tools.*` holds its optional tools. Token costs come from
+  `estimate_tokens` (three ASCII letters or digits per token, one per other
+  byte) scaled by a llama.cpp `/tokenize` sample when that route exists; keep
+  estimates conservative and keep `tests/chat_protocol_test.py` in step with
+  the estimator. `compaction_target` holds the 80%/60% and 95%/40% policy.
+  Summaries fold in UTF-8 safe fragments, condense an oversized summary before
+  failing, and record `summary_model`/`summary_context`. Discovery results are
+  cached per server and model for five minutes behind a mutex; call
+  `forget_context_limits()` after settings change. Progress callbacks run on
+  the worker thread; marshal UI updates with g_main_context_invoke. Linux
+  `/proc` parsing goes through the bounded `proc_*` helpers, which have tests.
 - `src/dbus_menu.*` reads application menus over D-Bus;
   `src/dbus_menu_popup.*` draws their rows and submenus in X11.
 - `src/audio.*` controls the default OSS mixer and has no X11 dependency.

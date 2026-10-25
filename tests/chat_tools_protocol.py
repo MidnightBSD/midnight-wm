@@ -31,6 +31,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.respond({'results': [{'title': 'Example', 'url': 'https://example.org/' + 'b' * 900, 'content': content}] * 5})
     def do_POST(self):
         request = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        if self.path.endswith('/tokenize'):
+            self.send_response(404)
+            self.end_headers()
+            return
         messages = request['messages']
         seen.append(('chat', request))
         assert 'model-secret' not in json.dumps(request)
