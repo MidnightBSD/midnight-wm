@@ -3,8 +3,10 @@
 #include <xcb/xcb.h>
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace midnight {
@@ -19,6 +21,9 @@ public:
   X11SystemTray& operator=(const X11SystemTray&) = delete;
 
   [[nodiscard]] bool initialize();
+  // Rejects dock requests for windows the predicate declines, such as the
+  // window manager's frames. Set before icons arrive.
+  void set_window_filter(std::function<bool(xcb_window_t)> acceptable) { acceptable_ = std::move(acceptable); }
   [[nodiscard]] bool handle(xcb_generic_event_t* event);
   void tick();
   void refresh();
@@ -47,6 +52,7 @@ private:
   xcb_atom_t opcode_{};
   xcb_atom_t xembed_{};
   xcb_atom_t xembed_info_{};
+  std::function<bool(xcb_window_t)> acceptable_;
   std::map<xcb_window_t, Icon> icons_;
   std::vector<xcb_window_t> order_;
   int host_x_{};

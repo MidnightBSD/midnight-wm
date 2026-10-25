@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string_view>
 #include <utility>
 
@@ -14,6 +15,11 @@ namespace {
 
 constexpr std::size_t max_transfer = 32U * 1024U * 1024U;
 constexpr std::size_t chunk_size = 64U * 1024U;
+// An owner that never answers or never finishes INCR must not park paste
+// requests or SAVE_TARGETS forever; ICCCM requires requestors to time out.
+constexpr auto fetch_timeout = std::chrono::seconds(5);
+
+template <class T> using Reply = std::unique_ptr<T, decltype(&std::free)>;
 
 bool unreserved(unsigned char c) {
   return std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~' || c == '/';
@@ -176,6 +182,7 @@ void X11Clipboard::start_fetch(Fetch fetch) {
     case Fetch::files_uri: target = atoms_.uri; break;
     case Fetch::none: return;
   }
+  fetch_deadline_ = std::chrono::steady_clock::now() + fetch_timeout;
   xcb_delete_property(connection_, window_, atoms_.property);
   xcb_convert_selection(connection_, window_, atoms_.clipboard, target, atoms_.property,
                         XCB_CURRENT_TIME);
@@ -319,8 +326,21 @@ void X11Clipboard::send_payload(const xcb_selection_request_event_t& request,
     xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, request.requestor,
                         property, type, 8, payload.size(), payload.data());
   } else {
+    // The requestor names any window; this process shares one connection, so
+    // adding PropertyChange must preserve the mask other components selected.
+    if (request.requestor == root_ || request.requestor == window_) {
+      send_notify(request, XCB_ATOM_NONE);
+      return;
+    }
+    Reply<xcb_get_window_attributes_reply_t> attributes(
+        xcb_get_window_attributes_reply(connection_,
+            xcb_get_window_attributes(connection_, request.requestor), nullptr), std::free);
+    if (!attributes) {
+      send_notify(request, XCB_ATOM_NONE);
+      return;
+    }
     const uint32_t bytes = std::min<std::size_t>(payload.size(), UINT32_MAX);
-    const uint32_t mask = XCB_EVENT_MASK_PROPERTY_CHANGE;
+    const uint32_t mask = attributes->your_event_mask | XCB_EVENT_MASK_PROPERTY_CHANGE;
     xcb_change_window_attributes(connection_, request.requestor, XCB_CW_EVENT_MASK, &mask);
     xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, request.requestor,
                         property, atoms_.incr, 32, 1, &bytes);
@@ -411,6 +431,7 @@ void X11Clipboard::property_notify(const xcb_property_notify_event_t& notify) {
       return;
     }
     received_.append(static_cast<const char*>(xcb_get_property_value(reply)), length);
+    fetch_deadline_ = std::chrono::steady_clock::now() + fetch_timeout;
     std::free(reply);
     xcb_flush(connection_);
     return;
@@ -434,6 +455,9 @@ void X11Clipboard::tick(std::chrono::steady_clock::time_point now) {
   std::erase_if(outgoing_, [now](const Outgoing& transfer) {
     return now >= transfer.deadline;
   });
+  // A stalled owner fails only the current step; the snapshot sequence then
+  // moves on and finally answers any parked manager or paste request.
+  if (fetch_ != Fetch::none && now >= fetch_deadline_) finish_fetch(false);
 }
 
 bool X11Clipboard::handle(xcb_generic_event_t* event) {

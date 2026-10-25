@@ -13,6 +13,9 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   project version through `MIDNIGHT_WM_VERSION`. Startup re-execs through
   `dbus-run-session` only if no reachable session bus is available; preserve
   the recursion guard and the wrapper's ownership of the new bus.
+- `src/session_main.cpp` falls back to launching the window manager directly
+  when the XSMP listener cannot be created; another local user can occupy
+  `/tmp/.ICE-unix` socket names, and that must never cost the login.
 - `src/session_reaper.*` makes the WM a procctl(2) reaper for the processes it
   starts. Construct it after the session bus bootstrap and before anything that
   launches processes. Only reap reparented orphans while running (pidinfo
@@ -41,7 +44,11 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   sources on activation. ABOVE/BELOW layers must survive focus changes and keep
   transients above their parents, including active fullscreen families. Update
   ALLOWED_ACTIONS after geometry hints or window state changes. Advertise only
-  the EWMH states/actions actually implemented.
+  the EWMH states/actions actually implemented. Every ClientMessage handler
+  must look the window up in the managed set first; close() never reaches
+  KillClient for an unmanaged XID, and `_NET_WM_MOVERESIZE` requires a held
+  button (pointer modes) or the active window (keyboard modes) before
+  focusing or grabbing.
   Fullscreen monitor indices use Xinerama ordering, not RandR ordering. Validate
   all four indices and the resulting rectangle before storing or publishing a
   selection. Clear selections after display topology changes and retain normal
@@ -132,14 +139,23 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   `python3 tests/system_monitor_smoke.py` after changes.
 - `src/clipboard.*` implements the X11 `CLIPBOARD` selection and persistence.
   Call clipboard.tick() from the main loop to reclaim stalled outgoing INCR
-  transfers; preserve the aggregate memory and pending-transfer limits.
+  transfers and to expire incoming fetches from owners that never answer;
+  preserve the aggregate memory and pending-transfer limits. A requestor is
+  any window a client names: never replace that window's event mask, only add
+  PropertyChange, and refuse the root and the clipboard's own window.
 - `src/dnd.*` implements XDND file drag and drop. A drop reports completion
-  through its callback after the file operation finishes.
+  through its callback after the file operation finishes. XDND ClientMessages
+  are unauthenticated: accept a drop only after an XdndPosition, while the
+  named source owns XdndSelection, and with the pointer actually over the
+  target; use the pointer's position, not the message's, as the drop point.
 - `src/tray.*` owns the X11 system tray selection and embeds legacy XEmbed
-  notification icons in the panel.
+  notification icons in the panel. Dock requests name arbitrary XIDs: keep the
+  window filter from main.cpp (`wm.manages`), require a root-parented window,
+  and keep the icon count bounded.
 - `src/status_notifier.*` provides the D-Bus StatusNotifier watcher and host;
   `src/status_panel.*` draws those items in the X11 panel and sends input actions.
-  Keep one GetAll in flight per item, and repaint the panel from tick().
+  Keep one GetAll in flight per item, bound items per owner and overall, and
+  repaint the panel from tick().
 - One GLib main-context iteration dispatches every ready source, so the main
   loop cannot cap D-Bus work per pass. Keep D-Bus handlers to bookkeeping and
   defer X requests and drawing to the owning tick(), which runs once per pass.
@@ -173,12 +189,16 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   at launch time, including named desktop-entry actions. Installed Programs
   actions use GDesktopAppInfo; never expand Exec with a shell. `src/thumbnail.*` reads and writes the shared freedesktop
   thumbnail cache for images; keep thumbnail URI and freshness metadata valid.
+  Check header dimensions with `safe_image_dimensions` (wallpaper.hpp) before
+  decoding any untrusted image, including icons loaded by path in the shell.
 - `src/notifications.*` implements the session D-Bus notification service and
   draws X11 popups only when no other daemon owns the service name. Preserve
   action identifiers, close reasons, resident/urgency behavior, and validate raw
   image dimensions/stride/payload before creating image buffers. Notify only
   updates popup state; tick() creates, paints, and maps changed popups.
 - `src/file_manager1.*` serves D-Bus folder, item, and properties requests.
+  Bound URIs per call; the shell reuses an open window for the same folder
+  path and caps the number of folder windows.
   `src/recent_files.*` reads and updates the shared XBEL recent-files history.
 - `src/startup_notification.*` tracks launches over the X11 startup protocol;
   `src/browser_launcher.*` selects the XDG browser default and falls back to

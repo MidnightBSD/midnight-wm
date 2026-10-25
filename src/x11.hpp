@@ -37,6 +37,9 @@ public:
   void set_showing_desktop(bool showing);
   [[nodiscard]] std::uint32_t current_desktop() const { return current_desktop_; }
   [[nodiscard]] bool showing_desktop() const { return showing_desktop_; }
+  // True for the root, support, dock, and managed client/frame windows this
+  // process owns or controls; other components must not reparent them.
+  [[nodiscard]] bool manages(xcb_window_t window) const;
   [[nodiscard]] bool resize_pending() const;
   void update_screen_size(std::uint16_t width, std::uint16_t height);
   void refresh_theme();

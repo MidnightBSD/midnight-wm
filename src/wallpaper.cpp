@@ -11,15 +11,11 @@
 
 namespace midnight {
 namespace {
-constexpr int maximum_axis = 8192;
-constexpr std::int64_t maximum_pixels = 32 * 1024 * 1024;
+constexpr int maximum_axis = maximum_image_axis;
+constexpr std::int64_t maximum_pixels = maximum_image_pixels;
 using Pixbuf = std::unique_ptr<GdkPixbuf, decltype(&g_object_unref)>;
 
-bool valid_dimensions(int width, int height) {
-  return width > 0 && height > 0 && width <= maximum_axis &&
-      height <= maximum_axis &&
-      static_cast<std::int64_t>(width) * height <= maximum_pixels;
-}
+bool valid_dimensions(int width, int height) { return safe_image_dimensions(width, height); }
 } // namespace
 
 bool Wallpaper::load(const std::filesystem::path& path,

@@ -83,7 +83,15 @@ int main(int argc, char** argv) {
   std::signal(SIGUSR1, request_checkpoint);
   midnight::SessionManager manager;
   if (auto initialized = manager.initialize(); !initialized) {
-    std::cerr << "XSMP session unavailable: " << initialized.error() << '\n';
+    // Another local user can occupy /tmp/.ICE-unix socket names. Losing XSMP
+    // must not cost the login: start the desktop without session management.
+    std::cerr << "XSMP session unavailable: " << initialized.error()
+              << "; starting without session management\n";
+    std::signal(SIGINT, SIG_DFL);
+    std::signal(SIGTERM, SIG_DFL);
+    std::signal(SIGUSR1, SIG_DFL);
+    execvp(command[0], command.data());
+    std::cerr << "Could not launch session: " << std::strerror(errno) << '\n';
     return 1;
   }
   const int window_fd = manager.release_window_child_fd();

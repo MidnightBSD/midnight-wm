@@ -1,4 +1,5 @@
 #include "thumbnail.hpp"
+#include "wallpaper.hpp"
 
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #include <gio/gio.h>
@@ -110,7 +111,11 @@ std::optional<std::filesystem::path> ThumbnailCache::thumbnail_for(
   g_free(digest);
   if (valid_thumbnail(thumbnail, uri, mtime, size)) {
     entry.thumbnail = thumbnail;
-  } else if (size <= 64u * 1024u * 1024u && gdk_pixbuf_get_file_info(source.c_str(), nullptr, nullptr)) {
+  } else if (int width{}, height{}; size <= 64u * 1024u * 1024u &&
+             gdk_pixbuf_get_file_info(source.c_str(), &width, &height) &&
+             safe_image_dimensions(width, height)) {
+    // Loaders allocate the declared size before scaling, so a small file
+    // claiming huge dimensions would freeze or exhaust the shell.
     GError* error = nullptr;
     Pixbuf image(gdk_pixbuf_new_from_file_at_scale(source.c_str(), 128, 128, TRUE, &error),
                  g_object_unref);

@@ -62,6 +62,7 @@ private:
     bool move{};
     bool receiving_incr{};
     bool pending_finish{};
+    bool positioned{};
     std::uint64_t generation{};
     std::chrono::steady_clock::time_point deadline{};
     int root_x{}, root_y{};
@@ -112,6 +113,9 @@ private:
   void send_target_finished(xcb_window_t target, Target& state, bool success);
   void complete_drop(xcb_window_t target, bool success);
   void finish_target(xcb_window_t target, std::uint64_t generation, bool success);
+  // Confirms the named source owns XdndSelection and the pointer is over the
+  // target; records the pointer's root position as the drop point.
+  [[nodiscard]] bool genuine_drag(xcb_window_t target, Target& state);
   void handle_client(const xcb_client_message_event_t& event);
   void handle_selection_request(const xcb_selection_request_event_t& event);
   void handle_selection_notify(const xcb_selection_notify_event_t& event);

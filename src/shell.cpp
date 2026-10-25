@@ -103,6 +103,7 @@ constexpr int task_start_x = browser_button_x + browser_button_width + 8;
 constexpr int task_button_width = 110;
 constexpr int task_step = 114;
 constexpr int task_overflow_width = 24;
+constexpr std::size_t max_folder_windows = 32;
 constexpr int exit_dialog_width = 380;
 constexpr int exit_dialog_height = 174;
 constexpr int exit_dialog_button_y = 136;
@@ -522,6 +523,9 @@ void terminal_icon(cairo_t* cr, int x, int y) {
 }
 
 cairo_surface_t* image_surface(const std::filesystem::path& path, int size) {
+  int width{}, height{};
+  if (!gdk_pixbuf_get_file_info(path.c_str(), &width, &height) ||
+      !safe_image_dimensions(width, height)) return nullptr;
   GError* error = nullptr;
   auto* pixbuf = gdk_pixbuf_new_from_file_at_scale(path.c_str(), size, size, TRUE, &error);
   if (error) g_error_free(error);
@@ -3361,6 +3365,37 @@ struct Shell::Impl {
     configure_folder(folder);
   }
 
+  // Brings an already open folder window to the front on the current
+  // workspace and selects the requested item when it is present.
+  bool reveal_folder(Folder& folder, const std::optional<std::filesystem::path>& selected) {
+    folder.workspace = workspace;
+    folder.minimized = false;
+    if (folder.shaded) { folder.shaded = false; configure_folder(folder); }
+    request_root("_NET_SHOWING_DESKTOP", 0);
+    bool found = !selected;
+    if (selected) {
+      const auto normalized = selected->lexically_normal();
+      for (std::size_t i = 0; i < folder.items.size(); ++i) {
+        if (folder.items[i].path.lexically_normal() != normalized) continue;
+        folder.selected = static_cast<int>(i);
+        const auto scroll = folder_scroll(folder);
+        const int columns = folder_columns(folder.view, scroll.view_width);
+        folder.scroll_rows = std::max(0, static_cast<int>(i) / columns - scroll.visible_rows + 1);
+        found = true;
+        break;
+      }
+    }
+    xcb_map_window(connection, folder.window);
+    const std::uint32_t above[]{XCB_STACK_MODE_ABOVE};
+    xcb_configure_window(connection, folder.window, XCB_CONFIG_WINDOW_STACK_MODE, above);
+    map_folder_owned(folder, true);
+    xcb_set_input_focus(connection, XCB_INPUT_FOCUS_POINTER_ROOT, folder.window, XCB_CURRENT_TIME);
+    raise_panel();
+    draw_folder(folder);
+    draw_panel();
+    return found;
+  }
+
   bool open_folder(const std::filesystem::path& path,
                    const std::optional<std::filesystem::path>& selected = std::nullopt,
                    const SessionFolder* saved = nullptr) {
@@ -3369,6 +3404,16 @@ struct Shell::Impl {
     if (!trash && !std::filesystem::is_directory(path, ec)) {
       show_notice("Folder unavailable: " + path.string());
       return false;
+    }
+    if (!saved) {
+      // D-Bus peers can ask for folders repeatedly. Reuse an open window for
+      // the same path and refuse to create windows without bound.
+      const auto normalized = path.lexically_normal();
+      for (auto& [window, existing] : folders) {
+        if (existing.path.lexically_normal() != normalized) continue;
+        return reveal_folder(existing, selected);
+      }
+      if (folders.size() >= max_folder_windows) return false;
     }
     if (!saved) request_root("_NET_SHOWING_DESKTOP", 0);
     Folder folder;

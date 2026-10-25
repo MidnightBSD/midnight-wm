@@ -294,9 +294,30 @@ int main() {
   await([&]{ return property(root, "_NET_SHOWING_DESKTOP") == std::vector<std::uint32_t>{1}; }, "shortcut grab not refreshed");
   if (std::system("xdotool key super+d") != 0) throw std::runtime_error("remapped shortcut restore failed");
   await([&]{ return property(root, "_NET_SHOWING_DESKTOP") == std::vector<std::uint32_t>{0}; }, "remapped shortcut restoration");
+  // _NET_CLOSE_WINDOW naming an unmanaged XID (a frame or the support window)
+  // must be ignored rather than reaching KillClient on the WM's own connection.
+  const auto support = property(root, "_NET_SUPPORTING_WM_CHECK");
+  if (support.size() != 1) throw std::runtime_error("support window missing");
+  message(border_frame, "_NET_CLOSE_WINDOW", 0, 2);
+  message(support.front(), "_NET_CLOSE_WINDOW", 0, 2);
+  message(root, "_NET_CLOSE_WINDOW", 0, 2);
+  std::this_thread::sleep_for(300ms);
+  if (!viewable(border_frame)) throw std::runtime_error("_NET_CLOSE_WINDOW on a frame killed the WM");
+  if (property(root, "_NET_ACTIVE_WINDOW") != std::vector<std::uint32_t>{border_client})
+    throw std::runtime_error("WM lost state after hostile _NET_CLOSE_WINDOW");
+  // _NET_WM_MOVERESIZE without a held button must not take input grabs.
+  message(border_client, "_NET_WM_MOVERESIZE", 300, 300, 8);
+  std::this_thread::sleep_for(200ms);
+  {
+    auto* grab = xcb_grab_pointer_reply(connection, xcb_grab_pointer(connection, 0, root, 0,
+        XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC, XCB_NONE, XCB_NONE, XCB_CURRENT_TIME), nullptr);
+    const bool free_pointer = grab && grab->status == XCB_GRAB_STATUS_SUCCESS; std::free(grab);
+    xcb_ungrab_pointer(connection, XCB_CURRENT_TIME); xcb_flush(connection);
+    if (!free_pointer) throw std::runtime_error("_NET_WM_MOVERESIZE without a button grabbed the pointer");
+  }
   xcb_destroy_window(connection, border_client); xcb_flush(connection);
   xcb_disconnect(connection);
-  std::cout << "Dialog sizing/hints, workspaces, sticky windows, show desktop, invalid requests, ping timeout/recovery, synchronized resize and timeout passed.\n";
+  std::cout << "Dialog sizing/hints, workspaces, sticky windows, show desktop, invalid requests, ping timeout/recovery, synchronized resize and timeout, hostile close/moveresize passed.\n";
   return 0;
  } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

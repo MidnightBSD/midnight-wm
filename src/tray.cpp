@@ -13,6 +13,7 @@ namespace {
 constexpr int base_icon_size = 22;
 constexpr int base_icon_step = 26;
 constexpr int base_tray_padding = 4;
+constexpr std::size_t max_icons = 64;
 
 int scaled(int pixels, double scale) {
   return std::max(1, static_cast<int>(std::lround(pixels * scale)));
@@ -108,12 +109,19 @@ void X11SystemTray::send_xembed(xcb_window_t window, std::uint32_t opcode, std::
 }
 
 void X11SystemTray::dock(xcb_window_t window) {
-  if (!host_ || !window || window == owner_ || window == host_ ||
-      shell_.owns(window) || icons_.contains(window)) return;
+  if (!host_ || !window || window == owner_ || window == host_ || window == screen_->root ||
+      shell_.owns(window) || icons_.contains(window) || icons_.size() >= max_icons) return;
+  // Any client can name any XID here. Never reparent windows this process
+  // manages (frames, docks, the support window) or windows already embedded
+  // elsewhere; a genuine tray icon is an unmapped top-level child of the root.
+  if (acceptable_ && !acceptable_(window)) return;
   Reply<xcb_get_window_attributes_reply_t> attributes(
       xcb_get_window_attributes_reply(connection_, xcb_get_window_attributes(connection_, window), nullptr),
       std::free);
   if (!attributes || attributes->_class == XCB_WINDOW_CLASS_INPUT_ONLY) return;
+  Reply<xcb_query_tree_reply_t> tree(
+      xcb_query_tree_reply(connection_, xcb_query_tree(connection_, window), nullptr), std::free);
+  if (!tree || tree->parent != screen_->root) return;
   const std::uint32_t events = XCB_EVENT_MASK_PROPERTY_CHANGE | XCB_EVENT_MASK_STRUCTURE_NOTIFY;
   xcb_change_window_attributes(connection_, window, XCB_CW_EVENT_MASK, &events);
   xcb_change_save_set(connection_, XCB_SET_MODE_INSERT, window);

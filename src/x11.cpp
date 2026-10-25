@@ -404,6 +404,12 @@ void X11WindowManager::refresh_user_time(Frame& frame) {
   frame.user_time = cardinal(helper ? helper : frame.client, atom("_NET_WM_USER_TIME"), XCB_ATOM_CARDINAL);
 }
 
+bool X11WindowManager::manages(xcb_window_t window) const {
+  return window == screen_->root || window == support_window_ || frames_.contains(window) ||
+         frame_to_client_.contains(window) || docks_.contains(window) ||
+         user_time_masks_.contains(window);
+}
+
 bool X11WindowManager::can_activate(const Frame& frame, std::optional<xcb_timestamp_t> timestamp) const {
   if (frame.role == WindowRole::splash || (!frame.accepts_input && !frame.takes_focus)) return false;
   if (!timestamp) return true; // Preserve legacy clients that provide no interaction hint.
@@ -1632,6 +1638,9 @@ void X11WindowManager::end_drag(bool cancel) {
 }
 
 void X11WindowManager::close(xcb_window_t client) {
+  // Only managed clients may be closed. KillClient on any other XID (a frame,
+  // the panel, or the support window) would end this process's connection.
+  if (!frames_.contains(client)) return;
   auto cookie = xcb_get_property(connection_, 0, client, atom("WM_PROTOCOLS"), XCB_ATOM_ATOM, 0, 32);
   Reply<xcb_get_property_reply_t> reply(xcb_get_property_reply(connection_, cookie, nullptr), std::free);
   const auto deletion = atom("WM_DELETE_WINDOW");
@@ -2295,7 +2304,26 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
         if (drag_client_ == e->window) end_drag(true);
       } else if (auto frame = frames_.find(e->window); frame != frames_.end() && frame->second.mapped &&
                  direction <= 10) {
-        focus(e->window);
+        // EWMH says this request follows a real button press in the client.
+        // Any client can send it, so demand evidence before taking focus and
+        // pointer/keyboard grabs: keyboard modes only for the active window,
+        // pointer modes only while a button is actually held.
+        const bool keyboard_mode = direction == 9 || direction == 10;
+        if (keyboard_mode) {
+          if (active_ != e->window) return;
+        } else {
+          Reply<xcb_query_pointer_reply_t> pointer(xcb_query_pointer_reply(connection_,
+              xcb_query_pointer(connection_, screen_->root), nullptr), std::free);
+          if (!pointer) return;
+          const auto button = e->data.data32[3];
+          const std::uint16_t buttons = pointer->mask & (XCB_BUTTON_MASK_1 | XCB_BUTTON_MASK_2 |
+              XCB_BUTTON_MASK_3 | XCB_BUTTON_MASK_4 | XCB_BUTTON_MASK_5);
+          if (!buttons) return;
+          if (button >= 1 && button <= 5 && !(buttons & (XCB_BUTTON_MASK_1 << (button - 1)))) return;
+          if (button > 5) return;
+          if (active_ != e->window && !can_activate(frame->second, frame->second.user_time)) return;
+        }
+        if (active_ != e->window) focus(e->window);
         const auto mode = direction == 8 ? DragMode::move : direction == 10 ? DragMode::keyboard_move :
                           direction == 9 ? DragMode::keyboard_resize : DragMode::resize;
         begin_drag(frame->second, mode, std::int32_t(e->data.data32[0]),
