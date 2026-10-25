@@ -63,7 +63,11 @@ Search text is literal, not a wildcard. Web search supports Brave
 with an API key, or a configured SearXNG JSON search URL.
 .Pp
 Local tool results are sent to the configured model server. Web queries go to
-the selected search provider. Calls and result previews are saved in the
+the selected search provider. When a web search follows a local tool in the same
+reply, its query may carry local results, so a dialog shows the query and asks
+to allow it, allow all further searches in that reply, or decline. Stop, the
+request deadline, and closing the window decline. A declined search is recorded
+in the transcript and the model is asked to answer from available results. Calls and result previews are saved in the
 transcript. Replies default to 12 rounds and 24 calls. Settings / Tools allows
 1–32 rounds and 1–64 calls per reply. Repeated identical searches refer to earlier
 results without executing again, and still count toward the limits.

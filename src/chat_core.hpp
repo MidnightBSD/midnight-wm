@@ -4,6 +4,7 @@
 #include <gio/gio.h>
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -62,5 +63,10 @@ struct ContextInfo {
 ContextInfo context_limit(const Settings& settings, GCancellable* cancel);
 Thread compact(const Settings& settings, Thread thread, GCancellable* cancel, ContextInfo* info = nullptr);
 // Runs off the GTK thread. Updates a copy, committing summaries only on success.
-Thread complete(const Settings& settings, Thread thread, GCancellable* cancel, ContextInfo* info = nullptr);
+// Asked from the worker thread before web_search runs after a local tool in the
+// same reply, because the query may carry local results to the search provider.
+// Return false to decline that search. Without a callback, searches proceed.
+using WebSearchConfirm = std::function<bool(const std::string& query)>;
+Thread complete(const Settings& settings, Thread thread, GCancellable* cancel, ContextInfo* info = nullptr,
+    const WebSearchConfirm& confirm = {});
 }

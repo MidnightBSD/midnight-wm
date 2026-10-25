@@ -63,6 +63,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.respond({'choices': [{'message': {'content': None, 'tool_calls': [
                 {'id': 'repeat_' + str(len(tools)), 'type': 'function', 'function': {'name': 'web_search', 'arguments': args}}]}}]})
             return
+        if model == 'fixture-confirm':
+            if len(tools) >= 2:
+                self.respond({'choices': [{'message': {'content': 'Confirmed flow'}}]})
+                return
+            name, args = ('system_information', '{}') if not tools else ('web_search', '{"query":"fixture query"}')
+            self.respond({'choices': [{'message': {'content': None, 'tool_calls': [
+                {'id': 'confirm_' + str(len(tools)), 'type': 'function', 'function': {'name': name, 'arguments': args}}]}}]})
+            return
         if model == 'fixture-large':
             name, args = 'web_search', '{"query":"large"}'
         elif model == 'fixture-loop':
@@ -92,8 +100,12 @@ try:
     summaries = [row[1] for row in seen if row[0] == 'chat' and row[1]['messages'][0]['content'].startswith('Summarize')]
     assert summaries and any('Tool system_information' in row['messages'][-1]['content'] for row in summaries)
     repeat_start = next(i for i, row in enumerate(seen) if row[0] == 'chat' and row[1]['model'] == 'fixture-repeat')
-    assert sum(row[0] == 'search' for row in seen[repeat_start:]) == 1
+    repeat_end = next(i for i, row in enumerate(seen) if row[0] == 'chat' and row[1]['model'] == 'fixture-confirm')
+    assert sum(row[0] == 'search' for row in seen[repeat_start:repeat_end]) == 1
     assert all(row[1] is None and row[2] is None for row in seen if row[0] == 'search')
+    # fixture-confirm runs allowed (one search) then declined (none); the final
+    # fixture-repeat pass has no local tool, so it searches once without asking.
+    assert sum(row[0] == 'search' for row in seen[repeat_end:]) == 2, 'declined search must not reach the provider'
     schemas = next(row[1]['tools'] for row in seen if row[0] == 'chat' and 'tools' in row[1])
     assert {tool['function']['name'] for tool in schemas} == {'file_search', 'system_information', 'mport_search', 'mport_count', 'web_search'}
     print('PASS: tool call/result protocol and model credentials isolated from search provider')
