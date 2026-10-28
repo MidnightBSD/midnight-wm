@@ -38,6 +38,11 @@ struct Chat {
   ServerProfiles profiles;
   GtkWidget *server{}, *add_server{}, *remove_server{};
   bool selecting_server{};
+  // Transcript scrolling. render() arms follow_transcript so the view pins to
+  // the newest message while GtkTextView lays the replaced buffer out; the
+  // user scrolling away clears it until the next render.
+  GtkAdjustment* transcript_scroll{};
+  bool follow_transcript{}, scrolling_transcript{};
   std::vector<Thread> threads;
   std::string selected, active;
   std::unordered_map<std::string, std::string> drafts;
@@ -161,8 +166,18 @@ struct Chat {
     gtk_text_buffer_set_text(buffer, text.c_str(), text.size());
     GtkTextIter end; gtk_text_buffer_get_end_iter(buffer, &end);
     gtk_text_buffer_place_cursor(buffer, &end);
-    gtk_text_view_scroll_mark_onscreen(GTK_TEXT_VIEW(transcript), gtk_text_buffer_get_insert(buffer));
+    follow_transcript = true; scroll_transcript_to_end();
     sensitivity();
+  }
+  // The buffer's new height arrives through later adjustment "changed"
+  // signals as the text view validates lines, so this runs from that signal
+  // as well as directly after render().
+  void scroll_transcript_to_end() {
+    if (!transcript_scroll || !follow_transcript) return;
+    scrolling_transcript = true;
+    gtk_adjustment_set_value(transcript_scroll,
+        gtk_adjustment_get_upper(transcript_scroll) - gtk_adjustment_get_page_size(transcript_scroll));
+    scrolling_transcript = false;
   }
   void rebuild() {
     rebuilding = true;
@@ -528,7 +543,18 @@ struct Chat {
     gtk_text_view_set_editable(GTK_TEXT_VIEW(transcript), FALSE);
     gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(transcript), GTK_WRAP_WORD_CHAR);
     gtk_text_view_set_left_margin(GTK_TEXT_VIEW(transcript), 12); gtk_text_view_set_right_margin(GTK_TEXT_VIEW(transcript), 12);
-    gtk_box_pack_start(GTK_BOX(right), scroll(transcript), TRUE, TRUE, 0);
+    auto* transcript_window = scroll(transcript);
+    gtk_box_pack_start(GTK_BOX(right), transcript_window, TRUE, TRUE, 0);
+    transcript_scroll = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(transcript_window));
+    g_signal_connect(transcript_scroll, "changed", G_CALLBACK(+[](GtkAdjustment*, gpointer p) {
+      static_cast<Chat*>(p)->scroll_transcript_to_end();
+    }), this);
+    g_signal_connect(transcript_scroll, "value-changed", G_CALLBACK(+[](GtkAdjustment* adjustment, gpointer p) {
+      auto& s = *static_cast<Chat*>(p); if (s.scrolling_transcript) return;
+      // A user scroll that leaves the bottom stops following until the next message.
+      const double bottom = gtk_adjustment_get_upper(adjustment) - gtk_adjustment_get_page_size(adjustment);
+      if (gtk_adjustment_get_value(adjustment) < bottom - 1) s.follow_transcript = false;
+    }), this);
     input = gtk_text_view_new(); accessible(input, "Message"); gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(input), GTK_WRAP_WORD_CHAR);
     auto* input_scroll = scroll(input); gtk_widget_set_size_request(input_scroll, -1, 88);
     gtk_box_pack_start(GTK_BOX(right), input_scroll, FALSE, FALSE, 0);
