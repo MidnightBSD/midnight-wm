@@ -39,8 +39,8 @@ INSTALLS_ICONS=	yes
 
 OPTIONS_DEFINE=	XSCREENSAVER
 OPTIONS_DEFAULT=	XSCREENSAVER
-XSCREENSAVER_DESC=	Keep XScreenSaver idle while applications inhibit idle
+XSCREENSAVER_DESC=	Keep the screen saver idle while applications inhibit idle
 
-XSCREENSAVER_RUN_DEPENDS=	xscreensaver-command:x11/xscreensaver
+XSCREENSAVER_RUN_DEPENDS=	xscreensaver-command:x11/nightsaver
 
 .include <bsd.port.mk>

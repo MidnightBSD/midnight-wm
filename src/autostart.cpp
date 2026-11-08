@@ -1,5 +1,6 @@
 #include "autostart.hpp"
 #include "application_restore.hpp"
+#include "screensaver.hpp"
 
 #include <gio/gio.h>
 #include <gio/gdesktopappinfo.h>
@@ -126,14 +127,14 @@ void launch_xscreensaver(xcb_connection_t* connection, xcb_window_t root) {
     std::free(atom);
   }
 
-  char* program = g_find_program_in_path("xscreensaver");
-  if (!program) return;
-  const char* argv[]{program, "--no-splash", nullptr};
+  const auto program = find_screensaver_daemon();
+  if (program.path.empty()) return;
+  const char* argv[]{program.path.c_str(), "--no-splash", nullptr};
   GError* error = nullptr;
   auto* process = g_subprocess_newv(argv, G_SUBPROCESS_FLAGS_STDOUT_SILENCE, &error);
-  g_free(program);
   if (!process) {
-    std::cerr << "XScreenSaver: " << (error ? error->message : "launch failed") << '\n';
+    std::cerr << (program.nightsaver ? "nightsaver: " : "XScreenSaver: ")
+              << (error ? error->message : "launch failed") << '\n';
     g_clear_error(&error);
     return;
   }

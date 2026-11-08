@@ -288,7 +288,7 @@ def session(args):
             run("xdotool", "key", "--clearmodifiers", "alt+x")
             run("xdotool", "key", "--clearmodifiers", "alt+a")
             until(lambda: "start_xscreensaver=false" in config.read_text(),
-                  "Settings did not save the XScreenSaver startup toggle")
+                  "Settings did not save the screen saver startup toggle")
 
             # External atomic saves must follow the same reload path as the Settings app.
             atomic_write(gtk_settings, "[Settings]\ngtk-icon-theme-name=SmokeBlue\n")
