@@ -124,7 +124,7 @@ class Settings {
     checkbox(session, "Restore applications at _login", "Session", "restore_applications", false);
     checkbox(session, "Also reopen identified apps _without session support", "Session", "restore_desktop_applications", false);
     checkbox(session, "Save application chec_kpoints", "Session", "save_application_checkpoints", false);
-    checkbox(session, "Start _XScreenSaver at login (if installed)", "Session", "start_xscreensaver", true);
+    checkbox(session, "Start screen saver at login (nightsaver or _XScreenSaver)", "Session", "start_xscreensaver", true);
     auto* session_hint = gtk_label_new(
       "Disable both restore options to start fresh at the next login.\n"
       "Restores participating apps through the Midnight session companion.\n"

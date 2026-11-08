@@ -188,11 +188,13 @@ Workspace provides notification popups with application action buttons, images,
 and urgency handling. Critical notifications remain until dismissed; resident
 notifications can remain after an action. An existing notification daemon keeps
 control.
-The lock button asks a
-running `xscreensaver` daemon to lock the screen with `xscreensaver-command -lock`.
-Midnight Workspace starts that daemon at login when it is installed, unless
-**Start XScreenSaver at login** is disabled in Settings → **Session**. It leaves
-an existing daemon running. The choice takes effect at the next login. If no
+The lock button asks the
+running screen saver daemon to lock the screen with `nightsaver-command -lock`,
+or `xscreensaver-command -lock` when nightsaver is not installed.
+Midnight Workspace starts `nightsaver` at login when it is installed and falls
+back to `xscreensaver` otherwise, unless **Start screen saver at login** is
+disabled in Settings → **Session** (`start_xscreensaver` in the INI file). It
+leaves an existing daemon running. The choice takes effect at the next login. If no
 daemon is available, the desktop shows a notice. The terminal button opens the terminal
 selected by an `xdg-terminals.list` preference, or `$TERMINAL` if set. It opens
 xterm when neither is configured.
@@ -567,7 +569,7 @@ remote desktop require additional backend work.
 
 When no other service owns `org.freedesktop.ScreenSaver`, Midnight handles
 `Inhibit`/`UnInhibit` requests to suppress idle blanking and coordinates with
-xscreensaver. Inhibitors are removed when their application disconnects. Explicit
+nightsaver or xscreensaver. Inhibitors are removed when their application disconnects. Explicit
 screen locking remains available while inhibited.
 
 Double-click a desktop or folder object to open it. Right-click to see its

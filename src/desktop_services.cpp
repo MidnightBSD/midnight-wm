@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Lucas Holt. All rights reserved.
 #include "desktop_services.hpp"
+#include "screensaver.hpp"
 #include <gio/gio.h>
 #include <xcb/screensaver.h>
 #include <algorithm>
@@ -216,11 +217,13 @@ struct DesktopServices::Impl {
     }
     std::free(status);
     if (locked) return;
-    // XScreenSaverSuspend covers the server's blanking/DPMS. XScreenSaver's
-    // daemon has its own idle timer. Its deactivate command cannot unlock a
-    // locked session; explicit locking is never inhibited.
+    // XScreenSaverSuspend covers the server's blanking/DPMS. nightsaver and
+    // XScreenSaver daemons have their own idle timers. Their deactivate
+    // command cannot unlock a locked session; explicit locking is never inhibited.
+    const auto command = find_screensaver_command();
+    if (command.path.empty()) return;
     auto* process = g_subprocess_new(static_cast<GSubprocessFlags>(G_SUBPROCESS_FLAGS_STDOUT_SILENCE | G_SUBPROCESS_FLAGS_STDERR_SILENCE),
-                                    nullptr, "xscreensaver-command", "-deactivate", nullptr);
+                                    nullptr, command.path.c_str(), "-deactivate", nullptr);
     if (!process) return;
     pulse = std::make_shared<Pulse>();
     pulse->process = process;

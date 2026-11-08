@@ -15,6 +15,7 @@
 #include "wallpaper.hpp"
 #include "model.hpp"
 #include "recent_files.hpp"
+#include "screensaver.hpp"
 #include "store.hpp"
 #include "startup_notification.hpp"
 #include "terminal_launcher.hpp"
@@ -3148,14 +3149,14 @@ struct Shell::Impl {
     if (menu) close_menu();
     GError* error = nullptr;
     int status = 0;
-    char command[] = "xscreensaver-command";
+    auto program = find_screensaver_command();
     char option[] = "-lock";
-    char* argv[] = {command, option, nullptr};
-    const bool launched = g_spawn_sync(nullptr, argv, nullptr,
-                                       G_SPAWN_SEARCH_PATH, nullptr, nullptr,
-                                       nullptr, nullptr, &status, &error);
+    char* argv[] = {program.path.data(), option, nullptr};
+    const bool launched = !program.path.empty() &&
+        g_spawn_sync(nullptr, argv, nullptr, G_SPAWN_DEFAULT, nullptr, nullptr,
+                     nullptr, nullptr, &status, &error);
     if (!launched || !g_spawn_check_wait_status(status, &error)) {
-      show_notice("Could not lock screen. Start xscreensaver first.");
+      show_notice("Could not lock screen. Start nightsaver or xscreensaver first.");
     }
     if (error) g_error_free(error);
   }

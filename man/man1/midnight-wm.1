@@ -160,7 +160,9 @@ The
 section accepts:
 .Bl -tag -width Ds
 .It Cm start_xscreensaver
-Start the XScreenSaver background daemon at login when installed; preserve an
+Start a screen saver daemon at login:
+.Xr nightsaver 1
+when installed, otherwise XScreenSaver; preserve an
 existing daemon on the display. Default
 .Li true .
 Changes take effect at the next login.

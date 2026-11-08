@@ -22,7 +22,8 @@ void launch_autostart(std::span<const std::string> restored_executables = {},
     std::span<const std::string> restored_desktop_commands = {});
 
 // Start the optional saver after other autostart entries have had time to
-// register. An already running saver belongs to its original owner.
+// register: nightsaver when installed, otherwise XScreenSaver. An already
+// running saver belongs to its original owner.
 void launch_xscreensaver(xcb_connection_t* connection, xcb_window_t root);
 
 } // namespace midnight
