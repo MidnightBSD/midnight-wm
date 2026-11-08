@@ -14,9 +14,12 @@
 #include <deque>
 #include <format>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include <csignal>
 #include <sys/types.h>
@@ -38,6 +41,7 @@
 #include <vm/vm_param.h>
 #endif
 
+#include "battery.hpp"
 #include "display_text.hpp"
 
 namespace {
@@ -127,11 +131,221 @@ std::string process_name(const kinfo_proc& process) {
 int64_t process_start(const kinfo_proc& process) {
   return static_cast<int64_t>(process.ki_start.tv_sec) * 1000000 + process.ki_start.tv_usec;
 }
+
+// Sensor discovery walks the sysctl tree through the same management OIDs
+// sysctl(8) uses: {0,2} next leaf, {0,1} name, {0,4} type and format.
+constexpr int sysctl_meta = 0, sysctl_meta_name = 1, sysctl_meta_next = 2, sysctl_meta_format = 4;
+constexpr int sysctl_walk_limit = 100000;
+
+struct SysctlLeaf {
+  std::vector<int> mib;
+  std::string name;
+  u_int type{};
+  std::string format;
+};
+
+// Kernel temperature OIDs use the "IK" format: kelvin scaled by ten, or by
+// 10^n for "IKn". Return the scale, or zero for anything else.
+int kelvin_scale(std::string_view format) {
+  if (!format.starts_with("IK")) return 0;
+  if (format.size() == 2) return 10;
+  if (format.size() != 3 || format[2] < '0' || format[2] > '9') return 0;
+  int scale = 1;
+  for (char digit = '0'; digit < format[2]; ++digit) scale *= 10;
+  return scale;
+}
+
+std::vector<int> sysctl_mib(const char* name) {
+  std::array<int, CTL_MAXNAME> mib{};
+  size_t length = mib.size();
+  if (sysctlnametomib(name, mib.data(), &length) != 0 || length > mib.size()) return {};
+  return {mib.begin(), mib.begin() + static_cast<std::ptrdiff_t>(length)};
+}
+
+bool sysctl_meta_query(int operation, const std::vector<int>& oid, void* buffer, size_t& length) {
+  if (oid.size() > CTL_MAXNAME) return false;
+  std::array<int, CTL_MAXNAME + 2> query{sysctl_meta, operation};
+  std::copy(oid.begin(), oid.end(), query.begin() + 2);
+  return sysctl(query.data(), static_cast<u_int>(oid.size() + 2), buffer, &length, nullptr, 0) == 0;
+}
+
+// Integer and string leaves below root, in kernel order. Only names and
+// formats are read here; values are read later through the cached MIBs.
+void walk_sysctl(const char* root, std::vector<SysctlLeaf>& leaves) {
+  const auto prefix = sysctl_mib(root);
+  if (prefix.empty()) return;
+  auto current = prefix;
+  for (int step = 0; step < sysctl_walk_limit; ++step) {
+    std::array<int, CTL_MAXNAME> next{};
+    size_t length = sizeof(next);
+    if (!sysctl_meta_query(sysctl_meta_next, current, next.data(), length)) return;
+    const auto count = length / sizeof(int);
+    if (count < prefix.size() || count > next.size() ||
+        !std::equal(prefix.begin(), prefix.end(), next.begin())) return;
+    current.assign(next.begin(), next.begin() + static_cast<std::ptrdiff_t>(count));
+
+    std::array<char, sizeof(u_int) + 64> format{};
+    length = format.size();
+    if (!sysctl_meta_query(sysctl_meta_format, current, format.data(), length) || length <= sizeof(u_int)) continue;
+    u_int kind = 0;
+    std::memcpy(&kind, format.data(), sizeof(kind));
+    const u_int type = kind & CTLTYPE;
+    if (type != CTLTYPE_INT && type != CTLTYPE_UINT && type != CTLTYPE_STRING) continue;
+
+    std::array<char, 512> name{};
+    length = name.size();
+    if (!sysctl_meta_query(sysctl_meta_name, current, name.data(), length) || length == 0) continue;
+    leaves.push_back({current, std::string(name.data(), strnlen(name.data(), length)), type,
+        std::string(format.data() + sizeof(u_int), strnlen(format.data() + sizeof(u_int), length - sizeof(u_int)))});
+  }
+}
+
+// Orders "dev.cpu.10" after "dev.cpu.9".
+bool natural_less(std::string_view a, std::string_view b) {
+  std::size_t i = 0, j = 0;
+  while (i < a.size() && j < b.size()) {
+    const bool a_digit = std::isdigit(static_cast<unsigned char>(a[i]));
+    const bool b_digit = std::isdigit(static_cast<unsigned char>(b[j]));
+    if (a_digit && b_digit) {
+      const auto a_end = a.find_first_not_of("0123456789", i), b_end = b.find_first_not_of("0123456789", j);
+      auto a_run = a.substr(i, a_end == std::string_view::npos ? std::string_view::npos : a_end - i);
+      auto b_run = b.substr(j, b_end == std::string_view::npos ? std::string_view::npos : b_end - j);
+      while (a_run.size() > 1 && a_run.front() == '0') a_run.remove_prefix(1);
+      while (b_run.size() > 1 && b_run.front() == '0') b_run.remove_prefix(1);
+      if (a_run.size() != b_run.size()) return a_run.size() < b_run.size();
+      if (a_run != b_run) return a_run < b_run;
+      i = a_end == std::string_view::npos ? a.size() : a_end;
+      j = b_end == std::string_view::npos ? b.size() : b_end;
+    } else {
+      if (a[i] != b[j]) return a[i] < b[j];
+      ++i; ++j;
+    }
+  }
+  return a.size() - i < b.size() - j;
+}
+
+struct SensorThreshold {
+  std::string label;
+  std::vector<int> mib;
+  int scale{};
+};
+
+struct SensorSource {
+  enum Kind { Temperature, Fan } kind{};
+  int order{};  // group position: CPU, ACPI, other temperatures, fans
+  std::string group, label, oid;
+  std::vector<int> mib;
+  int scale{};
+  std::vector<SensorThreshold> limits;
+};
+
+std::vector<SensorSource> discover_sensors() {
+  std::vector<SysctlLeaf> leaves;
+  walk_sysctl("dev", leaves);
+  walk_sysctl("hw.acpi", leaves);
+
+  std::unordered_map<std::string, const SysctlLeaf*> by_name;
+  for (const auto& leaf : leaves) by_name.emplace(leaf.name, &leaf);
+  const auto threshold = [&](const std::string& name, const char* label) -> std::optional<SensorThreshold> {
+    const auto found = by_name.find(name);
+    if (found == by_name.end() || found->second->type != CTLTYPE_INT) return std::nullopt;
+    const int scale = kelvin_scale(found->second->format);
+    if (!scale) return std::nullopt;
+    return SensorThreshold{label, found->second->mib, scale};
+  };
+  const auto description = [&](const std::string& device) {
+    const auto found = by_name.find(device + ".%desc");
+    if (found == by_name.end() || found->second->type != CTLTYPE_STRING) return std::string{};
+    std::array<char, 256> text{};
+    size_t length = text.size() - 1;
+    if (sysctl(found->second->mib.data(), static_cast<u_int>(found->second->mib.size()), text.data(),
+            &length, nullptr, 0) != 0) return std::string{};
+    return std::string(text.data(), strnlen(text.data(), std::min(length, text.size() - 1)));
+  };
+
+  std::vector<SensorSource> sensors;
+  for (const auto& leaf : leaves) {
+    const std::string_view name(leaf.name);
+    const auto dot = name.find_last_of('.');
+    if (dot == std::string_view::npos) continue;
+    const std::string parent(name.substr(0, dot));
+    const std::string_view last = name.substr(dot + 1);
+    const int scale = leaf.type == CTLTYPE_INT ? kelvin_scale(leaf.format) : 0;
+
+    if (scale) {
+      // Trip points and junction limits are shown beside their sensor.
+      if (last.starts_with('_') || last == "tjmax") continue;
+      SensorSource sensor{SensorSource::Temperature, 2, "", "", leaf.name, leaf.mib, scale, {}};
+      if (name.starts_with("dev.cpu.") && last == "temperature") {
+        sensor.order = 0;
+        sensor.group = "CPU";
+        sensor.label = "CPU " + std::string(name.substr(8, dot - 8));
+        if (auto limit = threshold(parent + ".coretemp.tjmax", "max")) sensor.limits.push_back(std::move(*limit));
+      } else if (name.starts_with("hw.acpi.thermal.") && last == "temperature") {
+        sensor.order = 1;
+        sensor.group = "ACPI thermal zone";
+        sensor.label = std::string(name.substr(16, dot - 16));
+        if (auto limit = threshold(parent + "._PSV", "passive")) sensor.limits.push_back(std::move(*limit));
+        if (auto limit = threshold(parent + "._HOT", "hot")) sensor.limits.push_back(std::move(*limit));
+        if (auto limit = threshold(parent + "._CRT", "critical")) sensor.limits.push_back(std::move(*limit));
+      } else if (name.starts_with("dev.")) {
+        // dev.<driver>.<unit>.<sensor…>: label by the device description.
+        const auto driver_end = name.find('.', 4);
+        const auto unit_end = driver_end == std::string_view::npos ? driver_end : name.find('.', driver_end + 1);
+        if (unit_end == std::string_view::npos) {
+          sensor.group = "Other";
+          sensor.label = leaf.name;
+        } else {
+          const std::string device(name.substr(0, unit_end));
+          const auto text = description(device);
+          sensor.group = std::string(name.substr(4, driver_end - 4)) + std::string(name.substr(driver_end + 1, unit_end - driver_end - 1));
+          if (!text.empty()) sensor.group += " (" + text + ")";
+          sensor.label = std::string(name.substr(unit_end + 1));
+        }
+      } else {
+        sensor.group = "Other";
+        sensor.label = leaf.name;
+      }
+      sensors.push_back(std::move(sensor));
+      continue;
+    }
+
+    // Fan tachometers (asmc, acpi_ibm, and similar drivers) report RPM.
+    if ((leaf.type == CTLTYPE_INT || leaf.type == CTLTYPE_UINT) && name.find("fan") != std::string_view::npos &&
+        (last.find("speed") != std::string_view::npos || last.find("rpm") != std::string_view::npos) &&
+        !last.starts_with("min") && !last.starts_with("max") && !last.starts_with("safe") &&
+        !last.starts_with("target")) {
+      sensors.push_back({SensorSource::Fan, 3, "Fans", leaf.name, leaf.name, leaf.mib, 0, {}});
+    }
+  }
+  std::stable_sort(sensors.begin(), sensors.end(), [](const SensorSource& a, const SensorSource& b) {
+    if (a.order != b.order) return a.order < b.order;
+    return natural_less(a.oid, b.oid);
+  });
+  return sensors;
+}
+
+std::optional<int> read_int(const std::vector<int>& mib) {
+  int value = 0;
+  size_t length = sizeof(value);
+  if (mib.empty() || sysctl(mib.data(), static_cast<u_int>(mib.size()), &value, &length, nullptr, 0) != 0 ||
+      length != sizeof(value)) return std::nullopt;
+  return value;
+}
+
+// A kelvin reading at or below zero is a "not supported" sentinel such as
+// an ACPI trip point of -1.
+std::optional<double> read_celsius(const std::vector<int>& mib, int scale) {
+  const auto value = read_int(mib);
+  if (!value || *value <= 0 || scale <= 0) return std::nullopt;
+  return static_cast<double>(*value) / scale - 273.15;
+}
 #endif
 
 enum ProcessColumn { PID, NAME, USER, STATE, CPU, MEMORY, START, OWNER, PROCESS_COLUMNS };
 enum MountColumn { DEVICE, MOUNT, TYPE, TOTAL, USED, AVAILABLE, PERCENT, MOUNT_COLUMNS };
 enum DriveColumn { DRIVE_DEVICE, DRIVE_TYPE, DRIVE_MODEL, DRIVE_SIZE, DRIVE_COLUMNS };
+enum SensorColumn { SENSOR_GROUP, SENSOR_NAME, SENSOR_READING, SENSOR_LIMIT, SENSOR_SOURCE, SENSOR_COLUMNS };
 
 GtkWidget* list_view(GtkListStore* store, const std::initializer_list<std::pair<const char*, int>>& columns) {
   auto* view = gtk_tree_view_new_with_model(GTK_TREE_MODEL(store));
@@ -166,6 +380,8 @@ struct Monitor {
   GtkListStore* processes{};
   GtkListStore* mounts{};
   GtkListStore* drives{};
+  GtkListStore* sensors{};
+  GtkWidget* sensor_status{};
   GtkWidget *hardware_cpu{}, *hardware_ram{}, *hardware_swap{}, *hardware_os{}, *hardware_status{};
   GtkWidget* process_view{};
   GtkWidget* process_menu{};
@@ -177,7 +393,17 @@ struct Monitor {
   // each refresh. GtkListStore iterators stay valid until their row is removed.
   std::unordered_map<pid_t, GtkTreeIter> process_rows;
   std::unordered_map<uid_t, std::string> users;
+  // Sensor rows are keyed by their source so they also update in place.
+  std::unordered_map<std::string, GtkTreeIter> sensor_rows;
 #if defined(__FreeBSD__) || defined(__MidnightBSD__)
+  std::vector<SensorSource> sensor_sources;
+  bool sensors_discovered{};
+  std::string power_daemon;
+  midnight::BatteryMonitor battery;
+  // ACPI battery reads can call slow embedded-controller methods; poll them
+  // every 30 seconds like the panel instead of on every 2 second refresh.
+  std::optional<midnight::BatteryState> battery_state;
+  gint64 battery_read_time{};
   std::array<long, CPUSTATES> previous_cpu{};
   bool have_cpu{};
   uint64_t previous_received{}, previous_sent{};
@@ -189,6 +415,7 @@ struct Monitor {
     if (processes) g_object_unref(processes);
     if (mounts) g_object_unref(mounts);
     if (drives) g_object_unref(drives);
+    if (sensors) g_object_unref(sensors);
   }
 
   // The list stores outlive the window so a closed-and-reactivated monitor
@@ -202,6 +429,9 @@ struct Monitor {
           G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_INT);
     if (!drives)
       drives = gtk_list_store_new(DRIVE_COLUMNS, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING);
+    if (!sensors)
+      sensors = gtk_list_store_new(SENSOR_COLUMNS, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING,
+          G_TYPE_STRING, G_TYPE_STRING);
   }
 
   static GtkWidget* scroller(GtkWidget* child) {
@@ -287,6 +517,33 @@ struct Monitor {
     }), this);
     gtk_box_pack_start(GTK_BOX(page), refresh_button, FALSE, FALSE, 0);
     gtk_notebook_append_page(GTK_NOTEBOOK(tabs), scroll, gtk_label_new("Hardware"));
+  }
+
+  void add_sensor_tab(GtkWidget* tabs) {
+    auto* page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    auto* view = list_view(sensors, {{"Group", SENSOR_GROUP}, {"Sensor", SENSOR_NAME},
+        {"Reading", SENSOR_READING}, {"Limits", SENSOR_LIMIT}, {"Source", SENSOR_SOURCE}});
+    gtk_tree_view_set_search_column(GTK_TREE_VIEW(view), SENSOR_NAME);
+    gtk_box_pack_start(GTK_BOX(page), scroller(view), TRUE, TRUE, 0);
+    sensor_status = gtk_label_new("");
+    gtk_label_set_xalign(GTK_LABEL(sensor_status), 0);
+    gtk_label_set_line_wrap(GTK_LABEL(sensor_status), TRUE);
+    gtk_box_pack_start(GTK_BOX(page), sensor_status, FALSE, FALSE, 0);
+    auto* refresh_button = gtk_button_new_with_mnemonic("Re_scan sensors");
+    gtk_widget_set_tooltip_text(refresh_button, "Look for sensors again, for example after loading coretemp(4)");
+    gtk_widget_set_halign(refresh_button, GTK_ALIGN_START);
+    g_signal_connect(refresh_button, "clicked", G_CALLBACK(+[](GtkButton*, gpointer data) {
+      static_cast<Monitor*>(data)->rescan_sensors();
+    }), this);
+    gtk_box_pack_start(GTK_BOX(page), refresh_button, FALSE, FALSE, 0);
+    gtk_notebook_append_page(GTK_NOTEBOOK(tabs), page, gtk_label_new("Sensors"));
+  }
+
+  void rescan_sensors() {
+#if defined(__FreeBSD__) || defined(__MidnightBSD__)
+    sensors_discovered = false;
+    sample_sensors();
+#endif
   }
 
   void add_process_tab(GtkWidget* tabs) {
@@ -428,6 +685,7 @@ struct Monitor {
       self.end_button = self.force_button = nullptr;
       self.hardware_cpu = self.hardware_ram = self.hardware_swap = self.hardware_os = self.hardware_status = nullptr;
       self.status = nullptr;
+      self.sensor_status = nullptr;
       if (self.timer) { g_source_remove(self.timer); self.timer = 0; }
     }), this);
     ensure_stores();
@@ -455,6 +713,7 @@ struct Monitor {
     gtk_tree_view_append_column(GTK_TREE_VIEW(mount_view), usage);
     gtk_notebook_append_page(GTK_NOTEBOOK(tabs), scroller(mount_view), gtk_label_new("File Systems"));
     add_hardware_tab(tabs);
+    add_sensor_tab(tabs);
 
     status = gtk_label_new("");
     gtk_label_set_xalign(GTK_LABEL(status), 0);
@@ -475,9 +734,13 @@ struct Monitor {
     if (tick_count % 150 == 0) users.clear();
     sample_processes();
     sample_resources();
+    // Rescan once a minute so sensors appear after a driver is loaded.
+    if (tick_count % 30 == 0) sensors_discovered = false;
+    sample_sensors();
     if (tick_count++ % 5 == 0) sample_mounts();
 #else
     gtk_label_set_text(GTK_LABEL(status), "System sampling requires MidnightBSD or FreeBSD.");
+    if (sensor_status) gtk_label_set_text(GTK_LABEL(sensor_status), "Sensors require MidnightBSD or FreeBSD.");
 #endif
   }
 
@@ -624,9 +887,14 @@ struct Monitor {
     const long page_size = sysconf(_SC_PAGESIZE);
     std::unordered_map<pid_t, GtkTreeIter> seen;
     seen.reserve(static_cast<std::size_t>(count));
+    power_daemon.clear();
     for (int i = 0; i < count; ++i) {
       const auto& item = items.get()[i];
       if (item.ki_pid <= 0) continue;
+      if (item.ki_uid == 0 && power_daemon.empty()) {
+        const std::string_view command(item.ki_comm, strnlen(item.ki_comm, sizeof(item.ki_comm)));
+        if (command == "powerd" || command == "powerd++") power_daemon = command;
+      }
       auto [user_entry, inserted] = users.try_emplace(item.ki_uid);
       if (inserted) {
         const auto* passwd = getpwuid(item.ki_uid);
@@ -715,6 +983,85 @@ struct Monitor {
       previous_sent = sent;
       previous_network_time = now;
     } else gtk_label_set_text(GTK_LABEL(network.label), "Network data unavailable");
+  }
+
+  void set_sensor_row(std::unordered_map<std::string, GtkTreeIter>& seen, const std::string& key,
+      const std::string& group, const std::string& name, const std::string& reading,
+      const std::string& limit, const std::string& source) {
+    GtkTreeIter row;
+    if (const auto existing = sensor_rows.find(key); existing != sensor_rows.end()) row = existing->second;
+    else gtk_list_store_append(sensors, &row);
+    gtk_list_store_set(sensors, &row, SENSOR_GROUP, shown(group).c_str(), SENSOR_NAME, shown(name).c_str(),
+        SENSOR_READING, reading.c_str(), SENSOR_LIMIT, limit.c_str(), SENSOR_SOURCE, shown(source).c_str(), -1);
+    seen.insert_or_assign(key, row);
+  }
+
+  void sample_sensors() {
+    if (!sensors) return;
+    if (!sensors_discovered) {
+      sensor_sources = discover_sensors();
+      sensors_discovered = true;
+    }
+    std::unordered_map<std::string, GtkTreeIter> seen;
+    int temperatures = 0, cpu_temperatures = 0;
+    for (const auto& sensor : sensor_sources) {
+      std::string reading = "Unavailable", limits;
+      if (sensor.kind == SensorSource::Temperature) {
+        if (const auto celsius = read_celsius(sensor.mib, sensor.scale)) reading = std::format("{:.1f} °C", *celsius);
+        for (const auto& limit : sensor.limits) {
+          const auto celsius = read_celsius(limit.mib, limit.scale);
+          if (!celsius) continue;
+          if (!limits.empty()) limits += " · ";
+          limits += std::format("{} {:.1f} °C", limit.label, *celsius);
+        }
+        ++temperatures;
+        if (sensor.order == 0) ++cpu_temperatures;
+      } else if (const auto rpm = read_int(sensor.mib); rpm && *rpm >= 0) {
+        reading = std::format("{} RPM", *rpm);
+      }
+      set_sensor_row(seen, sensor.oid, sensor.group, sensor.label, reading, limits, sensor.oid);
+    }
+
+    // Power state, following the battery/AC/frequency summary of sensors(8).
+    int frequency = 0;
+    if (sysctl_value("dev.cpu.0.freq", frequency) && frequency > 0)
+      set_sensor_row(seen, "dev.cpu.0.freq", "Power", "CPU frequency", std::format("{} MHz", frequency), "",
+          "dev.cpu.0.freq");
+    if (const auto lowest = sysctl_text("hw.acpi.cpu.cx_lowest"); !lowest.empty())
+      set_sensor_row(seen, "hw.acpi.cpu.cx_lowest", "Power", "Lowest C-state", shown(lowest), "",
+          "hw.acpi.cpu.cx_lowest");
+    if (const auto usage = sysctl_text("dev.cpu.0.cx_usage"); !usage.empty())
+      set_sensor_row(seen, "dev.cpu.0.cx_usage", "Power", "C-state usage (CPU 0)", shown(usage), "",
+          "dev.cpu.0.cx_usage");
+    int acline = 0;
+    if (sysctl_value("hw.acpi.acline", acline))
+      set_sensor_row(seen, "hw.acpi.acline", "Power", "AC power", acline ? "Connected" : "Disconnected", "",
+          "hw.acpi.acline");
+    if (const gint64 now = g_get_monotonic_time(); !battery_read_time || now - battery_read_time >= 30 * G_USEC_PER_SEC) {
+      battery_state = battery.read();
+      battery_read_time = now;
+    }
+    if (const auto& state = battery_state) {
+      std::string text = state->percent ? std::format("{}%", *state->percent) : "Capacity unknown";
+      if (state->charging) text += " · charging";
+      if (state->minutes && *state->minutes >= 0)
+        text += std::format(" · {}:{:02} remaining", *state->minutes / 60, *state->minutes % 60);
+      set_sensor_row(seen, "hw.acpi.battery", "Power", "Battery", text, "", "hw.acpi.battery.life");
+    }
+    set_sensor_row(seen, "powerd", "Power", "Power daemon",
+        power_daemon.empty() ? "Not running" : power_daemon + " running", "", "powerd(8) / powerd++(8)");
+
+    for (auto& [key, row] : sensor_rows)
+      if (!seen.contains(key)) gtk_list_store_remove(sensors, &row);
+    sensor_rows = std::move(seen);
+
+    if (!sensor_status) return;
+    std::string text = temperatures ?
+        std::format("{} temperature sensor{} · refresh every 2 seconds.", temperatures, temperatures == 1 ? "" : "s") :
+        std::string("No temperature sensors found.");
+    if (!cpu_temperatures) text += " Load coretemp(4) or amdtemp(4) for CPU temperatures.";
+    text += " Drive temperatures that the kernel does not publish through sysctl are not shown.";
+    gtk_label_set_text(GTK_LABEL(sensor_status), text.c_str());
   }
 
   void sample_mounts() {

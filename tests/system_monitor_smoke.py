@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Lucas Holt
 # SPDX-License-Identifier: BSD-2-Clause
-"""Isolated System Monitor check: process rows, End Process, Force Quit, Hardware tab."""
+"""Isolated System Monitor check: process rows, End Process, Force Quit, Hardware and Sensors tabs."""
 import contextlib
 import os
 from pathlib import Path
@@ -115,7 +115,16 @@ with temporary_context as temporary:
             run("xdotool", "mousemove", str(x + 370), str(y + 27), "click", "1")
             time.sleep(1.5)
             run("import", "-window", "root", str(root / "hardware.png"))
-            print("PASS: process rows, type-ahead selection, End Process, Force Quit on a bidi-override name, Cancel, Hardware tab")
+            # Sensors follows Hardware.
+            run("xdotool", "mousemove", str(x + 460), str(y + 27), "click", "1")
+            time.sleep(2.5)
+            run("import", "-window", "root", str(root / "sensors.png"))
+            run("xdotool", "mousemove", str(x + 300), str(y + 200), "click", "--repeat", "15", "5")
+            time.sleep(0.5)
+            run("import", "-window", "root", str(root / "sensors-power.png"))
+            assert app.poll() is None, "monitor exited on the Sensors tab"
+            print("PASS: process rows, type-ahead selection, End Process, Force Quit on a bidi-override name, Cancel, "
+                  "Hardware tab, Sensors tab")
         finally:
             for victim in victims:
                 victim.kill()

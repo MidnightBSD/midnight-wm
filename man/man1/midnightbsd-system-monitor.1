@@ -1,16 +1,16 @@
 ." Copyright (c) 2026 Lucas Holt
 ." SPDX-License-Identifier: BSD-2-Clause
-.Dd October 25, 2026
+.Dd November 8, 2026
 .Dt MIDNIGHTBSD-SYSTEM-MONITOR 1
 .Os
 .Sh NAME
 .Nm midnightbsd-system-monitor
-.Nd display system processes, resources, and mounted file systems
+.Nd display system processes, resources, file systems, and sensors
 .Sh SYNOPSIS
 .Nm
 .Sh DESCRIPTION
 .Nm
-opens a GTK 3 window with four tabs.
+opens a GTK 3 window with five tabs.
 Processes lists process IDs, owners, states, CPU use, and resident memory.
 Selecting a process enables End Process, which sends
 .Dv SIGTERM ,
@@ -29,9 +29,27 @@ OS release, and physical drives.
 Drive types use reported rotation rates
 when available; optical drives and NVMe drives are identified by device type.
 The Refresh hardware button updates this summary after hardware changes.
-Processes and resources refresh every two seconds; file systems refresh
-every ten seconds.
+Sensors lists every temperature the kernel publishes through
+.Xr sysctl 8 ,
+including per-core CPU temperatures from
+.Xr coretemp 4
+or
+.Xr amdtemp 4
+with their junction maximum, ACPI thermal zones with their hot and critical
+trip points, fan speeds, CPU frequency and C-state use, AC power, battery
+charge, and whether
+.Xr powerd 8
+or powerd++ is running.
+Drive temperatures appear only when the kernel publishes them through sysctl.
+The sensor list is rescanned once a minute and by the Rescan sensors button,
+so sensors from a newly loaded driver appear without restarting.
+Processes, resources, and sensors refresh every two seconds;
+file systems refresh every ten seconds.
 .Sh SEE ALSO
-.Xr midnight-wm 1
+.Xr midnight-wm 1 ,
+.Xr amdtemp 4 ,
+.Xr coretemp 4 ,
+.Xr powerd 8 ,
+.Xr sysctl 8
 .Sh AUTHORS
 .An Lucas Holt
