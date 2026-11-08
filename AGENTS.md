@@ -132,7 +132,14 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   companion. It only reads kernel state through sysctl, libutil, libgeom, and
   getmntinfo. Every externally sourced string (process names, passwd names,
   mount names, GEOM descriptions) passes through `src/display_text.hpp`.
-  Process rows update in place so selection survives refreshes. End Process
+  Process rows update in place so selection survives refreshes. The Sensors
+  tab walks the `dev` and `hw.acpi` sysctl trees only at startup, once a minute,
+  and on Rescan; it caches MIBs, identifies temperatures by the `IK`/`IKn`
+  format rather than by name, treats non-positive kelvin values as unavailable,
+  shows tjmax and ACPI trip points as limits, and updates rows in place.
+  MidnightBSD 4.2 does not publish NVMe or SATA drive temperatures through
+  sysctl, so a drive row appears only if such a sensor exists under `dev`.
+  Battery state is read every 30 seconds, like the panel. End Process
   and Force Quit reject non-positive PIDs, confirm with the user, and recheck
   the PID's start time and owner with kinfo_getproc before kill(2). Keep the
   drive list tall enough for at least five drives. Run

@@ -56,7 +56,7 @@ add_executable(midnightbsd-search src/search.cpp)
 target_link_libraries(midnightbsd-search PRIVATE PkgConfig::GTK3)
 target_compile_options(midnightbsd-search PRIVATE -Wall -Wextra -Wpedantic)
 
-add_executable(midnightbsd-system-monitor src/system_monitor.cpp)
+add_executable(midnightbsd-system-monitor src/system_monitor.cpp src/battery.cpp)
 target_link_libraries(midnightbsd-system-monitor PRIVATE PkgConfig::GTK3)
 if(CMAKE_SYSTEM_NAME MATCHES "^(MidnightBSD|FreeBSD)$")
   target_link_libraries(midnightbsd-system-monitor PRIVATE util geom)
