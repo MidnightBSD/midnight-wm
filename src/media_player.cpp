@@ -139,7 +139,8 @@ void MediaPlayers::command(const std::string& name, const std::string& method) {
   for (const auto& player : players()) {
     if (player.bus_name != name || !player.can_control) continue;
     if (!((method == "Next" && player.can_next) || (method == "Previous" && player.can_previous) ||
-          (method == "Play" && player.can_play) || (method == "Pause" && player.can_pause))) return;
+          (method == "Play" && player.can_play) || (method == "Pause" && player.can_pause) ||
+          method == "Stop")) return;
     g_dbus_proxy_call(impl_->proxies.at(name).get(), method.c_str(), nullptr, G_DBUS_CALL_FLAGS_NO_AUTO_START,
       2000, impl_->cancel, [](GObject* source, GAsyncResult* result, gpointer) {
         GError* error = nullptr;

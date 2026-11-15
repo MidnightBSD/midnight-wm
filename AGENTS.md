@@ -184,6 +184,22 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   The panel has one speaker button toggling a popup below it, with a volume
   slider, mute beneath it, and MPRIS controls. Keep popup bounds within the
   primary monitor; release pointer/keyboard grabs on close and layout changes.
+- `src/backlight.*` steps the panel backlight through backlight(9) ioctls on
+  `/dev/backlight/backlight*` (video group), with no X11 dependency or shell
+  commands. Brightness-down never selects zero. `src/shortcuts.*` lists the
+  hardware keys (volume, MPRIS transport, brightness); the WM grabs them
+  without modifiers when `[Workspace] media_keys` is true and passes them to
+  Shell::hardware_key, which shows a short non-grabbing level indicator.
+  `backlight_test` covers level stepping; run
+  `python3 tests/hardware_keys_smoke.py` after changes. It sets
+  `MIDNIGHT_WM_TEST_BACKLIGHT` so the real panel is never dimmed.
+- `src/display_scale.hpp` picks the automatic interface scale from the primary
+  monitor's height and, when RandR reports a plausible physical size, its pixel
+  density; density only raises the scale. `display_scale_test` checks the table
+  at compile time. Xvfb's RandR monitor always reports 96 DPI.
+  The panel lays out in logical units, but the tray and status notifier
+  windows are panel children in physical pixels: Shell::set_tray_width,
+  tray_width, and tray_x take and return physical pixels.
 - `src/battery.*` reads aggregate ACPI battery status through MidnightBSD sysctls,
   following `/usr/src/usr.bin/batt`. Keep it independent of X11 and shell commands.
   The panel shows battery capacity beside audio only when a battery is present,
@@ -241,6 +257,10 @@ cppcheck --enable=warning,performance,portability --std=c++20 \
   --suppress=missingIncludeSystem --error-exitcode=1 --quiet \
   '-DMIDNIGHT_WM_VERSION="dev"' src
 ```
+
+Do not run `session_randr_smoke` as root on a machine with a live desktop: it
+starts a real Xorg server, which can take the console and blank the running
+session. The test skips itself for root unless given `--allow-root`.
 
 `cppcheck` uses its C++20 parser; the actual project builds as C++23. Its
 version macro definition is only for static analysis. Run an isolated Xvfb

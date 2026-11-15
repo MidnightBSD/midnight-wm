@@ -1,6 +1,7 @@
 #include "shell.hpp"
 
 #include "audio.hpp"
+#include "backlight.hpp"
 #include "battery.hpp"
 #include "network.hpp"
 #include "bluetooth.hpp"
@@ -675,6 +676,12 @@ struct Shell::Impl {
   std::uint32_t workspace{};
   bool showing_desktop{};
   VolumeControl volume;
+  BacklightControl backlight;
+  // Transient level indicator for hardware keys; never takes a grab or focus.
+  xcb_window_t osd{};
+  std::string osd_label;
+  int osd_percent{-1};
+  std::chrono::steady_clock::time_point osd_deadline{};
   MediaPlayers media;
   std::vector<MediaPlayerState> media_players;
   std::string selected_player;
@@ -726,7 +733,7 @@ struct Shell::Impl {
   std::unordered_map<xcb_window_t, GFileMonitor*> monitors;
   std::vector<Item> desktop_items;
   std::vector<Task> tasks;
-  int requested_tray_width{};
+  int requested_tray_pixels{}; // physical pixels, as the embedded tray windows use
   std::vector<GAppInfo*> apps;
   std::vector<AppCategory> app_categories;
   std::vector<std::filesystem::path> icon_roots;
@@ -800,10 +807,16 @@ struct Shell::Impl {
   Impl(xcb_connection_t* c, xcb_screen_t* s, Store& st) : connection(c), screen(s), store(st), model(st),
       physical_width(s->width_in_pixels), physical_height(s->height_in_pixels) {
     update_monitor_geometry();
-    scale = display_scale(primary_monitor.height, config.ui_scale);
+    scale = monitor_scale();
     width = std::max(1, static_cast<int>(physical_width / scale));
     height = std::max(1, static_cast<int>(physical_height / scale));
     update_monitor_geometry();
+  }
+
+  double monitor_scale() const {
+    return display_scale(primary_monitor.height, config.ui_scale,
+                         display_dpi(primary_monitor.width, primary_monitor.height,
+                                     primary_monitor.width_mm, primary_monitor.height_mm));
   }
 
   void update_monitor_geometry() {
@@ -820,6 +833,8 @@ struct Shell::Impl {
          display_monitors.front().height != physical_height)) {
       display_monitors.front().width = physical_width;
       display_monitors.front().height = physical_height;
+      // The stale physical size no longer describes the synthetic bounds.
+      display_monitors.front().width_mm = display_monitors.front().height_mm = 0;
     }
     const auto found = std::ranges::find_if(display_monitors, [](const auto& monitor) {
       return monitor.primary;
@@ -899,6 +914,7 @@ struct Shell::Impl {
     if (audio_popup) xcb_destroy_window(connection, audio_popup);
     if (drag_preview) xcb_destroy_window(connection, drag_preview);
     if (notice) xcb_destroy_window(connection, notice);
+    if (osd) xcb_destroy_window(connection, osd);
     if (icon_chooser) xcb_destroy_window(connection, icon_chooser->window);
     if (open_with_dialog) {
       for (auto* app : open_with_dialog->apps) g_object_unref(app);
@@ -1934,7 +1950,7 @@ struct Shell::Impl {
 
   int tray_width() const {
     // Leave room for the task overflow button even when every task is hidden.
-    return std::clamp(requested_tray_width, 0,
+    return std::clamp(static_cast<int>(std::ceil(requested_tray_pixels / scale)), 0,
                       std::max(0, search_x() - task_start_x - task_overflow_width - 4 -
                           2 * (network_group_width + network_gap) - volume_group_width - volume_clock_gap -
                           (config.show_battery && battery_state ? battery_group_width + battery_gap : 0)));
@@ -2613,6 +2629,84 @@ struct Shell::Impl {
       XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC, XCB_NONE, XCB_NONE, XCB_CURRENT_TIME);
     xcb_grab_keyboard(connection, 0, audio_popup, XCB_CURRENT_TIME, XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC);
     draw_panel();
+  }
+
+  static constexpr int osd_width = 240, osd_height = 54;
+
+  void close_osd() {
+    if (!osd) return;
+    xcb_destroy_window(connection, osd);
+    osd = 0;
+    xcb_flush(connection);
+  }
+
+  // A negative percent shows the label alone, for unavailable controls.
+  void show_osd(std::string label, int percent) {
+    osd_label = std::move(label);
+    osd_percent = std::min(percent, 100);
+    osd_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(1500);
+    if (!osd) {
+      const auto area = primary_area();
+      osd = create_window(area.x + std::max(0, (area.width - osd_width) / 2),
+                          area.y + std::max(0, area.height - osd_height - 80), osd_width, osd_height);
+      xcb_map_window(connection, osd);
+    }
+    const std::uint32_t above[]{XCB_STACK_MODE_ABOVE};
+    xcb_configure_window(connection, osd, XCB_CONFIG_WINDOW_STACK_MODE, above);
+    draw_osd();
+  }
+
+  void draw_osd() {
+    if (!osd) return;
+    paint(osd, osd_width, osd_height, [&](cairo_t* cr) {
+      themed_fill(cr, config.surface_color, .79, .79, .79, 0, 0, osd_width, osd_height);
+      bevel(cr, 0, 0, osd_width, osd_height);
+      text(cr, osd_label, 14, 9, osd_width - 28, 11);
+      if (osd_percent < 0) return;
+      bevel(cr, 14, 34, osd_width - 28, 8, true);
+      fill(cr, config.accent_color[0], config.accent_color[1], config.accent_color[2],
+           15, 35, (osd_width - 30) * osd_percent / 100, 6);
+    });
+  }
+
+  void hardware_key(HardwareKey key) {
+    switch (key) {
+    case HardwareKey::volume_up:
+    case HardwareKey::volume_down:
+    case HardwareKey::volume_mute:
+      apply_volume(key == HardwareKey::volume_mute ? volume.toggle_mute()
+                   : volume.adjust(key == HardwareKey::volume_up ? 5 : -5));
+      if (!volume_state) show_osd("Volume unavailable", -1);
+      else if (volume_state->muted) show_osd("Volume  muted", 0);
+      else show_osd("Volume  " + std::to_string(volume_state->percent) + "%", volume_state->percent);
+      break;
+    case HardwareKey::brightness_up:
+    case HardwareKey::brightness_down: {
+      const auto level = backlight.adjust(key == HardwareKey::brightness_up);
+      if (level) show_osd("Brightness  " + std::to_string(*level) + "%", *level);
+      else {
+        g_warning("Brightness: %s", level.error().c_str());
+        show_osd("Brightness unavailable", -1);
+      }
+      break;
+    }
+    case HardwareKey::media_play_pause:
+    case HardwareKey::media_pause:
+    case HardwareKey::media_stop:
+    case HardwareKey::media_next:
+    case HardwareKey::media_previous: {
+      // The main loop refreshes media_players each pass; MediaPlayers checks
+      // the player's capabilities again before calling it.
+      const auto* player = active_player();
+      if (!player) break;
+      media.command(player->bus_name,
+                    key == HardwareKey::media_next ? "Next" :
+                    key == HardwareKey::media_previous ? "Previous" :
+                    key == HardwareKey::media_stop ? "Stop" :
+                    key == HardwareKey::media_pause || player->status == "Playing" ? "Pause" : "Play");
+      break;
+    }
+    }
   }
 
   void apply_volume(std::expected<VolumeState, std::string> state) {
@@ -3852,6 +3946,7 @@ struct Shell::Impl {
       notice = 0;
       return;
     }
+    if (event->event == osd) { close_osd(); return; }
     if (event->event == menu || event->event == submenu || event->event == app_menu) {
       pending_category_row = -1;
       const auto& entries = event->event == menu ? menu_entries :
@@ -4464,7 +4559,7 @@ bool Shell::initialize() {
 bool Shell::owns(xcb_window_t window) const {
   const auto& p = *impl_;
   return window && (window == p.desktop || window == p.panel || window == p.menu ||
-                    window == p.submenu || window == p.app_menu || window == p.notice ||
+                    window == p.submenu || window == p.app_menu || window == p.notice || window == p.osd ||
                     window == p.exit_dialog || window == p.audio_popup || window == p.network_popup || window == p.bluetooth_popup || window == p.drag_preview ||
                     (p.icon_chooser && window == p.icon_chooser->window) ||
                     (p.open_with_dialog && window == p.open_with_dialog->window) ||
@@ -4524,6 +4619,7 @@ bool Shell::handle(xcb_generic_event_t* event) {
     // Xorg restores complete menu background pixmaps, including newly revealed rows.
     else if (window == p.menu || window == p.submenu || window == p.app_menu) {}
     else if (window == p.notice) p.draw_notice();
+    else if (window == p.osd) p.draw_osd();
     else if (window == p.exit_dialog) p.draw_exit_dialog();
     else if (p.icon_chooser && window == p.icon_chooser->window) p.draw_icon_chooser();
     else if (p.open_with_dialog && window == p.open_with_dialog->window) p.draw_open_with_dialog();
@@ -4606,6 +4702,7 @@ void Shell::tick() {
   if (now != p.last_clock) { p.last_clock = now; redraw = true; }
   const auto steady_now = std::chrono::steady_clock::now();
   p.advance_menus(steady_now);
+  if (p.osd && steady_now >= p.osd_deadline) p.close_osd();
   auto players = p.media.players();
   if (players != p.media_players) { p.media_players = std::move(players); p.draw_audio_popup(); }
   if (steady_now - p.last_volume_poll >= std::chrono::seconds(1)) {
@@ -4641,6 +4738,8 @@ void Shell::tick() {
 void Shell::open_launcher() {
   impl_->show_launcher();
 }
+
+void Shell::hardware_key(HardwareKey key) { impl_->hardware_key(key); }
 
 bool Shell::menu_animation_active() const {
   return impl_->pending_category_row >= 0 || std::ranges::any_of(impl_->menu_surfaces,
@@ -4718,20 +4817,32 @@ bool Shell::normal_window(xcb_window_t window) const {
   return impl_->folders.contains(window);
 }
 
+// The tray and status notifier windows are children of the panel window and
+// are sized and placed in physical pixels, while the panel lays itself out in
+// logical units. Convert at this boundary so the icons land in the space the
+// panel reserved at every interface scale.
 void Shell::set_tray_width(int width) {
   auto& p = *impl_;
   const int requested = std::max(0, width);
-  if (p.requested_tray_width == requested) return;
+  if (p.requested_tray_pixels == requested) return;
   p.close_network_popup();
   p.close_bluetooth_popup();
   p.close_audio_popup();
-  p.requested_tray_width = requested;
+  p.requested_tray_pixels = requested;
   if (p.panel) p.draw_panel();
 }
 
-int Shell::tray_width() const { return impl_->tray_width(); }
+int Shell::tray_width() const {
+  const auto& p = *impl_;
+  const int reserved = static_cast<int>(std::floor(p.tray_width() * p.scale));
+  return std::clamp(p.requested_tray_pixels, 0, std::max(0, reserved));
+}
 
-int Shell::tray_x() const { return impl_->tray_x(); }
+// Right-align against the search button; the reserved width rounds up.
+int Shell::tray_x() const {
+  const auto& p = *impl_;
+  return static_cast<int>(std::lround(p.search_x() * p.scale)) - tray_width();
+}
 int Shell::panel_x() const { return impl_->primary_monitor.x; }
 int Shell::panel_y() const { return impl_->primary_monitor.y; }
 
@@ -4816,8 +4927,9 @@ void Shell::refresh_display_layout() {
   p.close_network_popup();
   p.close_bluetooth_popup();
   p.close_audio_popup();
+  p.close_osd(); // sized and placed for the previous scale
   p.update_monitor_geometry();
-  p.scale = display_scale(p.primary_monitor.height, p.config.ui_scale);
+  p.scale = p.monitor_scale();
   p.width = std::max(1, static_cast<int>(p.physical_width / p.scale));
   p.height = std::max(1, static_cast<int>(p.physical_height / p.scale));
   p.update_monitor_geometry();

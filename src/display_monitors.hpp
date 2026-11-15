@@ -18,6 +18,8 @@ struct DisplayMonitor {
   int x{}, y{}, width{}, height{};
   bool primary{};
   xcb_atom_t name{};
+  // Physical size as the output reports it; zero when unknown.
+  int width_mm{}, height_mm{};
   bool operator==(const DisplayMonitor&) const = default;
 };
 
@@ -73,7 +75,8 @@ inline std::vector<DisplayMonitor> query_display_monitors(xcb_connection_t* conn
         const auto* info = iterator.data;
         if (info && info->width && info->height)
           result.push_back({info->x, info->y, info->width, info->height,
-                            info->primary != 0, info->name});
+                            info->primary != 0, info->name,
+                            int(info->width_in_millimeters), int(info->height_in_millimeters)});
       }
     }
   }
@@ -82,7 +85,8 @@ inline std::vector<DisplayMonitor> query_display_monitors(xcb_connection_t* conn
         xcb_get_geometry_reply(connection, xcb_get_geometry(connection, screen->root), nullptr),
         std::free);
     result.push_back({0, 0, geometry ? geometry->width : screen->width_in_pixels,
-                      geometry ? geometry->height : screen->height_in_pixels, true});
+                      geometry ? geometry->height : screen->height_in_pixels, true, 0,
+                      screen->width_in_millimeters, screen->height_in_millimeters});
   }
   if (std::none_of(result.begin(), result.end(), [](const auto& monitor) { return monitor.primary; }))
     result.front().primary = true;
