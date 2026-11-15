@@ -291,7 +291,8 @@ def session(args):
                   "Settings did not save the screen saver startup toggle")
 
             # External atomic saves must follow the same reload path as the Settings app.
-            atomic_write(gtk_settings, "[Settings]\ngtk-icon-theme-name=SmokeBlue\n")
+            # 98304 is the 96 DPI default other desktops write; it must not pin text size.
+            atomic_write(gtk_settings, "[Settings]\ngtk-icon-theme-name=SmokeBlue\ngtk-xft-dpi=98304\n")
             changed = ("[Workspace]\npanel_label=Smoke test\nui_scale=1.25\n"
                        "panel_color=#123456\naccent_color=#654321\ndesktop_color=#345678\n"
                        "[Unrelated]\nretained=keep this value\n")
@@ -302,6 +303,10 @@ def session(args):
                   "live scale did not update the existing Settings client's frame extents")
             check_trash_icon_theme(output, "#2040e0", "blue")
             assert settings_window() == settings, "reload replaced the Settings client"
+            toolkit_dpi = ("import gi; gi.require_version('Gtk', '3.0'); from gi.repository import Gtk; "
+                           "print(Gtk.Settings.get_default().props.gtk_xft_dpi)")
+            until(lambda: run(sys.executable, "-c", toolkit_dpi).strip() == str(round(96 * 1024 * 1.25)),
+                  "toolkit text DPI did not follow the live interface scale")
             run("import", "-window", "root", str(output / "settings-reloaded.png"))
             run("xdotool", "windowactivate", "--sync", settings)
             run("xdotool", "key", "--clearmodifiers", "alt+F4")

@@ -231,6 +231,7 @@ int main(int argc, char** argv) {
         if (!file_manager.initialize()) std::cerr << "FileManager1 D-Bus unavailable\n";
         if (!workspace_file_manager.initialize()) std::cerr << "Workspace file manager D-Bus unavailable\n";
         xsettings.set_dark_mode(shell.theme().dark_mode);
+        xsettings.set_scale(shell.ui_scale());
         (void)xsettings.initialize();
         (void)desktop_services.initialize();
         midnight::Compositor compositor(connection, screen_number);
@@ -314,6 +315,8 @@ int main(int argc, char** argv) {
           clipboard.tick();
           notifications.tick();
           startup.tick();
+          // Follows config reloads and monitor changes; a no-op when unchanged.
+          xsettings.set_scale(shell.ui_scale());
           xsettings.tick();
           compositor.tick();
           xcb_flush(connection);
