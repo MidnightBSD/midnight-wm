@@ -3,6 +3,7 @@
 #include <xcb/xcb.h>
 #include "task_icon.hpp"
 #include "session.hpp"
+#include "shortcuts.hpp"
 
 #include <array>
 #include <cairo/cairo.h>
@@ -40,6 +41,8 @@ public:
   [[nodiscard]] bool handle(xcb_generic_event_t* event);
   void tick();
   void open_launcher();
+  // Volume, MPRIS transport, and backlight keys, with a brief on-screen level.
+  void hardware_key(HardwareKey key);
   [[nodiscard]] bool menu_animation_active() const;
   void set_tasks(std::vector<Task> tasks);
   // Share application icon lookup and fallback artwork with window decorations.

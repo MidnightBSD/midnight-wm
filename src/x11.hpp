@@ -181,6 +181,7 @@ private:
   xcb_screen_t* screen_{};
   Shell& shell_;
   Shortcuts shortcuts_{};
+  bool media_keys_{true};
   StartupNotification* startup_{};
   std::map<xcb_window_t, Frame> frames_;
   std::vector<xcb_window_t> client_order_;

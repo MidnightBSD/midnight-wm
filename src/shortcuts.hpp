@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <expected>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -24,6 +25,22 @@ struct KeyChord {
   std::uint16_t modifiers{};
   bool operator==(const KeyChord&) const = default;
 };
+
+// Dedicated laptop and multimedia keys. They are grabbed without modifiers and
+// are not configurable chords.
+enum class HardwareKey {
+  volume_up, volume_down, volume_mute,
+  media_play_pause, media_pause, media_stop, media_next, media_previous,
+  brightness_up, brightness_down
+};
+
+struct HardwareKeysym {
+  std::uint32_t keysym{};
+  HardwareKey key{};
+};
+
+[[nodiscard]] std::span<const HardwareKeysym> hardware_keysyms();
+[[nodiscard]] std::optional<HardwareKey> hardware_key(std::uint32_t keysym, std::uint16_t modifiers);
 
 using Shortcuts = std::array<std::optional<KeyChord>, static_cast<std::size_t>(ShortcutAction::count)>;
 

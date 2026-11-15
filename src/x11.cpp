@@ -86,7 +86,7 @@ std::vector<DisplayMonitor> fullscreen_layout(xcb_connection_t* connection, xcb_
 
 X11WindowManager::X11WindowManager(xcb_connection_t* connection, xcb_screen_t* screen, Shell& shell)
   : connection_(connection), screen_(screen), shell_(shell),
-    shortcuts_(shell.theme().shortcuts),
+    shortcuts_(shell.theme().shortcuts), media_keys_(shell.theme().media_keys),
     screen_width_(screen->width_in_pixels), screen_height_(screen->height_in_pixels),
     monitors_(query_display_monitors(connection, screen)),
     fullscreen_layout_(fullscreen_layout(connection, screen)) {
@@ -1833,6 +1833,10 @@ void X11WindowManager::install_key_grabs() {
     std::free(codes);
   };
   for (const auto& chord : shortcuts_) if (chord) grab(chord->keysym, chord->modifiers);
+  // Another client that already grabbed one of these keys keeps it; the
+  // unchecked request fails without affecting the rest.
+  if (media_keys_)
+    for (const auto& entry : hardware_keysyms()) grab(entry.keysym, 0);
   xcb_key_symbols_free(symbols);
 }
 
@@ -1860,8 +1864,9 @@ void X11WindowManager::update_screen_size(std::uint16_t width, std::uint16_t hei
 }
 
 void X11WindowManager::refresh_theme() {
-  if (shortcuts_ != shell_.theme().shortcuts) {
+  if (shortcuts_ != shell_.theme().shortcuts || media_keys_ != shell_.theme().media_keys) {
     shortcuts_ = shell_.theme().shortcuts;
+    media_keys_ = shell_.theme().media_keys;
     install_key_grabs();
   }
   update_geometry_properties();
@@ -2207,6 +2212,9 @@ void X11WindowManager::handle(xcb_generic_event_t* event) {
       resize_frame(f);
       send_configure_notify(f);
       break;
+    }
+    if (media_keys_) {
+      if (const auto hardware = hardware_key(key, e->state)) { shell_.hardware_key(*hardware); break; }
     }
     const auto action = shortcut_action(shortcuts_, key, e->state);
     if (!action) break;

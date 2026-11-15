@@ -10,7 +10,7 @@ pkg_check_modules(DEPS REQUIRED IMPORTED_TARGET
   xcb xcb-icccm xcb-keysyms xcb-xfixes xcb-randr xcb-xinerama xcb-sync xcb-screensaver cairo-xcb pangocairo
   gio-2.0 gio-unix-2.0 gdk-pixbuf-2.0 garcon-1 sqlite3)
 
-add_library(midnight_core src/folder_view.cpp src/content_size.cpp src/store.cpp src/model.cpp src/config.cpp src/shortcuts.cpp src/session.cpp src/private_state.cpp src/session_bus.cpp src/application_session.cpp src/application_checkpoint.cpp src/session_windows.cpp src/application_restore.cpp src/audio.cpp src/battery.cpp src/application_defaults.cpp src/startup_applications.cpp src/network.cpp src/bluetooth.cpp src/wallpaper.cpp
+add_library(midnight_core src/folder_view.cpp src/content_size.cpp src/store.cpp src/model.cpp src/config.cpp src/shortcuts.cpp src/session.cpp src/private_state.cpp src/session_bus.cpp src/application_session.cpp src/application_checkpoint.cpp src/session_windows.cpp src/application_restore.cpp src/audio.cpp src/backlight.cpp src/battery.cpp src/application_defaults.cpp src/startup_applications.cpp src/network.cpp src/bluetooth.cpp src/wallpaper.cpp
   src/session_reaper.cpp
   src/desktop_launcher.cpp src/thumbnail.cpp src/recent_files.cpp
   src/startup_notification.cpp src/browser_launcher.cpp src/terminal_launcher.cpp src/task_icon.cpp)
@@ -148,6 +148,12 @@ target_link_libraries(shortcuts_test PRIVATE midnight_core)
 add_test(NAME shortcuts_test COMMAND shortcuts_test)
 add_executable(screen_resize_event tests/screen_resize_event.cpp)
 target_link_libraries(screen_resize_event PRIVATE PkgConfig::DEPS)
+add_executable(display_scale_test tests/display_scale_test.cpp)
+target_include_directories(display_scale_test PRIVATE src)
+add_test(NAME display_scale_test COMMAND display_scale_test)
+add_executable(backlight_test tests/backlight_test.cpp)
+target_link_libraries(backlight_test PRIVATE midnight_core)
+add_test(NAME backlight_test COMMAND backlight_test)
 add_executable(display_monitors_test tests/display_monitors_test.cpp)
 target_include_directories(display_monitors_test PRIVATE src)
 target_link_libraries(display_monitors_test PRIVATE PkgConfig::DEPS)
@@ -250,7 +256,7 @@ if(DBUS_RUN_SESSION)
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/session_randr_smoke.py
         --module-path ${MIDNIGHT_WM_RANDR_MODULE_PATH}
         --binary $<TARGET_FILE:midnightbsd-session> --fixture $<TARGET_FILE:xsmp_restore_fixture>)
-      set_tests_properties(session_randr_smoke PROPERTIES TIMEOUT 130)
+      set_tests_properties(session_randr_smoke PROPERTIES TIMEOUT 130 SKIP_RETURN_CODE 77)
     endif()
     if(XVFB)
       add_test(NAME application_restore_smoke COMMAND ${Python3_EXECUTABLE}

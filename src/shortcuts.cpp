@@ -4,6 +4,7 @@
 #include "shortcuts.hpp"
 
 #include <X11/keysym.h>
+#include <X11/XF86keysym.h>
 
 #include <algorithm>
 #include <array>
@@ -88,7 +89,28 @@ std::string name_for_key(std::uint32_t key) {
   result << "0x" << std::hex << key;
   return result.str();
 }
+// XF86AudioPlay is the single play/pause key on most keyboards.
+constexpr std::array<HardwareKeysym, 10> hardware_keys{{
+    {XF86XK_AudioRaiseVolume, HardwareKey::volume_up},
+    {XF86XK_AudioLowerVolume, HardwareKey::volume_down},
+    {XF86XK_AudioMute, HardwareKey::volume_mute},
+    {XF86XK_AudioPlay, HardwareKey::media_play_pause},
+    {XF86XK_AudioPause, HardwareKey::media_pause},
+    {XF86XK_AudioStop, HardwareKey::media_stop},
+    {XF86XK_AudioNext, HardwareKey::media_next},
+    {XF86XK_AudioPrev, HardwareKey::media_previous},
+    {XF86XK_MonBrightnessUp, HardwareKey::brightness_up},
+    {XF86XK_MonBrightnessDown, HardwareKey::brightness_down}}};
 } // namespace
+
+std::span<const HardwareKeysym> hardware_keysyms() { return hardware_keys; }
+
+std::optional<HardwareKey> hardware_key(std::uint32_t keysym, std::uint16_t modifiers) {
+  // Leave modified presses (for example Shift+XF86AudioPlay) to applications.
+  if (modifiers & (supported_modifiers | XCB_MOD_MASK_3 | XCB_MOD_MASK_5)) return std::nullopt;
+  for (const auto& entry : hardware_keys) if (entry.keysym == keysym) return entry.key;
+  return std::nullopt;
+}
 
 Shortcuts default_shortcuts() {
   return {{KeyChord{XK_Left, XCB_MOD_MASK_CONTROL | XCB_MOD_MASK_1},

@@ -195,11 +195,18 @@ def main():
     parser.add_argument('--binary', type=Path, default=REPO / 'build/midnightbsd-session')
     parser.add_argument('--fixture', type=Path, default=REPO / 'build/xsmp_restore_fixture')
     parser.add_argument('--session', type=Path, help=argparse.SUPPRESS)
+    parser.add_argument('--allow-root', action='store_true',
+                        help='start Xorg as root; it can take the console from a live session')
     args = parser.parse_args()
     args.binary, args.fixture = args.binary.resolve(), args.fixture.resolve()
     if args.session:
         session(args)
         return
+    # Root's Xorg can open the console and switch the VT away from a running
+    # desktop, which blanks it until reboot. An unprivileged server cannot.
+    if os.geteuid() == 0 and not args.allow_root:
+        print('Skipped: refusing to start Xorg as root; run unprivileged or pass --allow-root')
+        sys.exit(77)
     if not args.module_path or not (args.module_path / 'drivers/dummy_drv.so').is_file():
         parser.error('provide --module-path with a private dummy 0.4.x module; see docs/session-validation.md')
     for command in ('Xorg', 'xrandr', 'xauth', 'dbus-run-session', 'gdbus', 'xdotool', 'wmctrl', 'xprop', 'xwininfo'):

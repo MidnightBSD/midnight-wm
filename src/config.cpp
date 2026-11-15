@@ -86,6 +86,10 @@ std::optional<ThemeConfig> parse_config(std::string_view contents) {
   const bool show_battery = g_key_file_get_boolean(keyfile, "Workspace", "show_battery", &battery_error);
   if (battery_error) g_error_free(battery_error);
   else config.show_battery = show_battery;
+  GError* media_keys_error = nullptr;
+  const bool media_keys = g_key_file_get_boolean(keyfile, "Workspace", "media_keys", &media_keys_error);
+  if (media_keys_error) g_error_free(media_keys_error);
+  else config.media_keys = media_keys;
   GError* compositor_error = nullptr;
   const bool compositing = g_key_file_get_boolean(keyfile, "Workspace", "compositing", &compositor_error);
   if (compositor_error) g_error_free(compositor_error);
