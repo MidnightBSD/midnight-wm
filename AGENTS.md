@@ -241,7 +241,9 @@ handling clearer. The visual direction is OS/2 Warp 4 Workspace Manager.
   `src/terminal_launcher.*` reads XDG terminal preferences and falls back to
   xterm for the panel terminal button;
   `src/xsettings.*` publishes theme and input settings only when its X11
-  selection is free. Programs uses Garcon to read freedesktop `.menu` layouts,
+  selection is free. Its Xft/DPI is 96 times the interface scale so toolkit
+  text follows the shell; an explicit `gtk-xft-dpi` other than the 98304
+  default wins. Programs uses Garcon to read freedesktop `.menu` layouts,
   falling back to its built-in categories.
 - `data/` contains the Xsession entry, example configuration, and MidnightBSD
   launcher logo sourced from `MidnightBSD/www/art/logo`.

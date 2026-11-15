@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <bit>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -97,6 +98,7 @@ xcb_atom_t XSettings::intern(const std::string& name) const {
 
 XSettings::Values XSettings::read_values() const {
   Values result;
+  result.dpi = static_cast<std::int32_t>(std::lround(96 * 1024 * scale_));
   const auto path = std::filesystem::path(g_get_user_config_dir()) / "gtk-3.0" / "settings.ini";
   auto* file = g_key_file_new();
   if (g_key_file_load_from_file(file, path.c_str(), G_KEY_FILE_NONE, nullptr)) {
@@ -106,7 +108,10 @@ XSettings::Values XSettings::read_values() const {
     result.double_click_time = keyfile_positive_integer(file, "gtk-double-click-time", 400);
     result.double_click_distance = keyfile_positive_integer(file, "gtk-double-click-distance", 5);
     // GTK stores gtk-xft-dpi in the same 1024ths-of-a-point unit as Xft/DPI.
-    result.dpi = keyfile_positive_integer(file, "gtk-xft-dpi", 96 * 1024);
+    // An explicit value wins over the interface scale. Other desktops write
+    // the 96 DPI default unconditionally, so that value is not a preference.
+    if (const auto explicit_dpi = keyfile_positive_integer(file, "gtk-xft-dpi", 96 * 1024);
+        explicit_dpi != 96 * 1024) result.dpi = explicit_dpi;
   } else {
     result.theme_name.clear();
     result.icon_theme.clear();
@@ -216,6 +221,13 @@ bool XSettings::handle(const xcb_generic_event_t* event) {
 void XSettings::set_dark_mode(bool enabled) {
   if (dark_mode_ == enabled) return;
   dark_mode_ = enabled;
+  if (owner_) publish(read_values());
+}
+
+void XSettings::set_scale(double scale) {
+  scale = std::clamp(scale, .75, 3.0);
+  if (scale_ == scale) return;
+  scale_ = scale;
   if (owner_) publish(read_values());
 }
 

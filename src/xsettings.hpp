@@ -22,6 +22,9 @@ public:
   [[nodiscard]] bool handle(const xcb_generic_event_t* event);
   void tick();
   void set_dark_mode(bool enabled);
+  // Scale toolkit text with the interface: Xft/DPI becomes 96 times this
+  // factor unless gtk-3.0/settings.ini sets gtk-xft-dpi explicitly.
+  void set_scale(double scale);
 
 private:
   struct Values {
@@ -49,6 +52,7 @@ private:
   std::uint32_t serial_{};
   Values values_;
   bool dark_mode_{};
+  double scale_{1.0};
   std::chrono::steady_clock::time_point next_check_{};
 };
 
