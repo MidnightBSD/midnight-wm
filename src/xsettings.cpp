@@ -1,4 +1,5 @@
 #include "xsettings.hpp"
+#include "x_resources.hpp"
 
 #include <gio/gio.h>
 #include <glib.h>
@@ -12,11 +13,13 @@
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace midnight {
 namespace {
 template <class T> using Reply = std::unique_ptr<T, decltype(&std::free)>;
+constexpr std::uint32_t max_resource_bytes = 1 << 20;
 
 template <class T> void append_native(std::vector<std::uint8_t>& bytes, T value) {
   const auto* first = reinterpret_cast<const std::uint8_t*>(&value);
@@ -151,7 +154,61 @@ void XSettings::publish(const Values& values) {
   xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, owner_, settings_atom_, settings_atom_,
                       8, bytes.size(), bytes.data());
   values_ = values;
+  update_resource_dpi(resource_dpi());
   xcb_flush(connection_);
+}
+
+// At the 96 DPI default nothing is written, so Xft keeps using the server's
+// own resolution exactly as it would without this desktop.
+std::optional<int> XSettings::resource_dpi() const {
+  const int dpi = static_cast<int>(std::lround(values_.dpi / 1024.0));
+  return dpi == 96 ? std::nullopt : std::optional<int>(dpi);
+}
+
+void XSettings::update_resource_dpi(std::optional<int> dpi) {
+  if (!resource_manager_ || !resource_marker_) return;
+  // Read, decide, and write under a server grab so a concurrent xrdb -merge
+  // cannot be lost between the two requests.
+  xcb_grab_server(connection_);
+  const auto resources_cookie = xcb_get_property(connection_, 0, screen_->root, resource_manager_,
+                                                 XCB_ATOM_STRING, 0, max_resource_bytes / 4 + 1);
+  const auto marker_cookie = xcb_get_property(connection_, 0, screen_->root, resource_marker_,
+                                              XCB_ATOM_CARDINAL, 0, 1);
+  Reply<xcb_get_property_reply_t> resources(
+      xcb_get_property_reply(connection_, resources_cookie, nullptr), std::free);
+  Reply<xcb_get_property_reply_t> marker(
+      xcb_get_property_reply(connection_, marker_cookie, nullptr), std::free);
+  std::optional<int> written;
+  if (marker && marker->type == XCB_ATOM_CARDINAL && marker->format == 32 &&
+      xcb_get_property_value_length(marker.get()) == 4)
+    written = static_cast<int>(*static_cast<std::uint32_t*>(xcb_get_property_value(marker.get())));
+  // A database in another encoding or beyond the bound is left alone.
+  const bool absent = resources && resources->type == XCB_ATOM_NONE;
+  const bool readable = resources && resources->type == XCB_ATOM_STRING && resources->format == 8 &&
+                        resources->bytes_after == 0 &&
+                        xcb_get_property_value_length(resources.get()) <= int(max_resource_bytes);
+  if (absent || readable) {
+    const std::string text = absent ? std::string() : std::string(
+        static_cast<const char*>(xcb_get_property_value(resources.get())),
+        static_cast<std::size_t>(xcb_get_property_value_length(resources.get())));
+    const auto current = xft_dpi_resource(text);
+    const bool ours = may_manage_xft_dpi(current, written);
+    // Removal only undoes this desktop's own entry.
+    const bool change = dpi ? ours && current != dpi : written && current == written;
+    if (change) {
+      const auto updated = with_xft_dpi(text, dpi);
+      xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, screen_->root, resource_manager_,
+                          XCB_ATOM_STRING, 8, updated.size(), updated.data());
+    }
+    if (dpi && ours) {
+      const auto value = static_cast<std::uint32_t>(*dpi);
+      xcb_change_property(connection_, XCB_PROP_MODE_REPLACE, screen_->root, resource_marker_,
+                          XCB_ATOM_CARDINAL, 32, 1, &value);
+    } else if (written) {
+      xcb_delete_property(connection_, screen_->root, resource_marker_);
+    }
+  }
+  xcb_ungrab_server(connection_);
 }
 
 bool XSettings::initialize() {
@@ -159,6 +216,8 @@ bool XSettings::initialize() {
   settings_atom_ = intern("_XSETTINGS_SETTINGS");
   manager_atom_ = intern("MANAGER");
   if (!selection_ || !settings_atom_ || !manager_atom_) return false;
+  resource_manager_ = intern("RESOURCE_MANAGER");
+  resource_marker_ = intern("_MIDNIGHT_WM_XFT_DPI");
 
   // The server grab makes the owner check and claim indivisible with respect
   // to another settings manager. Existing owners are left in charge.
@@ -211,6 +270,14 @@ bool XSettings::initialize() {
 }
 
 bool XSettings::handle(const xcb_generic_event_t* event) {
+  if ((event->response_type & ~0x80) == XCB_PROPERTY_NOTIFY && owner_) {
+    // xrdb -load replaces the whole database; put the entry back. Our own
+    // write arrives here too and finds nothing to change.
+    const auto* changed = reinterpret_cast<const xcb_property_notify_event_t*>(event);
+    if (changed->window == screen_->root && changed->atom == resource_manager_)
+      resources_changed_ = true;
+    return false; // the window manager also watches root properties
+  }
   if ((event->response_type & ~0x80) != XCB_SELECTION_CLEAR || !owner_) return false;
   const auto* clear = reinterpret_cast<const xcb_selection_clear_event_t*>(event);
   if (clear->owner != owner_ || clear->selection != selection_) return false;
@@ -232,6 +299,10 @@ void XSettings::set_scale(double scale) {
 }
 
 void XSettings::tick() {
+  if (owner_ && std::exchange(resources_changed_, false)) {
+    update_resource_dpi(resource_dpi());
+    xcb_flush(connection_);
+  }
   if (!owner_ || std::chrono::steady_clock::now() < next_check_) return;
   next_check_ = std::chrono::steady_clock::now() + std::chrono::seconds(2);
   const Values current = read_values();
@@ -240,6 +311,7 @@ void XSettings::tick() {
 
 void XSettings::release() {
   if (!owner_) return;
+  update_resource_dpi(std::nullopt);
   Reply<xcb_get_selection_owner_reply_t> current(
       xcb_get_selection_owner_reply(connection_, xcb_get_selection_owner(connection_, selection_), nullptr),
       std::free);
